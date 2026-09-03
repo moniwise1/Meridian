@@ -53,6 +53,41 @@ instead of an accidental one. Also verified: cross-tenant ticket isolation,
 the tenant-deletion cascade, and the public status page correctly flipping
 `operational` based on open incidents.
 
+Staff can now be role-changed and removed from the panel itself
+(`PATCH`/`DELETE /platform/staff/{id}`, owner-only, `/platform/staff`),
+not just added — "owner" is full access, "support" is limited to tenants/
+tickets/status. Both refuse to demote or delete the **last remaining
+owner**: since `/platform/bootstrap` is a one-time, self-disabling
+endpoint, zero owners would permanently lock everyone out of the panel
+with no way back in short of restoring a database backup. A `GET
+/platform/audit` + `/platform/audit/verify` pair (`/platform/audit` in the
+nav) mirrors the tenant-facing `/audit` exactly, scoped to the synthetic
+`"platform"` tenant_id every staff action is already logged under —
+staff logins (previously not logged at all) plus every staff/tenant/
+ticket/incident action, so "who did what and when" is answerable the same
+way it already was for a tenant's own team. Verified end-to-end,
+including the subtlety that demoting or deleting *the account whose own
+session you're using* takes effect immediately on that same session (role
+is re-checked from the database on every request, not cached from the
+JWT) — confirmed by a test that hit exactly that behavior on its first
+attempt and had to route around it, not by design intent alone.
+
+The tenant side got the equivalent: `PATCH`/`DELETE /auth/users/{id}`
+(admin-only, `/team`) let an admin change a teammate's role or remove
+them, with the same last-admin protection (admin is required for team/
+billing/data-source management, so zero admins would lock an organization
+out of managing itself). `/team` never actually had an "add teammate" UI
+before this round despite the backend endpoint existing — it does now,
+alongside the free-tier 1-account cap.
+
+Caught and fixed a real, already-deployed regression while building this:
+adding `created_at: str` to `UserOut` earlier (for the tier/sub-accounts
+work) broke `PATCH /auth/users/{id}/row_scope`, which still returned the
+raw ORM object relying on FastAPI's automatic serialization — a `str`
+field can't absorb a `datetime` object, so every row-scope save was
+silently 500ing in production. Found by actually exercising the endpoint
+end-to-end rather than assuming an unrelated-looking change was safe.
+
 **Billing** (`app/billing/paystack.py`, `app/api/routes_billing.py`) —
 premium-from-onset: a tenant is charged immediately on subscribe via
 Paystack, not given a delayed-billing free trial, with a self-serve full

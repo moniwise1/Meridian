@@ -233,6 +233,30 @@ export async function updateUserRowScope(
   return body;
 }
 
+export async function updateUserRole(userId: string, role: string): Promise<TeamUser> {
+  const res = await fetch(`${API_BASE}/auth/users/${userId}/role`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ role }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update this teammate's role.");
+  return body;
+}
+
+export async function deleteUser(userId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/users/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Could not remove this teammate.");
+  }
+}
+
 // ---------- Billing ----------
 
 export type BillingStatus = {

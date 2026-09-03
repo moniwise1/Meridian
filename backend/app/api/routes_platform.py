@@ -26,6 +26,7 @@ from app.security.login_cooldown import (
     LoginCooldownActive,
 )
 from app.audit import logger as audit
+from app.audit.logger import verify_chain
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 
@@ -57,6 +58,7 @@ def staff_login(body: StaffLoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, "Incorrect email or password.")
 
     record_platform_login_success(body.email)
+    audit.log(db, "platform", "platform_staff_logged_in", staff.id, detail={"email": staff.email})
     token = create_platform_access_token(staff.id, staff.role)
     return StaffTokenResponse(access_token=token, staff_id=staff.id, role=staff.role)
 
@@ -89,14 +91,21 @@ class StaffOut(BaseModel):
     id: str
     email: str
     role: str
+    created_at: str
 
     class Config:
         from_attributes = True
 
+    @classmethod
+    def from_staff(cls, s: PlatformStaff) -> "StaffOut":
+        return cls(id=s.id, email=s.email, role=s.role,
+                    created_at=s.created_at.isoformat() if s.created_at else "")
+
 
 @router.get("/staff", response_model=list[StaffOut])
 def list_staff(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
-    return db.query(PlatformStaff).all()
+    rows = db.query(PlatformStaff).order_by(PlatformStaff.created_at.asc()).all()
+    return [StaffOut.from_staff(s) for s in rows]
 
 
 class StaffCreateRequest(BaseModel):
@@ -105,16 +114,92 @@ class StaffCreateRequest(BaseModel):
     role: str = "support"
 
 
+VALID_STAFF_ROLES = {"owner", "support"}
+
+
 @router.post("/staff", response_model=StaffOut)
 def add_staff(body: StaffCreateRequest, db: Session = Depends(get_db),
               ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    if body.role not in VALID_STAFF_ROLES:
+        raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_STAFF_ROLES))}.")
     if db.query(PlatformStaff).filter_by(email=body.email).first():
         raise HTTPException(400, "An account with this email already exists.")
     staff = PlatformStaff(email=body.email, password_hash=hash_password(body.password), role=body.role)
     db.add(staff)
     db.commit()
     db.refresh(staff)
-    return staff
+    audit.log(db, "platform", "platform_staff_added", ctx.staff_id,
+               detail={"target_staff_id": staff.id, "email": staff.email, "role": staff.role})
+    return StaffOut.from_staff(staff)
+
+
+def _count_owners(db: Session, excluding_id: str | None = None) -> int:
+    q = db.query(PlatformStaff).filter_by(role="owner")
+    if excluding_id:
+        q = q.filter(PlatformStaff.id != excluding_id)
+    return q.count()
+
+
+class StaffUpdate(BaseModel):
+    role: str
+
+
+@router.patch("/staff/{staff_id}", response_model=StaffOut)
+def update_staff_role(staff_id: str, body: StaffUpdate, db: Session = Depends(get_db),
+                       ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    """Owner-only: promote to full access ("owner") or limit to "support"
+    (tenants/tickets/status, no staff management, no tenant deletion - the
+    same boundary require_staff_role already draws throughout this file).
+    Refuses to demote the last remaining owner - there's no other way back
+    into this panel (bootstrap is a one-time, self-disabling endpoint), so
+    that would permanently lock every future admin out, not just this one
+    account."""
+    if body.role not in VALID_STAFF_ROLES:
+        raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_STAFF_ROLES))}.")
+    staff = db.query(PlatformStaff).filter_by(id=staff_id).first()
+    if not staff:
+        raise HTTPException(404, "Staff member not found.")
+
+    if staff.role == "owner" and body.role != "owner" and _count_owners(db, excluding_id=staff.id) == 0:
+        raise HTTPException(
+            400,
+            "Can't demote the last owner — there would be no one left who can manage staff "
+            "or delete a tenant. Promote another account to owner first.",
+        )
+
+    previous_role = staff.role
+    staff.role = body.role
+    db.commit()
+    db.refresh(staff)
+    audit.log(db, "platform", "platform_staff_role_changed", ctx.staff_id,
+               detail={"target_staff_id": staff.id, "email": staff.email,
+                       "from": previous_role, "to": staff.role})
+    return StaffOut.from_staff(staff)
+
+
+@router.delete("/staff/{staff_id}")
+def delete_staff(staff_id: str, db: Session = Depends(get_db),
+                  ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    """Owner-only, same last-owner protection as demoting one - deleting
+    the last owner is exactly as locking as demoting them, so it gets the
+    same refusal rather than a second, easier way around it."""
+    staff = db.query(PlatformStaff).filter_by(id=staff_id).first()
+    if not staff:
+        raise HTTPException(404, "Staff member not found.")
+
+    if staff.role == "owner" and _count_owners(db, excluding_id=staff.id) == 0:
+        raise HTTPException(
+            400,
+            "Can't delete the last owner — there would be no one left who can manage staff "
+            "or delete a tenant. Promote another account to owner first.",
+        )
+
+    deleted_id, deleted_email, deleted_role = staff.id, staff.email, staff.role
+    db.delete(staff)
+    db.commit()
+    audit.log(db, "platform", "platform_staff_deleted", ctx.staff_id,
+               detail={"target_staff_id": deleted_id, "email": deleted_email, "role": deleted_role})
+    return {"status": "deleted"}
 
 
 # ---------- Tenants ----------
@@ -426,6 +511,44 @@ def add_incident_update(incident_id: str, body: IncidentUpdateCreate, db: Sessio
     db.commit()
     db.refresh(incident)
     return _incident_out(db, incident)
+
+
+# ---------- Platform activity (staff logins + everything staff have done) ----------
+#
+# Every consequential action any platform staff member takes is already
+# audit-logged under the synthetic tenant_id "platform" (staff add/role
+# change/delete, tenant edits/deletion, ticket replies, incident updates,
+# and now - as of this endpoint's addition - staff logins). This just
+# exposes that trail, mirroring app/api/routes_audit.py's tenant-facing
+# shape exactly (same fields, same /verify companion) so staff can see who
+# on the team did what and when, the same way a tenant's own admin can for
+# their org. Open to any authenticated staff member, not owner-only -
+# same choice the tenant-facing /audit makes: visibility into what
+# happened isn't as sensitive as the ability to change something, so it
+# isn't gated the same way staff/tenant management is.
+
+@router.get("/audit")
+def list_platform_audit(limit: int = 200, db: Session = Depends(get_db),
+                         ctx: PlatformAuthContext = Depends(get_current_staff)):
+    rows = (
+        db.query(AuditLog)
+        .filter_by(tenant_id="platform")
+        .order_by(AuditLog.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": r.id, "timestamp": r.timestamp.isoformat(), "action": r.action,
+            "status": r.status, "detail": r.detail, "entry_hash": r.entry_hash,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/audit/verify")
+def verify_platform_audit(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
+    return verify_chain(db, "platform")
 
 
 # ---------- Health snapshot ----------

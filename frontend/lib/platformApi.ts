@@ -51,7 +51,7 @@ export async function bootstrapOwner(email: string, password: string): Promise<S
   return body;
 }
 
-export type Staff = { id: string; email: string; role: string };
+export type Staff = { id: string; email: string; role: string; created_at: string };
 
 export async function listStaff(): Promise<Staff[]> {
   const res = await fetch(`${API_BASE}/platform/staff`, { headers: authHeaders() });
@@ -70,6 +70,30 @@ export async function addStaff(email: string, password: string, role: string): P
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not add this staff member.");
   return body;
+}
+
+export async function updateStaffRole(staffId: string, role: string): Promise<Staff> {
+  const res = await fetch(`${API_BASE}/platform/staff/${staffId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ role }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update this staff member's role.");
+  return body;
+}
+
+export async function deleteStaff(staffId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/platform/staff/${staffId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Could not remove this staff member.");
+  }
 }
 
 // ---------- Tenants ----------
@@ -228,6 +252,38 @@ export async function addIncidentUpdate(incidentId: string, status: string, body
   const respBody = await res.json();
   if (!res.ok) throw new Error(respBody.detail ?? "Could not post the update.");
   return respBody;
+}
+
+// ---------- Platform activity (staff logins + everything staff have done) ----------
+
+export type PlatformAuditEntry = {
+  id: string;
+  timestamp: string;
+  action: string;
+  status: string;
+  detail: Record<string, unknown>;
+  entry_hash: string;
+};
+
+export async function listPlatformAudit(): Promise<PlatformAuditEntry[]> {
+  const res = await fetch(`${API_BASE}/platform/audit`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load the activity log.");
+  return res.json();
+}
+
+export type PlatformAuditVerification = {
+  intact: boolean;
+  checked: number;
+  broken_at: string | null;
+  reason: string;
+};
+
+export async function verifyPlatformAudit(): Promise<PlatformAuditVerification> {
+  const res = await fetch(`${API_BASE}/platform/audit/verify`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not verify the activity log.");
+  return res.json();
 }
 
 // ---------- Health snapshot ----------

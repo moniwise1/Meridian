@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listStaff, addStaff, type Staff } from "@/lib/platformApi";
+import { listStaff, addStaff, updateStaffRole, deleteStaff, type Staff } from "@/lib/platformApi";
 import { loadPlatformSession } from "@/lib/platformAuth";
 
 export default function PlatformStaffPage() {
@@ -11,6 +11,7 @@ export default function PlatformStaffPage() {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("support");
   const [busy, setBusy] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const isOwner = loadPlatformSession()?.role === "owner";
 
   function refresh() {
@@ -37,6 +38,27 @@ export default function PlatformStaffPage() {
     }
   }
 
+  async function handleRoleChange(staffId: string, newRole: string) {
+    setError("");
+    try {
+      await updateStaffRole(staffId, newRole);
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function handleRemove(staffId: string) {
+    setError("");
+    try {
+      await deleteStaff(staffId);
+      setRemovingId(null);
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   if (!isOwner) {
     return (
       <div className="max-w-3xl mx-auto px-8 py-12">
@@ -50,7 +72,10 @@ export default function PlatformStaffPage() {
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Staff</h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
         Meridian&apos;s own internal team — separate from any customer&apos;s users, with its own
-        login at /platform/login.
+        login at /platform/login. <strong className="text-ink font-medium">Owner</strong> has full
+        access, including managing staff and deleting tenants.{" "}
+        <strong className="text-ink font-medium">Support</strong> can handle tenants and tickets but
+        can&apos;t manage staff or delete a tenant.
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
@@ -96,11 +121,49 @@ export default function PlatformStaffPage() {
 
       <div className="flex flex-col gap-2">
         {staff.map((s) => (
-          <div key={s.id} className="bg-panel border border-line rounded-[4px] px-4 py-3 flex items-center justify-between">
-            <div className="text-[13.5px] text-ink">{s.email}</div>
-            <div className="text-[12px] text-ink-soft capitalize">{s.role}</div>
+          <div key={s.id} className="bg-panel border border-line rounded-[4px] px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[13.5px] text-ink truncate">{s.email}</div>
+                <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
+                  joined {new Date(s.created_at).toLocaleDateString()}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <select
+                  value={s.role}
+                  onChange={(e) => handleRoleChange(s.id, e.target.value)}
+                  className="text-[12px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink"
+                >
+                  <option value="support">Support</option>
+                  <option value="owner">Owner</option>
+                </select>
+                <button
+                  onClick={() => setRemovingId(removingId === s.id ? null : s.id)}
+                  className="text-[11.5px] text-red hover:opacity-70 transition-opacity"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+
+            {removingId === s.id && (
+              <div className="mt-3 pt-3 border-t border-line flex items-center justify-between gap-3">
+                <div className="text-[12.5px] text-red">
+                  Remove {s.email}&apos;s access to the internal admin panel? They can be re-added
+                  later if needed.
+                </div>
+                <button
+                  onClick={() => handleRemove(s.id)}
+                  className="shrink-0 text-[12.5px] px-3 py-1.5 rounded-[3px] bg-red text-white hover:opacity-90 transition-opacity"
+                >
+                  Confirm remove
+                </button>
+              </div>
+            )}
           </div>
         ))}
+        {staff.length === 0 && <div className="text-[13px] text-ink-soft">No staff yet.</div>}
       </div>
     </div>
   );

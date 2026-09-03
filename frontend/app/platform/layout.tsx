@@ -11,6 +11,7 @@ const NAV = [
   { href: "/platform/tickets", label: "Tickets" },
   { href: "/platform/status", label: "Status" },
   { href: "/platform/staff", label: "Staff", ownerOnly: true },
+  { href: "/platform/audit", label: "Activity" },
 ];
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {

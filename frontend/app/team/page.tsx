@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { listUsers, addTeammate, updateUserRowScope, getBillingStatus, type TeamUser, type BillingStatus } from "@/lib/api";
+import {
+  listUsers, addTeammate, updateUserRowScope, updateUserRole, deleteUser, getBillingStatus,
+  type TeamUser, type BillingStatus,
+} from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 
 const ROLE_OPTIONS = ["analyst", "manager", "executive", "viewer", "admin"];
@@ -31,6 +34,7 @@ export default function TeamPage() {
   const [error, setError] = useState("");
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [addingOpen, setAddingOpen] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const isAdmin = loadSession()?.role === "admin";
 
   function refresh() {
@@ -45,6 +49,27 @@ export default function TeamPage() {
   }
 
   useEffect(refresh, []);
+
+  async function handleRoleChange(userId: string, newRole: string) {
+    setError("");
+    try {
+      await updateUserRole(userId, newRole);
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function handleRemove(userId: string) {
+    setError("");
+    try {
+      await deleteUser(userId);
+      setRemovingId(null);
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   if (!isAdmin) {
     return (
@@ -116,28 +141,56 @@ export default function TeamPage() {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[13.5px] text-ink">{u.email}</div>
-                <div className="text-[12px] text-ink-soft mt-0.5">
-                  <span className="capitalize">{u.role}</span>
-                  {u.created_at && (
-                    <span className="font-[family-name:var(--font-mono)]">
-                      {" "}
-                      · joined {new Date(u.created_at).toLocaleDateString()}
-                    </span>
-                  )}
-                </div>
+                {u.created_at && (
+                  <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
+                    joined {new Date(u.created_at).toLocaleDateString()}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-line text-ink-soft font-[family-name:var(--font-mono)]">
                   {Object.keys(u.row_scope).length === 0 ? "Unrestricted" : rowScopeToText(u.row_scope)}
                 </span>
+                <select
+                  value={u.role}
+                  onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                  className="text-[12px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink capitalize"
+                >
+                  {ROLE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
                 <button
                   onClick={() => setEditingUser(editingUser === u.id ? null : u.id)}
                   className="text-[11.5px] text-teal hover:text-teal-deep transition-colors"
                 >
                   {editingUser === u.id ? "Close" : "Row access"}
                 </button>
+                <button
+                  onClick={() => setRemovingId(removingId === u.id ? null : u.id)}
+                  className="text-[11.5px] text-red hover:opacity-70 transition-opacity"
+                >
+                  Remove
+                </button>
               </div>
             </div>
+
+            {removingId === u.id && (
+              <div className="mt-3 pt-3 border-t border-line flex items-center justify-between gap-3">
+                <div className="text-[12.5px] text-red">
+                  Remove {u.email} from this organization? They&apos;ll lose access immediately.
+                </div>
+                <button
+                  onClick={() => handleRemove(u.id)}
+                  className="shrink-0 text-[12.5px] px-3 py-1.5 rounded-[3px] bg-red text-white hover:opacity-90 transition-opacity"
+                >
+                  Confirm remove
+                </button>
+              </div>
+            )}
+
             {editingUser === u.id && <RowScopeEditor user={u} onSaved={refresh} />}
           </div>
         ))}

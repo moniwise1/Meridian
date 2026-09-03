@@ -83,6 +83,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, "Incorrect email or password.")
 
     record_tenant_login_success(body.email)
+    audit.log(db, user.tenant_id, "user_logged_in", user.id)
     token = create_access_token(user.id, user.tenant_id, user.role)
     return TokenResponse(access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role)
 
@@ -147,8 +148,77 @@ class UserOut(BaseModel):
 
 @router.get("/users", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_role("admin"))):
-    users = db.query(User).filter_by(tenant_id=ctx.tenant_id).all()
+    users = db.query(User).filter_by(tenant_id=ctx.tenant_id).order_by(User.created_at.asc()).all()
     return [UserOut.from_user(u) for u in users]
+
+
+VALID_TENANT_ROLES = {"admin", "manager", "executive", "analyst", "viewer"}
+
+
+def _count_admins(db: Session, tenant_id: str, excluding_id: str | None = None) -> int:
+    q = db.query(User).filter_by(tenant_id=tenant_id, role="admin")
+    if excluding_id:
+        q = q.filter(User.id != excluding_id)
+    return q.count()
+
+
+class UserRoleUpdate(BaseModel):
+    role: str
+
+
+@router.patch("/users/{user_id}/role", response_model=UserOut)
+def update_user_role(user_id: str, body: UserRoleUpdate, db: Session = Depends(get_db),
+                      ctx: AuthContext = Depends(require_role("admin"))):
+    """Admin-only: give full access ("admin") or limit responsibility to
+    one of the other roles. Refuses to demote the last remaining admin -
+    admin is required for team management, billing, and connecting data
+    sources (see require_role("admin") throughout this app), so zero
+    admins would lock the whole organization out of managing itself with
+    no way back in short of a platform-staff support override."""
+    if body.role not in VALID_TENANT_ROLES:
+        raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_TENANT_ROLES))}.")
+    user = db.query(User).filter_by(id=user_id, tenant_id=ctx.tenant_id).first()
+    if not user:
+        raise HTTPException(404, "User not found.")
+
+    if user.role == "admin" and body.role != "admin" and _count_admins(db, ctx.tenant_id, excluding_id=user.id) == 0:
+        raise HTTPException(
+            400,
+            "Can't change the last admin's role — there would be no one left who can manage "
+            "the team, billing, or data sources. Promote another teammate to admin first.",
+        )
+
+    previous_role = user.role
+    user.role = body.role
+    db.commit()
+    db.refresh(user)
+    audit.log(db, ctx.tenant_id, "user_role_changed", ctx.user_id,
+               detail={"target_user_id": user_id, "from": previous_role, "to": user.role})
+    return UserOut.from_user(user)
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: str, db: Session = Depends(get_db),
+                 ctx: AuthContext = Depends(require_role("admin"))):
+    """Admin-only, same last-admin protection as changing one's role -
+    removing the last admin is exactly as locking as demoting them."""
+    user = db.query(User).filter_by(id=user_id, tenant_id=ctx.tenant_id).first()
+    if not user:
+        raise HTTPException(404, "User not found.")
+
+    if user.role == "admin" and _count_admins(db, ctx.tenant_id, excluding_id=user.id) == 0:
+        raise HTTPException(
+            400,
+            "Can't remove the last admin — there would be no one left who can manage the "
+            "team, billing, or data sources. Promote another teammate to admin first.",
+        )
+
+    deleted_id, deleted_email = user.id, user.email
+    db.delete(user)
+    db.commit()
+    audit.log(db, ctx.tenant_id, "user_removed", ctx.user_id,
+               detail={"target_user_id": deleted_id, "email": deleted_email})
+    return {"status": "deleted"}
 
 
 class RowScopeUpdate(BaseModel):
@@ -167,4 +237,4 @@ def update_row_scope(user_id: str, body: RowScopeUpdate, db: Session = Depends(g
     db.refresh(user)
     audit.log(db, ctx.tenant_id, "user_row_scope_updated", ctx.user_id,
                detail={"target_user_id": user_id, "row_scope": body.row_scope})
-    return user
+    return UserOut.from_user(user)
