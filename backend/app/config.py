@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     llm_model_fast: str = "claude-haiku-4-5-20251001"
     llm_model_reasoning: str = "claude-sonnet-4-6"
 
+    # Billing (app/billing/paystack.py, app/api/routes_billing.py). Paid-
+    # from-onset model: a tenant is charged immediately on subscribe, with a
+    # self-serve full refund if they cancel within billing_refund_window_days.
+    paystack_secret_key: str = ""
+    paystack_public_key: str = ""
+    paystack_plan_code: str = ""
+    # Smallest currency unit (kobo for NGN, cents for USD, pesewas for GHS,
+    # ...) - must match the plan's real price. Passed explicitly on every
+    # initialize call rather than relying on Paystack's documented (but
+    # unverified here - no live account to test against) behavior of
+    # inferring the amount from the plan code alone.
+    paystack_plan_amount: int = 0
+    billing_refund_window_days: int = 7
+
     class Config:
         env_file = ".env"
 

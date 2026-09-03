@@ -14,6 +14,7 @@ const NAV = [
   { href: "/documents", label: "Documents" },
   { href: "/connections", label: "Data sources" },
   { href: "/team", label: "Team", adminOnly: true },
+  { href: "/billing", label: "Billing" },
   { href: "/audit", label: "Audit log" },
 ];
 

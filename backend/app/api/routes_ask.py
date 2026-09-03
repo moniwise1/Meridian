@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import User
-from app.security.auth import get_current_user, AuthContext
+from app.security.auth import get_current_user, require_active_subscription, AuthContext
 from app.security.rate_limit import (
     check_ask_rate_limit, acquire_concurrency_slot, release_concurrency_slot,
     RateLimitExceeded, ConcurrencyLimitExceeded,
@@ -39,7 +39,8 @@ def _sse(event: dict) -> str:
 
 @router.post("/stream")
 def ask_stream(body: AskRequest, db: Session = Depends(get_db),
-               ctx: AuthContext = Depends(get_current_user)):
+               ctx: AuthContext = Depends(get_current_user),
+               _billing: AuthContext = Depends(require_active_subscription)):
     user = db.query(User).filter_by(id=ctx.user_id).first()
     row_scope = (user.row_scope or {}) if user else {}
     if "querying" not in (user.capabilities or []):

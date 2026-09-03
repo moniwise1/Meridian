@@ -198,6 +198,56 @@ export async function updateUserRowScope(
   return body;
 }
 
+// ---------- Billing ----------
+
+export type BillingStatus = {
+  subscription_status: "none" | "pending" | "active" | "cancelled" | "refunded";
+  paid_at: string | null;
+  refund_eligible_until: string | null;
+  plan_code: string | null;
+};
+
+export async function getBillingStatus(): Promise<BillingStatus> {
+  const res = await fetch(`${API_BASE}/billing/status`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load billing status.");
+  return body;
+}
+
+export async function subscribe(callbackUrl: string): Promise<{ authorization_url: string; reference: string }> {
+  const res = await fetch(`${API_BASE}/billing/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ callback_url: callbackUrl }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not start checkout.");
+  return body;
+}
+
+export async function verifyPayment(reference: string): Promise<BillingStatus> {
+  const res = await fetch(`${API_BASE}/billing/verify?reference=${encodeURIComponent(reference)}`, {
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not verify payment.");
+  return body;
+}
+
+export async function cancelSubscription(): Promise<BillingStatus> {
+  const res = await fetch(`${API_BASE}/billing/cancel`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not cancel the subscription.");
+  return body;
+}
+
 // ---------- Ask ----------
 
 export type StepEvent = {

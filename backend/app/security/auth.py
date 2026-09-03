@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.session import get_db
-from app.db.models import User
+from app.db.models import User, Tenant
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -87,3 +87,18 @@ def require_role(*allowed_roles: str):
             raise HTTPException(403, f"This action requires one of: {', '.join(allowed_roles)}.")
         return ctx
     return _dep
+
+
+def require_active_subscription(
+    ctx: AuthContext = Depends(get_current_user), db: Session = Depends(get_db),
+) -> AuthContext:
+    """Gates the core product actions behind an active, paid subscription
+    (premium-from-onset model - see app/api/routes_billing.py). 402 Payment
+    Required is the correct status for this, not 403: the caller is who
+    they say they are and would be allowed to act, the account just isn't
+    paid. Account/team/audit/billing screens deliberately do NOT depend on
+    this, so an unpaid admin can still see their own org's status and pay."""
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    if not tenant or tenant.subscription_status != "active":
+        raise HTTPException(402, "Your organization's subscription is not active. Visit Billing to subscribe.")
+    return ctx

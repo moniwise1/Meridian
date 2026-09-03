@@ -26,6 +26,22 @@ class Tenant(Base):
     name = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Billing (app/billing/paystack.py) - paid-from-onset model, not a
+    # delayed-billing free trial. "none" until the first successful charge.
+    subscription_status = Column(String, nullable=False, default="none")
+    # "none" | "pending" | "active" | "cancelled" | "refunded"
+    paystack_customer_code = Column(String, nullable=True)
+    paystack_subscription_code = Column(String, nullable=True)
+    # Required by Paystack's own API to disable a subscription - issued
+    # when the subscription is created, not a secret this app generates.
+    paystack_email_token = Column(String, nullable=True)
+    paystack_plan_code = Column(String, nullable=True)
+    # The transaction a within-window cancel would refund.
+    last_transaction_reference = Column(String, nullable=True)
+    # Anchors the refund window - set on first successful charge, never
+    # touched again (a renewal isn't a new "paid_at").
+    paid_at = Column(DateTime, nullable=True)
+
     connections = relationship("DataSourceConnection", back_populates="tenant")
 
 

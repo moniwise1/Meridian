@@ -14,6 +14,36 @@ explicitly rather than glossed over.
 
 ## What's implemented
 
+**Billing** (`app/billing/paystack.py`, `app/api/routes_billing.py`) —
+premium-from-onset: a tenant is charged immediately on subscribe via
+Paystack, not given a delayed-billing free trial, with a self-serve full
+refund available if they cancel within `BILLING_REFUND_WINDOW_DAYS` (7 by
+default) — after that window, cancelling stops future billing only, no
+refund. Activation is reachable from two independent paths (the browser's
+post-checkout redirect, and Paystack's async webhook) so either one alone
+completes it. The core product actions (creating a data source, Ask, Risk
+scan) are gated behind an active subscription via
+`require_active_subscription` (402 Payment Required); account/team/audit/
+billing screens deliberately are not, so an unpaid admin can still see
+their org's status and pay. Every state transition goes through the same
+hash-chained audit log as the rest of the app.
+
+The webhook signature check (`verify_webhook_signature` — HMAC-SHA512 over
+the raw request body, constant-time compared) is the one thing standing
+between "a real payment happened" and "anyone who finds the webhook URL
+can forge a paid-subscription event" — verified with real test vectors
+(valid signature, wrong signature, forged-with-wrong-secret, tampered
+body, re-serialized-but-logically-identical body) in addition to a full
+HTTP round trip through the real app (subscribe → pay → gate blocks then
+allows → webhook → cancel-with-refund inside the window → cancel-without-
+refund outside it → audit trail intact throughout). Honest limitation:
+none of it has been exercised against a live Paystack account (no test-
+mode keys available in this environment) — built strictly to Paystack's
+documented API contract, with the specific assumptions that couldn't be
+verified called out in the module docstring. Confirm the first real
+transaction in Paystack's own dashboard before trusting this in
+production.
+
 **Auth & multi-tenancy**
 - Real registration/login: PBKDF2-SHA256 password hashing, signed JWT
   sessions. Every route derives `tenant_id`/`user_id` from the verified

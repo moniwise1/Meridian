@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models import DataSourceConnection
 from app.security.secrets import encrypt, RedactedSecret
-from app.security.auth import get_current_user, require_role, AuthContext
+from app.security.auth import get_current_user, require_role, require_active_subscription, AuthContext
 from app.connectors.postgres import PostgresConnector
 from app.connectors.mysql import MySQLConnector
 from app.connectors.mssql import MSSQLConnector
@@ -51,7 +51,8 @@ class ConnectionOut(BaseModel):
 
 @router.post("", response_model=ConnectionOut)
 def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
-                       ctx: AuthContext = Depends(require_role("admin"))):
+                       ctx: AuthContext = Depends(require_role("admin")),
+                       _billing: AuthContext = Depends(require_active_subscription)):
     connector_cls = _CONNECTOR_CLASSES.get(body.kind)
     if connector_cls is None:
         raise HTTPException(400, f"Unsupported connector kind '{body.kind}'. "
