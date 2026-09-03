@@ -181,3 +181,82 @@ class EmailDeliveryLog(Base):
     status = Column(String, nullable=False)  # "sent" | "blocked" | "pending_confirmation"
     reason = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PlatformStaff(Base):
+    """Meridian's OWN internal team (support agents, ops, the owner) — a
+    deliberately separate identity from the tenant-scoped User model
+    above. Every other table and route in this app is built around "the
+    caller can only ever act within their own tenant_id"; platform staff
+    are the one intentional exception, so keeping them a structurally
+    different kind of account (separate table, separate login, separate
+    token shape — see app/security/platform_auth.py) means a bug that
+    confuses the two auth systems fails closed instead of quietly granting
+    cross-tenant access. No self-registration route exists for this table;
+    see routes_platform.py's login/bootstrap for how the first account
+    gets created."""
+    __tablename__ = "platform_staff"
+    id = Column(String, primary_key=True, default=_uuid)
+    email = Column(String, nullable=False, unique=True)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, nullable=False, default="support")  # "owner" | "support"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SupportTicket(Base):
+    """A customer-filed support ticket. tenant_id/created_by_user_id
+    identify who filed it (tenant-scoped access for the customer side);
+    assigned_to_staff_id identifies which platform staff member owns it
+    (cross-tenant access for the staff side) — see routes_support.py vs
+    routes_platform.py for how those two access paths stay separate."""
+    __tablename__ = "support_tickets"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False)
+    created_by_user_id = Column(String, nullable=True)
+    subject = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="open")  # open|in_progress|resolved|closed
+    priority = Column(String, nullable=False, default="normal")  # low|normal|high|urgent
+    assigned_to_staff_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TicketMessage(Base):
+    __tablename__ = "ticket_messages"
+    id = Column(String, primary_key=True, default=_uuid)
+    ticket_id = Column(String, ForeignKey("support_tickets.id"), nullable=False)
+    author_type = Column(String, nullable=False)  # "customer" | "staff"
+    # References users.id or platform_staff.id depending on author_type -
+    # deliberately not a single FK, since it points at two different
+    # tables depending on a sibling column.
+    author_id = Column(String, nullable=True)
+    author_label = Column(String, nullable=False, default="")  # display name/email at send time
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SystemIncident(Base):
+    """A manually-logged downtime/degradation entry - the content behind
+    an internal (and optionally public-facing) status view, in the same
+    spirit as how Stripe/GitHub status pages work: a human posts what's
+    happening, this isn't automated multi-region uptime probing. Pair
+    with a real third-party status/monitoring tool for that - see the
+    README's note on this."""
+    __tablename__ = "system_incidents"
+    id = Column(String, primary_key=True, default=_uuid)
+    title = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="investigating")
+    # "investigating" | "identified" | "monitoring" | "resolved"
+    severity = Column(String, nullable=False, default="minor")  # "minor" | "major" | "critical"
+    started_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+    created_by_staff_id = Column(String, nullable=True)
+
+
+class IncidentUpdate(Base):
+    __tablename__ = "incident_updates"
+    id = Column(String, primary_key=True, default=_uuid)
+    incident_id = Column(String, ForeignKey("system_incidents.id"), nullable=False)
+    status = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -15,6 +15,7 @@ const NAV = [
   { href: "/connections", label: "Data sources" },
   { href: "/team", label: "Team", adminOnly: true },
   { href: "/billing", label: "Billing" },
+  { href: "/support", label: "Support" },
   { href: "/audit", label: "Audit log" },
 ];
 
@@ -27,7 +28,9 @@ export default function Sidebar() {
     setSession(loadSession());
   }, [pathname]);
 
-  if (pathname === "/login") return null;
+  // /platform/* has its own nav (app/platform/layout.tsx) - this sidebar
+  // is tenant-scoped and has no business appearing there.
+  if (pathname === "/login" || pathname.startsWith("/platform")) return null;
 
   function handleLogout() {
     clearSession();

@@ -501,6 +501,57 @@ export async function listArtifactHistory(kind?: string): Promise<ArtifactHistor
   return res.json();
 }
 
+// ---------- Support ----------
+
+export type TicketMessage = {
+  id: string;
+  author_type: "customer" | "staff";
+  author_label: string;
+  body: string;
+  created_at: string;
+};
+
+export type SupportTicket = {
+  id: string;
+  subject: string;
+  status: "open" | "in_progress" | "resolved" | "closed";
+  priority: "low" | "normal" | "high" | "urgent";
+  created_at: string;
+  updated_at: string;
+  messages: TicketMessage[];
+};
+
+export async function listMyTickets(): Promise<SupportTicket[]> {
+  const res = await fetch(`${API_BASE}/support/tickets`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load support tickets.");
+  return res.json();
+}
+
+export async function createTicket(subject: string, body: string, priority = "normal"): Promise<SupportTicket> {
+  const res = await fetch(`${API_BASE}/support/tickets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ subject, body, priority }),
+  });
+  await handleAuthFailure(res);
+  const respBody = await res.json();
+  if (!res.ok) throw new Error(respBody.detail ?? "Could not create the ticket.");
+  return respBody;
+}
+
+export async function replyToTicket(ticketId: string, body: string): Promise<SupportTicket> {
+  const res = await fetch(`${API_BASE}/support/tickets/${ticketId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ body }),
+  });
+  await handleAuthFailure(res);
+  const respBody = await res.json();
+  if (!res.ok) throw new Error(respBody.detail ?? "Could not send the reply.");
+  return respBody;
+}
+
 // ---------- Audit ----------
 
 export type AuditEntry = {

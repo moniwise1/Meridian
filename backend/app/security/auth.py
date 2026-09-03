@@ -25,6 +25,16 @@ _bearer = HTTPBearer(auto_error=False)
 
 PBKDF2_ITERATIONS = 260_000
 
+# Falls back to app_secret_key when JWT_SECRET_KEY isn't set, so existing
+# deployments keep working unchanged. Split into its own setting (rather
+# than reusing app_secret_key, which app/security/secrets.py's "local"
+# backend also uses to encrypt stored DB credentials) so the two can be
+# rotated independently - rotating the JWT secret invalidates every active
+# session, which is a very different operational event from rotating the
+# key that decrypts credentials, and conflating them meant you couldn't do
+# one without doing the other.
+_JWT_SECRET = settings.jwt_secret_key or settings.app_secret_key
+
 
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
@@ -51,7 +61,7 @@ def create_access_token(user_id: str, tenant_id: str, role: str, ttl_seconds: in
         "iat": int(time.time()),
         "exp": int(time.time()) + ttl_seconds,
     }
-    return jwt.encode(payload, settings.app_secret_key, algorithm="HS256")
+    return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
 
 
 class AuthContext:
@@ -68,11 +78,21 @@ def get_current_user(
     if creds is None:
         raise HTTPException(401, "Missing bearer token.")
     try:
-        payload = jwt.decode(creds.credentials, settings.app_secret_key, algorithms=["HS256"])
+        payload = jwt.decode(creds.credentials, _JWT_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Session expired, please log in again.")
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Invalid session token.")
+
+    # A well-formed, validly-signed token that isn't a tenant token at all
+    # - most notably a platform-staff token (app/security/platform_auth.py
+    # uses a different claim shape on purpose) - decodes fine above but has
+    # no "sub"/"tenant_id" claims. Reject cleanly here rather than letting
+    # a raw KeyError turn into an unhandled 500; the security outcome is
+    # the same either way (no access granted), but this is the honest,
+    # intended failure path, not an accident.
+    if "sub" not in payload or "tenant_id" not in payload:
+        raise HTTPException(401, "Not a tenant session token.")
 
     user = db.query(User).filter_by(id=payload["sub"], tenant_id=payload["tenant_id"]).first()
     if not user:

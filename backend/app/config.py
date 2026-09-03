@@ -7,9 +7,26 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     app_secret_key: str
+    # Falls back to app_secret_key if unset, matching the original
+    # single-key behavior - see the note in app/security/auth.py on why
+    # splitting this from the credential-encryption key matters.
+    jwt_secret_key: str = ""
+    # Signs platform-staff (internal admin) sessions - see
+    # app/security/platform_auth.py for why this is deliberately a THIRD
+    # secret, separate from both app_secret_key and jwt_secret_key. Falls
+    # back to jwt_secret_key, then app_secret_key, if unset.
+    platform_jwt_secret: str = ""
     metadata_db_url: str = "sqlite:///./metadata.db"
     anthropic_api_key: str = ""
     frontend_origin: str = "http://localhost:3000"
+
+    # Credential encryption backend - see app/security/secrets.py.
+    # "local" (default): a static Fernet key from app_secret_key, fine for
+    # dev. "aws": envelope encryption via AWS KMS for production - see
+    # docs/CLOUD_KMS.md.
+    kms_provider: str = "local"
+    aws_kms_key_id: str = ""
+    aws_region: str = "us-east-1"
 
     default_row_limit: int = 1000
     max_row_limit: int = 20000

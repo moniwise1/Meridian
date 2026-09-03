@@ -14,6 +14,45 @@ explicitly rather than glossed over.
 
 ## What's implemented
 
+**Internal admin panel** (`app/security/platform_auth.py`,
+`app/api/routes_platform.py`, `/platform/*` in the frontend) — a
+completely separate app surface for Meridian's own team, not an extension
+of the tenant-scoped app: separate login (`/platform/login`), separate
+account table (`PlatformStaff`, not `User`), separate signing secret
+(`PLATFORM_JWT_SECRET`), and a structurally different JWT claim shape, so a
+tenant token and a platform token can never satisfy each other's auth
+check even by accident. This is the one deliberate exception to "every
+route is scoped to the caller's own tenant_id" — everywhere else in this
+codebase, that's an invariant; here, cross-tenant visibility is the
+explicit point, which is exactly why it needed its own identity system
+rather than a role flag on the existing one. First-run bootstraps the one
+and only "owner" account via an unauthenticated `/platform/bootstrap` call
+that permanently disables itself the moment one exists; every account
+after that requires an existing owner to create it.
+
+Covers: browsing/editing/deleting tenants (with a cascading delete across
+every tenant-scoped table, including — deliberately — that tenant's own
+audit history, since this doubles as how a GDPR-style erasure request gets
+fulfilled), a cross-tenant support ticket queue (customers file tickets at
+`/support`, tenant-scoped like everything else customer-facing; staff see
+and answer every tenant's tickets at `/platform/tickets`), a manually-
+logged incident/status system in the same spirit as how Stripe/GitHub
+status pages work (a human posts what's happening — not automated
+multi-region uptime probing, which this deliberately doesn't attempt; pair
+with a real monitoring tool for that) with a public, unauthenticated
+`GET /status` endpoint, and a rough internal health snapshot.
+
+Verified with a full HTTP round trip through the real app, specifically
+targeting the boundary that matters most: a tenant token is rejected on
+every `/platform/*` route (401) and a platform token is rejected on every
+tenant route (401) — including a real bug this caught and fixed, where a
+platform token handed to the tenant-scoped `get_current_user` raised an
+unhandled `KeyError` (missing `sub`/`tenant_id` claims) instead of a clean
+401; same security outcome either way, but now an intentional failure path
+instead of an accidental one. Also verified: cross-tenant ticket isolation,
+the tenant-deletion cascade, and the public status page correctly flipping
+`operational` based on open incidents.
+
 **Billing** (`app/billing/paystack.py`, `app/api/routes_billing.py`) —
 premium-from-onset: a tenant is charged immediately on subscribe via
 Paystack, not given a delayed-billing free trial, with a self-serve full
@@ -52,6 +91,16 @@ production.
 - Role-based access (`admin` can connect data sources and edit policy;
   other roles can't) and per-user capabilities (querying, report
   generation, email delivery, etc. can each be individually enabled).
+- Session-signing and credential-encryption now use independently
+  rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
+  a shared key if unset, for backward compatibility) — rotating one no
+  longer forces rotating the other. Credential encryption itself can run
+  in two modes: a static local key (default) or real envelope encryption
+  via AWS KMS for production — see `app/security/secrets.py` and
+  `docs/CLOUD_KMS.md`. Verified against a stubbed KMS client (exact API
+  calls, full encrypt/decrypt round trip, confirms the plaintext
+  credential never appears in the stored token), not a live AWS account —
+  none available here.
 
 **Connectors**
 - **PostgreSQL** and **MySQL/MariaDB**, both proven against real instances:
@@ -244,9 +293,14 @@ scans across every authorized table, a Documents screen for uploading/
 previewing/deleting PDFs/DOCX/XLSX with an inline attach-to-question picker
 on Ask, Data Sources screen with per-connection table- and column-policy
 editor (admin only), Team screen for setting per-user row-level access
-scope (admin only), Analyses history (reopen any past question) and a
-Library of generated reports/presentations/exports, Audit log screen with
-a one-click hash-chain verification check.
+scope (admin only), Billing screen (subscribe/cancel, refund-window
+status), a Support screen for filing/viewing tickets, Analyses history
+(reopen any past question) and a Library of generated reports/
+presentations/exports, Audit log screen with a one-click hash-chain
+verification check. Separately, `/platform/*` is Meridian's own internal
+admin panel — its own login, own nav, own session storage key — for
+managing tenants, answering support tickets across every organization, and
+maintaining the status page; see "Internal admin panel" above.
 
 ## What's NOT built, and why
 
@@ -256,7 +310,8 @@ a one-click hash-chain verification check.
 | Real OAuth/SSO (Google/Microsoft/Salesforce/SAP/etc.) | Needs a registered app with each provider — can't create that here |
 | Document OCR / scanned-PDF text extraction | pypdf only reads an embedded text layer; a scanned document extracts to nothing, honestly, rather than pretending to work — see the Document intelligence section above |
 | Real SMTP/email provider | Console backend stands in; swap-in point is documented above |
-| Cloud KMS for credential encryption | Uses a local Fernet key (`.env`); documented as the production gap |
+| Automatic re-encryption when switching KMS backends | Existing credentials stay encrypted with whichever backend wrote them; migrating a live database needs a one-off script that runs both backends at once — see `docs/CLOUD_KMS.md` §4 |
+| Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |
 | Shared (cross-process) rate limiting / caching, pre-execution query cost estimation | Rate/concurrency limits and the result cache exist but are in-process only (see above); per-query cost is bounded by row LIMIT + timeout, not estimated before running |
 | Saved Work (manual bookmarking) | Not built — Analyses/Library cover browsing all past work, but there's no way to pin/save specific items |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
@@ -339,6 +394,14 @@ npm run dev
 Open http://localhost:3000 — **Create account** registers you as the admin
 of a new company workspace, then go to **Data sources** to connect your
 database and **Ask** a question.
+
+### 4. Internal admin panel (optional, for your own team)
+
+`/platform/login` is a completely separate app surface — see the "Internal
+admin panel" section below. First visit → "First-time setup" creates the
+one and only "owner" account; that path then closes itself (a second
+attempt is rejected). No signup form is ever shown for this anywhere else
+in the app on purpose.
 
 ## Architecture
 
