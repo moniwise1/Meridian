@@ -232,8 +232,10 @@ flat series classify correctly, too few periods correctly returns nothing,
 and the top-N-groups bound is respected.
 
 **Document intelligence** (`app/agents/document_intelligence.py`,
-`/documents`) — upload a PDF, DOCX, or XLSX; text (and table cell content)
-is extracted once at upload time and can be attached to a question on Ask,
+`/documents`) — upload a PDF, DOCX, PPTX, or XLSX; text (and table cell
+content, and — for PPTX — speaker notes, labelled `[Speaker notes]` so
+it's clear in the extracted text which content was on-slide vs. narration-
+only) is extracted once at upload time and can be attached to a question on Ask,
 where it's referenced alongside the database analysis. This is the first
 genuinely externally-authored content anywhere in this app's LLM calls —
 schema field names and row values come from a database the tenant already
@@ -249,10 +251,10 @@ into either of those correctly. NOT built: OCR (a scanned PDF's text
 extracts to nothing, silently — surfaced honestly as an empty result, not
 pretended to work) or real PDF table structure (flattened to reading-order
 text). Bounded to 20MB per upload and 50,000 extracted characters.
-Extraction verified against real generated PDF/DOCX/XLSX files (not
-reimplemented logic) — actual page text, paragraphs, tables, multi-sheet
-content, truncation at the character cap, and graceful (non-crashing)
-handling of a corrupt file all confirmed. The whole feature was then
+Extraction verified against real generated PDF/DOCX/PPTX/XLSX files (not
+reimplemented logic) — actual page text, paragraphs, tables, multi-sheet/
+multi-slide content, PPTX speaker notes, truncation at the character cap,
+and graceful (non-crashing) handling of a corrupt file all confirmed. The whole feature was then
 verified with a real HTTP round trip through the live FastAPI app against
 a real SQLite database (register → upload → list → get → permission-denied
 delete by a non-uploader → admin delete), and separately, cross-tenant

@@ -1,10 +1,10 @@
 """
-Document Intelligence — extracts plain text from an uploaded PDF, DOCX, or
-XLSX so it can be referenced alongside a database analysis (BUILD SPEC
-section 19). This is text/table extraction, not comprehension: it turns a
-file into text the insight-explanation LLM step can read, exactly the way
-it already reads computed metrics — nothing here interprets, summarizes, or
-validates the document's content.
+Document Intelligence — extracts plain text from an uploaded PDF, DOCX,
+PPTX, or XLSX so it can be referenced alongside a database analysis (BUILD
+SPEC section 19). This is text/table extraction, not comprehension: it
+turns a file into text the insight-explanation LLM step can read, exactly
+the way it already reads computed metrics — nothing here interprets,
+summarizes, or validates the document's content.
 
 Security note this module exists specifically to keep in view: extracted
 document text is the first genuinely externally-authored content this app
@@ -33,12 +33,14 @@ from dataclasses import dataclass
 import pypdf
 import docx
 import openpyxl
+import pptx
 
 MAX_EXTRACTED_CHARS = 50_000  # bounds LLM context cost the same way row limits bound query cost
 MAX_XLSX_ROWS_PER_SHEET = 200
 MAX_XLSX_SHEETS = 10
+MAX_PPTX_SLIDES = 200
 
-SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx"}
+SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx"}
 
 
 class UnsupportedDocumentType(Exception):
@@ -103,6 +105,42 @@ def extract_xlsx(file_bytes: bytes) -> ExtractionResult:
     return ExtractionResult(text=text, truncated=truncated, source_unit_count=total_sheets)
 
 
+def extract_pptx(file_bytes: bytes) -> ExtractionResult:
+    presentation = pptx.Presentation(io.BytesIO(file_bytes))
+    total_slides = len(presentation.slides)
+    slides_included = 0
+    parts = []
+    for i, slide in enumerate(presentation.slides):
+        if i >= MAX_PPTX_SLIDES:
+            break
+        slides_included += 1
+        parts.append(f"--- Slide {i + 1} ---")
+        for shape in slide.shapes:
+            # Title/body text boxes, and any other shape with a text
+            # frame (a caption, a text box someone dragged in, etc).
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    text = "".join(run.text for run in paragraph.runs).strip()
+                    if text:
+                        parts.append(text)
+            # Tables render the same "cell | cell" flattening as
+            # extract_docx's tables, for consistency across formats.
+            if shape.has_table:
+                for row in shape.table.rows:
+                    parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+        # Speaker notes often carry real analytical content (the actual
+        # narration a deck's bullet points only hint at) - included, but
+        # clearly labelled so it's obvious in the extracted text which
+        # part was on-slide vs. notes-only.
+        if slide.has_notes_slide:
+            notes_text = (slide.notes_slide.notes_text_frame.text or "").strip()
+            if notes_text:
+                parts.append(f"[Speaker notes] {notes_text}")
+    text, char_truncated = _truncate("\n".join(parts))
+    truncated = char_truncated or slides_included < total_slides
+    return ExtractionResult(text=text, truncated=truncated, source_unit_count=total_slides)
+
+
 def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
     """Dispatches on file extension. Returns (kind, ExtractionResult)."""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -116,4 +154,6 @@ def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
         return kind, extract_pdf(file_bytes)
     if kind == "docx":
         return kind, extract_docx(file_bytes)
+    if kind == "pptx":
+        return kind, extract_pptx(file_bytes)
     return kind, extract_xlsx(file_bytes)
