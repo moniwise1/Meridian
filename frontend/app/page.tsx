@@ -42,6 +42,21 @@ export default function AskPage() {
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   useEffect(() => {
+    // Connections and documents load independently (two separate
+    // requests, arriving in whichever order the network gives them) and
+    // either one alone can supply a usable default source. A database
+    // connection always wins if one exists (unconditional - matches the
+    // original behavior before documents could be a source at all), but
+    // if there are zero connections and at least one document, the
+    // document needs to become the default too - otherwise sourceValue
+    // stays "", which means <select>'s bound value matches no real
+    // <option>, and the browser falls back to visually displaying the
+    // first option anyway (misleadingly looking selected) while React's
+    // own state - and therefore the Ask button's enabled check and the
+    // "hide the redundant attach section" logic - both still see nothing
+    // selected. The functional update below only sets a document default
+    // when nothing has claimed sourceValue yet, so a connection arriving
+    // either before or after documents always takes priority correctly.
     listConnections()
       .then((rows) => {
         setConnections(rows);
@@ -49,7 +64,12 @@ export default function AskPage() {
       })
       .catch((e) => setLoadError(e.message));
     listDocuments()
-      .then(setDocuments)
+      .then((rows) => {
+        setDocuments(rows);
+        if (rows.length > 0) {
+          setSourceValue((prev) => (prev === "" ? `doc:${rows[0].id}` : prev));
+        }
+      })
       .catch(() => {}); // no document_retrieval capability, or none uploaded yet — fine either way
   }, []);
 
