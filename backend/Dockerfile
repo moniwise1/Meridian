@@ -21,4 +21,8 @@ ENV ARTIFACTS_DIR=/app/artifacts
 ENV DOCUMENTS_DIR=/app/documents
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form (not exec-array) so ${PORT} actually expands - platforms like
+# Railway assign a container's public port at runtime via $PORT and route
+# traffic to whatever that is, not necessarily 8000; falls back to 8000 for
+# plain `docker run`/docker-compose where nothing sets $PORT.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

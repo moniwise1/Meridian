@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # Fast, cheap model for schema summarization / SQL generation.
     # Reserve a stronger model only for the final insight explanation step (see agents/insight_agent.py).
     llm_model_fast: str = "claude-haiku-4-5-20251001"
-    llm_model_reasoning: str = "claude-sonnet-4-6"
+    llm_model_reasoning: str = "claude-sonnet-5"
 
     # Billing (app/billing/paystack.py, app/api/routes_billing.py). Paid-
     # from-onset model: a tenant is charged immediately on subscribe, with a
