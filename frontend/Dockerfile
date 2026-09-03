@@ -20,6 +20,13 @@ RUN npm run build
 FROM node:20-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Docker sets HOSTNAME to the container's own ID by default, and Next's
+# standalone server binds to process.env.HOSTNAME when it's set - without
+# this override it ends up listening on that container-ID hostname instead
+# of all interfaces, so nothing outside the container (a platform's proxy
+# included) can ever reach it, even though the process is running fine.
+# Known Next.js standalone-Docker gotcha - not specific to any one host.
+ENV HOSTNAME="0.0.0.0"
 COPY --from=build /app/public ./public
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
