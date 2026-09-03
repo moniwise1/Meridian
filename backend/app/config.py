@@ -35,8 +35,17 @@ class Settings(BaseSettings):
     documents_dir: str = "./documents"
     max_document_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
 
+    # Shared backing store for rate_limit.py / login_cooldown.py /
+    # query_cache.py. Empty (default): each falls back to in-process
+    # memory, correct for a single instance, silently weaker behind
+    # multiple workers/replicas (see each module's own docstring). Set to
+    # a real Redis URL (redis://... or rediss://... for TLS) to make all
+    # three genuinely global across every instance - the same fix for all
+    # three, since they're the same category of gap.
+    redis_url: str = ""
+
     # See app/security/rate_limit.py for what these bound and their
-    # in-process (not cross-worker) limitation.
+    # in-process (not cross-worker) limitation when redis_url is unset.
     ask_rate_limit_per_user_per_minute: int = 10
     ask_max_concurrent_per_tenant: int = 3
 

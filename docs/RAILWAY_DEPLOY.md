@@ -181,15 +181,30 @@ stops you from giving it one too (`api.yourcompany.com`) — just remember to
 update `NEXT_PUBLIC_API_BASE` (frontend, triggers a rebuild) and
 `FRONTEND_ORIGIN` (backend) to match if you do.
 
+## Optional: Redis, before you scale the backend past one replica
+
+The rate limiter, login cooldown, and query cache (`app/security/
+rate_limit.py`, `login_cooldown.py`, `app/agents/query_cache.py`) fall
+back to in-process memory by default — correct for the single-replica
+backend this runbook sets up, silently weaker (each replica enforces its
+own independent state) the moment you scale to more than one. Fixing that
+is the same one-variable pattern as the Postgres addon above:
+
+1. Same project → **New** → **Database** → **Add Redis**.
+2. Backend service → **Variables** → **New Variable** → name it
+   `REDIS_URL`, **Add Reference** → the Redis service's connection-string
+   variable (its exact name varies — look for something like
+   `REDIS_URL`/`REDISCLOUD_URL` in the reference picker, matching however
+   Railway's Redis addon exposes it).
+3. Save — triggers a redeploy. All three become genuinely global across
+   every backend replica from that point on; no other config needed.
+
+Skip this entirely if you're staying at one replica — nothing forces you
+to add Redis before you actually need it, and every request still works
+correctly without it, just scoped to that one instance instead of shared.
+
 ## What this does *not* solve
 
-- **Redis / shared state.** Both services above run as a single instance
-  each by default. That's consistent with everything already documented in
-  the README about the rate limiter, login cooldown, and query cache being
-  in-process only — this deploy doesn't change that, it just gets you a
-  real single-instance production deployment. Scaling either service to
-  more than one replica needs Redis first, or those protections silently
-  become per-replica instead of global.
 - **Real SMTP.** Invite-by-email and ticket-reply notifications still log
   to console output instead of sending — same gap as local dev, now just
   visible in Railway's deploy logs instead of your terminal.

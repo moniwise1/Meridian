@@ -24,11 +24,25 @@ Get either of those wrong and this cache becomes a way to read data a
 policy change or a row-scope restriction was supposed to block. Both are
 included on every lookup and every write.
 
-In-process, same limitation as app/security/rate_limit.py: not shared
-across worker processes (a second worker won't see hits the first one
-populated), and bounded to MAX_ENTRIES with oldest-first eviction rather
-than a real LRU — adequate for a single-process MVP, not a production
-cache.
+Two backends behind the exact same public functions (get/put), chosen
+once at import time based on settings.redis_url — same split as
+app/security/rate_limit.py and login_cooldown.py:
+
+- In-process (REDIS_URL unset, the default): not shared across worker
+  processes (a second worker won't see hits the first one populated), and
+  bounded to MAX_ENTRIES with oldest-first eviction rather than a real
+  LRU — adequate for a single-process MVP, not a production cache.
+- Redis-backed (REDIS_URL set): genuinely shared across every process and
+  replica, so a second worker (or a second instance entirely) DOES see a
+  hit the first one populated — the whole point of a cache is defeated
+  if each process keeps its own. No MAX_ENTRIES/eviction logic needed:
+  every entry carries its own TTL (ask_cache_ttl_seconds) via Redis's own
+  EX, so expiry is Redis's job, not this module's; size the Redis
+  instance for the traffic instead of replicating an eviction policy here.
+  Cache misses fail open on a Redis connection error (see
+  app/security/redis_client.py's docstring) — a miss just means a fresh
+  (slower, more expensive) computation runs, never an error surfaced to
+  the caller, so there's nothing unsafe about that fallback.
 """
 import hashlib
 import json
@@ -37,11 +51,13 @@ import time
 from collections import OrderedDict
 
 from app.config import settings
+from app.security.redis_client import get_redis_client, log_redis_failure
 
 MAX_ENTRIES = 500
 
 _lock = threading.Lock()
 _cache: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()  # key -> (expires_at, result)
+_redis = get_redis_client()
 
 
 def _cache_key(tenant_id: str, connection_id: str, table_allowlist: list[str] | None,
@@ -61,6 +77,16 @@ def _cache_key(tenant_id: str, connection_id: str, table_allowlist: list[str] | 
 def get(tenant_id: str, connection_id: str, table_allowlist: list[str] | None,
         column_policy: dict | None, row_scope: dict | None, question: str) -> dict | None:
     key = _cache_key(tenant_id, connection_id, table_allowlist, column_policy, row_scope, question)
+
+    if _redis is not None:
+        import redis as redis_lib
+        try:
+            raw = _redis.get(f"querycache:{key}")
+        except redis_lib.RedisError as e:
+            log_redis_failure("query cache get", e)
+            return None  # fail open - treat as a miss
+        return json.loads(raw) if raw is not None else None
+
     with _lock:
         entry = _cache.get(key)
         if entry is None:
@@ -76,6 +102,15 @@ def get(tenant_id: str, connection_id: str, table_allowlist: list[str] | None,
 def put(tenant_id: str, connection_id: str, table_allowlist: list[str] | None,
         column_policy: dict | None, row_scope: dict | None, question: str, result: dict) -> None:
     key = _cache_key(tenant_id, connection_id, table_allowlist, column_policy, row_scope, question)
+
+    if _redis is not None:
+        import redis as redis_lib
+        try:
+            _redis.set(f"querycache:{key}", json.dumps(result, default=str), ex=settings.ask_cache_ttl_seconds)
+        except redis_lib.RedisError as e:
+            log_redis_failure("query cache put", e)
+        return
+
     with _lock:
         _cache[key] = (time.monotonic() + settings.ask_cache_ttl_seconds, result)
         _cache.move_to_end(key)

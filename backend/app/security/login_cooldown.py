@@ -30,21 +30,32 @@ is a support ticket at best and a cancellation at worst. So:
   `login_cooldown_reset_after_seconds`, so this stays bounded in memory
   and one bad evening doesn't echo for months.
 
-Same honest limitation as app/security/rate_limit.py: this state is a
-plain dict guarded by a lock, held in this worker process's memory only -
-not shared across processes or replicas. Behind multiple workers, each
-enforces its own independent counter, so the real-world protection is
-weaker than the configured numbers suggest (an attacker spread across
-worker connections gets `free_attempts x workers` free guesses, not just
-`free_attempts`). A production multi-instance deployment needs a shared
-store (Redis, or the metadata DB) for this to be a genuine global limit -
-not implemented here, tracked as the same category of gap the README
-already calls out for rate_limit.py and the query cache.
+Two backends behind the exact same public functions, chosen once at
+import time based on settings.redis_url — same split as
+app/security/rate_limit.py:
+
+- In-process (REDIS_URL unset, the default): a plain dict guarded by a
+  lock, held in this worker process's memory only. Behind multiple
+  workers, each enforces its own independent counter, so the real-world
+  protection is weaker than the configured numbers suggest (an attacker
+  spread across worker connections gets `free_attempts x workers` free
+  guesses, not just `free_attempts`).
+- Redis-backed (REDIS_URL set): a genuinely global counter per key across
+  every process and replica. Uses HINCRBY for the failure counter, which
+  is atomic on its own (no WATCH/Lua needed) and returns the new count
+  directly, so the exponential-backoff calculation is always computed
+  from a real, race-free count - the only residual race is on the write
+  of the *derived* cooldown_until value between two truly-simultaneous
+  failures for the same account, which can only differ by one exponent
+  step and is therefore benign (see _RedisLoginCooldownGuard below).
+  Fails open on a Redis connection error (see
+  app/security/redis_client.py's docstring for why).
 """
 import threading
 import time
 
 from app.config import settings
+from app.security.redis_client import get_redis_client, log_redis_failure
 
 
 class LoginCooldownActive(Exception):
@@ -130,18 +141,121 @@ class _LoginCooldownGuard:
             self._state.pop(key, None)
 
 
-_tenant_login_guard = _LoginCooldownGuard(
-    free_attempts=settings.login_free_attempts,
-    base_seconds=settings.login_cooldown_base_seconds,
-    max_seconds=settings.login_cooldown_max_seconds,
-    reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-)
-_platform_login_guard = _LoginCooldownGuard(
-    free_attempts=settings.login_free_attempts,
-    base_seconds=settings.login_cooldown_base_seconds,
-    max_seconds=settings.login_cooldown_max_seconds,
-    reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-)
+class _RedisLoginCooldownGuard:
+    """Same semantics and same tuning knobs as _LoginCooldownGuard, backed
+    by a Redis hash per (namespace, key) storing `count` and
+    `cooldown_until`. `namespace` keeps the tenant-login and
+    platform-login guards in separate Redis keyspaces despite sharing one
+    Redis instance, the same isolation two separate in-process dicts gave
+    them before.
+
+    record_failure() uses HINCRBY for the counter specifically because
+    it's atomic AND returns the new value in one round trip - no
+    read-then-write race on the count itself. The exponential-backoff
+    delay is then a pure function of that race-free count, so the only
+    thing that could theoretically race is two near-simultaneous failures
+    each writing their own (correctly-computed, but from slightly
+    different count values) cooldown_until - and since count only ever
+    increases and the delay function is monotonic in count, whichever
+    write "loses" still leaves a cooldown_until that's correct for ONE of
+    the two failures that just happened, never a stale or under-protective
+    value. Good enough for a security-adjacent-but-not-security-critical
+    control like this one; see rate_limit.py's docstring for the same
+    reasoning applied to the rate limiter.
+
+    Redis's own TTL does the "forget after `reset_after_seconds` of no
+    further failures" job that the in-process version does by hand
+    (comparing against a stored last-failure time) - EXPIRE is reset on
+    every failure, so the key simply stops existing once nothing has
+    touched it for that long, and check()/record_failure() both treat a
+    missing key as "no history", which is exactly the reset behavior."""
+
+    def __init__(self, namespace: str, free_attempts: int, base_seconds: float,
+                 max_seconds: float, reset_after_seconds: float):
+        self._namespace = namespace
+        self._free_attempts = free_attempts
+        self._base = base_seconds
+        self._max = max_seconds
+        self._reset_after = reset_after_seconds
+
+    def _redis_key(self, key: str) -> str:
+        return f"logincooldown:{self._namespace}:{key.strip().lower()}"
+
+    def check(self, key: str) -> None:
+        redis_client = get_redis_client()
+        import redis as redis_lib
+        try:
+            cooldown_until = redis_client.hget(self._redis_key(key), "cooldown_until")
+        except redis_lib.RedisError as e:
+            log_redis_failure("login cooldown check", e)
+            return  # fail open
+        if cooldown_until is None:
+            return
+        now = time.time()
+        cooldown_until = float(cooldown_until)
+        if now < cooldown_until:
+            raise LoginCooldownActive(cooldown_until - now)
+
+    def record_failure(self, key: str) -> None:
+        redis_client = get_redis_client()
+        import redis as redis_lib
+        redis_key = self._redis_key(key)
+        now = time.time()
+        try:
+            count = redis_client.hincrby(redis_key, "count", 1)
+            if count < self._free_attempts:
+                cooldown_until = now
+            else:
+                exponent = count - self._free_attempts
+                delay = min(self._base * (2 ** exponent), self._max)
+                cooldown_until = now + delay
+            redis_client.hset(redis_key, "cooldown_until", cooldown_until)
+            redis_client.expire(redis_key, int(self._reset_after) + 1)
+        except redis_lib.RedisError as e:
+            log_redis_failure("login cooldown record_failure", e)
+            # Fail open - don't let a Redis hiccup turn into "this failed
+            # login silently isn't tracked", but also don't crash the
+            # login request over it: the 401 for the wrong password still
+            # happens via the caller's own logic either way.
+
+    def record_success(self, key: str) -> None:
+        redis_client = get_redis_client()
+        import redis as redis_lib
+        try:
+            redis_client.delete(self._redis_key(key))
+        except redis_lib.RedisError as e:
+            log_redis_failure("login cooldown record_success", e)
+
+
+_redis = get_redis_client()
+if _redis is not None:
+    _tenant_login_guard = _RedisLoginCooldownGuard(
+        namespace="tenant",
+        free_attempts=settings.login_free_attempts,
+        base_seconds=settings.login_cooldown_base_seconds,
+        max_seconds=settings.login_cooldown_max_seconds,
+        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
+    )
+    _platform_login_guard = _RedisLoginCooldownGuard(
+        namespace="platform",
+        free_attempts=settings.login_free_attempts,
+        base_seconds=settings.login_cooldown_base_seconds,
+        max_seconds=settings.login_cooldown_max_seconds,
+        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
+    )
+else:
+    _tenant_login_guard = _LoginCooldownGuard(
+        free_attempts=settings.login_free_attempts,
+        base_seconds=settings.login_cooldown_base_seconds,
+        max_seconds=settings.login_cooldown_max_seconds,
+        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
+    )
+    _platform_login_guard = _LoginCooldownGuard(
+        free_attempts=settings.login_free_attempts,
+        base_seconds=settings.login_cooldown_base_seconds,
+        max_seconds=settings.login_cooldown_max_seconds,
+        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
+    )
 
 
 def check_tenant_login_cooldown(email: str) -> None:

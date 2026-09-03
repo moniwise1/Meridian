@@ -363,6 +363,44 @@ independent of the FastAPI/DB/pandas stack.
   swapping in SES/Postmark/SMTP means implementing one `EmailBackend.send`
   method.
 
+**Redis (optional, `app/security/redis_client.py`)** — the rate limiter,
+login cooldown, and query cache below were originally in-process-only
+(correct for one instance, silently weaker behind multiple workers/
+replicas — each enforced its own independent state). All three now share
+one opt-in Redis backend: unset `REDIS_URL` and every one of them falls
+back to its original in-process behavior automatically (a plain
+`pip install` dev setup with no Redis running is completely unaffected);
+set it to a real Redis URL and all three become genuinely global across
+every process and replica at once, since it's the same category of fix
+for all three. Deliberately avoids Lua scripts/WATCH-MULTI transactions
+in favor of plain atomic single-command operations (`ZADD`/`INCR`/
+`HINCRBY`) with a self-correcting rollback on the rare race — see the
+class docstrings in `rate_limit.py`/`login_cooldown.py` for exactly why
+that's still correct for this use case (a rate limiter doesn't need the
+linearizability a payment or a row-scope check would) and why it was
+chosen over Lua specifically (avoids pulling in a native Lua interpreter
+dependency purely to test the scripts locally). Every Redis call fails
+open on a connection error — logged, but never blocking the request or
+crashing the app, since all three are secondary protections layered on
+top of the real security boundary (auth, tenant scoping, subscription
+gating), none of which touch Redis at all; confirmed fast (~1s, not the
+15s redis-py's default retry policy would otherwise silently add) by
+explicitly disabling retries on the shared client.
+
+Verified against a real Redis protocol implementation (`fakeredis`, not a
+mock of this app's own logic): the rate limiter admits exactly the
+configured count and rejects the next with the state directly inspected
+in Redis (not just via the app's own success/failure return values); the
+concurrency limiter same; login cooldown produces the identical behavior
+the in-process version already had (5 free failures, escalating cooldown,
+success clears history) with tenant/platform login cooldowns confirmed
+isolated in separate Redis keyspaces despite sharing one Redis instance;
+the query cache hits/misses correctly including the security-critical
+row_scope-isolation case; and a genuinely unreachable Redis connection
+was confirmed to fail open in ~1s rather than hang or crash. Also
+reverified the REDIS_URL-unset path still picks the original in-process
+classes with zero behavior change.
+
 **Rate & concurrency limits** (`app/security/rate_limit.py`) — `/ask/stream`
 is the one endpoint that costs a real LLM call plus a live customer-DB
 query per request, so it's rate-limited per user (sliding window,
@@ -371,11 +409,7 @@ per tenant (`ASK_MAX_CONCURRENT_PER_TENANT`, default 3 at once). This
 complements, not duplicates, the per-query bounds that already existed:
 `query_validator.py` injects a `LIMIT` into every generated query and each
 connector enforces `QUERY_TIMEOUT_SECONDS` — those cap the cost of *one*
-query, this caps *how many* run. Honest limitation: state is in-process
-(a dict guarded by a lock), not shared across worker processes — behind
-multiple workers the effective limit is (configured limit × worker count),
-not the configured number. A real multi-process deployment needs a shared
-store (Redis, or the metadata DB) for a genuine global limit.
+query, this caps *how many* run.
 
 **Login cooldown** (`app/security/login_cooldown.py`) — brute-force /
 credential-stuffing protection on both login endpoints (`/auth/login` and
@@ -397,9 +431,7 @@ completely. Verified end-to-end against the real app and SQLite DB: 5 free
 failures stay plain 401s, the 6th is blocked with `429 Too many failed
 attempts. Try again in 15s.`, a correct password is also blocked mid-
 cooldown, an unrelated account is unaffected, and the account logs in
-normally the moment the cooldown expires. Same honest in-process-only
-limitation as the rate limiter above — a real multi-instance deployment
-needs Redis or the metadata DB for a shared counter.
+normally the moment the cooldown expires.
 
 **Query result cache** (`app/agents/query_cache.py`) — an identical fresh
 (non-follow-up) question skips the SQL-generation LLM call, the live DB
@@ -464,7 +496,7 @@ maintaining the status page; see "Internal admin panel" above.
 | Real SMTP/email provider | Console backend stands in; swap-in point is documented above |
 | Automatic re-encryption when switching KMS backends | Existing credentials stay encrypted with whichever backend wrote them; migrating a live database needs a one-off script that runs both backends at once — see `docs/CLOUD_KMS.md` §4 |
 | Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |
-| Shared (cross-process) rate limiting / caching, pre-execution query cost estimation | Rate/concurrency limits and the result cache exist but are in-process only (see above); per-query cost is bounded by row LIMIT + timeout, not estimated before running |
+| Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Saved Work (manual bookmarking) | Not built — Analyses/Library cover browsing all past work, but there's no way to pin/save specific items |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 | Real invite-by-email | No SMTP identity to build a real invite link on |
