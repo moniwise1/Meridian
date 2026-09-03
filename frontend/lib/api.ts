@@ -1,0 +1,486 @@
+import { loadSession, clearSession } from "@/lib/auth";
+
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+
+class AuthError extends Error {}
+
+function authHeaders(): Record<string, string> {
+  const session = loadSession();
+  if (!session) throw new AuthError("Not signed in.");
+  return { Authorization: `Bearer ${session.token}` };
+}
+
+async function handleAuthFailure(res: Response) {
+  if (res.status === 401) {
+    clearSession();
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new AuthError("Session expired. Please sign in again.");
+  }
+}
+
+// ---------- Auth ----------
+
+export type AuthResponse = {
+  access_token: string;
+  token_type: string;
+  tenant_id: string;
+  user_id: string;
+  role: string;
+};
+
+export async function register(companyName: string, email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company_name: companyName, email, password }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not create your account.");
+  return body;
+}
+
+export async function login(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect email or password.");
+  return body;
+}
+
+// ---------- Connections ----------
+
+export type Connection = {
+  id: string;
+  name: string;
+  kind: string;
+  host: string;
+  database: string;
+  verified_read_only: boolean;
+  table_allowlist: string[];
+  column_policy: Record<string, string[]>;
+};
+
+export async function listConnections(): Promise<Connection[]> {
+  const res = await fetch(`${API_BASE}/connections`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load data sources.");
+  return res.json();
+}
+
+export type CreateConnectionInput = {
+  name: string;
+  kind: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  table_allowlist: string[];
+  column_policy: Record<string, string[]>;
+};
+
+export async function createConnection(input: CreateConnectionInput): Promise<Connection> {
+  const res = await fetch(`${API_BASE}/connections`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(input),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not create the connection.");
+  return body;
+}
+
+export async function updateConnectionPolicy(
+  connectionId: string,
+  input: { table_allowlist?: string[]; column_policy?: Record<string, string[]> },
+): Promise<Connection> {
+  const res = await fetch(`${API_BASE}/connections/${connectionId}/policy`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(input),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update the policy.");
+  return body;
+}
+
+// ---------- Documents ----------
+
+export type DocumentSummary = {
+  id: string;
+  filename: string;
+  kind: string;
+  char_count: number;
+  truncated: boolean;
+  created_at: string;
+};
+
+export type DocumentDetail = DocumentSummary & { extracted_text: string };
+
+export async function uploadDocument(file: File): Promise<DocumentSummary> {
+  const form = new FormData();
+  form.append("file", file);
+  // No Content-Type header here on purpose — the browser sets
+  // multipart/form-data with the correct boundary itself; setting it
+  // manually breaks the upload.
+  const res = await fetch(`${API_BASE}/documents/upload`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not upload this document.");
+  return body;
+}
+
+export async function listDocuments(): Promise<DocumentSummary[]> {
+  const res = await fetch(`${API_BASE}/documents`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load documents.");
+  return res.json();
+}
+
+export async function getDocument(documentId: string): Promise<DocumentDetail> {
+  const res = await fetch(`${API_BASE}/documents/${documentId}`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load this document.");
+  return body;
+}
+
+export async function deleteDocument(documentId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/documents/${documentId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Could not delete this document.");
+  }
+}
+
+// ---------- Team ----------
+
+export type TeamUser = {
+  id: string;
+  email: string;
+  role: string;
+  row_scope: Record<string, string[]>;
+};
+
+export async function listUsers(): Promise<TeamUser[]> {
+  const res = await fetch(`${API_BASE}/auth/users`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load teammates.");
+  return body;
+}
+
+export async function updateUserRowScope(
+  userId: string,
+  rowScope: Record<string, string[]>,
+): Promise<TeamUser> {
+  const res = await fetch(`${API_BASE}/auth/users/${userId}/row_scope`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ row_scope: rowScope }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update row-level access.");
+  return body;
+}
+
+// ---------- Ask ----------
+
+export type StepEvent = {
+  type: "step";
+  step: string;
+  status: "running" | "done" | "error";
+  detail?: string;
+};
+
+export type Anomaly = {
+  what: string;
+  magnitude: string;
+  timeframe: string;
+  segment: string;
+  evidence: string;
+  confidence: string;
+  possible_explanations: string[];
+};
+
+export type Investigation = { dimension: string; breakdown: { group: string; total: number }[] };
+
+export type ForecastPoint = { period: string; projected_value: number };
+export type Forecast = {
+  group: string;
+  method: string;
+  periods_used: number;
+  trend_direction: "up" | "down" | "flat";
+  points: ForecastPoint[];
+  caveat: string;
+};
+
+export type ResultEvent = {
+  type: "result";
+  final: true;
+  query_id: string;
+  conversation_id: string;
+  resolved_question: string;
+  sql: string;
+  sql_rationale: string;
+  row_count: number;
+  duration_ms: number;
+  truncated: boolean;
+  data_quality: {
+    row_count: number;
+    completeness_pct: number;
+    duplicate_pct: number;
+    missing_by_column: Record<string, number>;
+    outlier_notes: string[];
+    notes: string[];
+  };
+  metrics: Record<string, unknown>;
+  by_group: { group: string; total: number }[] | null;
+  anomalies: Anomaly[];
+  investigation: Investigation[];
+  forecast: Forecast[];
+  documents_used: string[];
+  insight:
+    | {
+        what: string;
+        where: string;
+        when: string;
+        contributors: string;
+        data_quality_caveat: string;
+        confidence: string;
+        confidence_explanation: string;
+        next_question: string;
+      }
+    | { error: string };
+  preview_rows: Record<string, unknown>[];
+};
+
+export async function askStream(
+  input: {
+    connection_id: string;
+    question: string;
+    conversation_id?: string | null;
+    document_ids?: string[];
+  },
+  onEvent: (evt: StepEvent | ResultEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/ask/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(input),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) {
+    // A rejection before streaming starts (e.g. rate/concurrency limited)
+    // comes back as a plain JSON error body, not an SSE stream.
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Could not start the analysis.");
+  }
+  if (!res.body) throw new Error("No response stream from server.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (line.startsWith("data:")) {
+        const jsonStr = line.slice(5).trim();
+        if (jsonStr) onEvent(JSON.parse(jsonStr));
+      }
+    }
+  }
+}
+
+// ---------- Risk scan ----------
+
+export type ScannedAnomaly = Anomaly & { table: string };
+
+export type ScanResultEvent = {
+  type: "result";
+  final: true;
+  tables_scanned: string[];
+  tables_skipped: string[];
+  anomalies: ScannedAnomaly[];
+};
+
+export async function scanStream(
+  input: { connection_id: string },
+  onEvent: (evt: StepEvent | ScanResultEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/scan/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(input),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Could not start the scan.");
+  }
+  if (!res.body) throw new Error("No response stream from server.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (line.startsWith("data:")) {
+        const jsonStr = line.slice(5).trim();
+        if (jsonStr) onEvent(JSON.parse(jsonStr));
+      }
+    }
+  }
+}
+
+// ---------- Artifacts ----------
+
+export type Artifact = { id: string; kind: string; title: string; url: string };
+
+export async function generateReport(queryId: string): Promise<Artifact> {
+  const res = await fetch(`${API_BASE}/artifacts/report/${queryId}`, { method: "POST", headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not generate the report.");
+  return body;
+}
+
+export async function generatePresentation(queryId: string): Promise<Artifact> {
+  const res = await fetch(`${API_BASE}/artifacts/presentation/${queryId}`, { method: "POST", headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not generate the presentation.");
+  return body;
+}
+
+export async function generateExport(queryId: string, format: "csv" | "xlsx"): Promise<Artifact> {
+  const res = await fetch(`${API_BASE}/artifacts/export/${queryId}?format=${format}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not export the result.");
+  return body;
+}
+
+export async function emailArtifact(
+  queryId: string,
+  recipient: string,
+  artifactId?: string,
+  confirmed = false,
+): Promise<{ status: string; reason: string }> {
+  const res = await fetch(`${API_BASE}/artifacts/email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ query_id: queryId, recipient, artifact_id: artifactId, confirmed }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not send the email.");
+  return body;
+}
+
+// ---------- History ----------
+
+export type AnalysisSummary = {
+  query_id: string;
+  question: string;
+  connection_id: string;
+  row_count: number;
+  duration_ms: number;
+  created_at: string;
+};
+
+export async function listAnalyses(): Promise<AnalysisSummary[]> {
+  const res = await fetch(`${API_BASE}/history/analyses`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load past analyses.");
+  return res.json();
+}
+
+export async function getAnalysis(queryId: string): Promise<ResultEvent> {
+  const res = await fetch(`${API_BASE}/history/analyses/${queryId}`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load this analysis.");
+  return body;
+}
+
+export type ArtifactHistoryEntry = {
+  id: string;
+  kind: string;
+  title: string;
+  source_query_id: string | null;
+  url: string;
+  created_at: string;
+};
+
+export async function listArtifactHistory(kind?: string): Promise<ArtifactHistoryEntry[]> {
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  const res = await fetch(`${API_BASE}/history/artifacts${qs}`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load generated artifacts.");
+  return res.json();
+}
+
+// ---------- Audit ----------
+
+export type AuditEntry = {
+  id: string;
+  timestamp: string;
+  action: string;
+  status: string;
+  connection_id: string | null;
+  query_id: string | null;
+  detail: Record<string, unknown>;
+  entry_hash: string;
+};
+
+export async function listAudit(): Promise<AuditEntry[]> {
+  const res = await fetch(`${API_BASE}/audit`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load the audit log.");
+  return res.json();
+}
+
+export type AuditVerification = {
+  intact: boolean;
+  checked: number;
+  broken_at: string | null;
+  reason: string;
+};
+
+export async function verifyAuditChain(): Promise<AuditVerification> {
+  const res = await fetch(`${API_BASE}/audit/verify`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not verify the audit log.");
+  return res.json();
+}

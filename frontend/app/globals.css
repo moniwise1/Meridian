@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f5f6f4;
+  --panel: #ffffff;
+  --ink: #171a1c;
+  --ink-soft: #565f66;
+  --line: #dde0dc;
+  --teal: #1c5d5a;
+  --teal-deep: #123f3d;
+  --slate: #33506b;
+  --amber: #a5691f;
+  --amber-soft: #f2e3cf;
+  --red: #9c3b2e;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-panel: var(--panel);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-line: var(--line);
+  --color-teal: var(--teal);
+  --color-teal-deep: var(--teal-deep);
+  --color-slate: var(--slate);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-red: var(--red);
+  --font-sans: -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: var(--amber-soft);
+}

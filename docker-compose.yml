@@ -1,0 +1,49 @@
+services:
+  demo-db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_DB: demo
+    ports:
+      - "5432:5432"
+    volumes:
+      # Postgres auto-runs any .sql file here on first init only (an
+      # existing data volume skips it) - this is the seed_data/seed.sql
+      # generated earlier, so `docker compose up` gives you a populated
+      # demo dataset with a real read-only role already created.
+      - ./seed_data/seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set a real Fernet key - see backend/.env.example}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FRONTEND_ORIGIN: http://localhost:3000
+    volumes:
+      # Metadata DB, generated artifacts, and uploaded documents persist
+      # across container restarts/rebuilds.
+      - backend-data:/app/data
+      - backend-artifacts:/app/artifacts
+      - backend-documents:/app/documents
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  backend-data:
+  backend-artifacts:
+  backend-documents:
