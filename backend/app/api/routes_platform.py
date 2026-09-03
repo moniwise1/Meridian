@@ -21,6 +21,10 @@ from app.security.auth import hash_password, verify_password
 from app.security.platform_auth import (
     create_platform_access_token, get_current_staff, require_staff_role, PlatformAuthContext,
 )
+from app.security.login_cooldown import (
+    check_platform_login_cooldown, record_platform_login_failure, record_platform_login_success,
+    LoginCooldownActive,
+)
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -42,9 +46,17 @@ class StaffTokenResponse(BaseModel):
 
 @router.post("/login", response_model=StaffTokenResponse)
 def staff_login(body: StaffLoginRequest, db: Session = Depends(get_db)):
+    try:
+        check_platform_login_cooldown(body.email)
+    except LoginCooldownActive as e:
+        raise HTTPException(429, str(e))
+
     staff = db.query(PlatformStaff).filter_by(email=body.email).first()
     if not staff or not verify_password(body.password, staff.password_hash):
+        record_platform_login_failure(body.email)
         raise HTTPException(401, "Incorrect email or password.")
+
+    record_platform_login_success(body.email)
     token = create_platform_access_token(staff.id, staff.role)
     return StaffTokenResponse(access_token=token, staff_id=staff.id, role=staff.role)
 

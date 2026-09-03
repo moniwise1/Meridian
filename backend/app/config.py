@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # questions; bounds how stale a cached answer can be.
     ask_cache_ttl_seconds: int = 300
 
+    # See app/security/login_cooldown.py. Deliberately generous: failures
+    # up to this count cost nothing (typos/autofill are normal), and the
+    # backoff after that is capped so a genuine user is only ever slowed
+    # down, never permanently locked out - a hard lockout on a paid
+    # account is a support ticket and a churn risk, not just a UX papercut.
+    login_free_attempts: int = 5
+    login_cooldown_base_seconds: float = 15.0
+    login_cooldown_max_seconds: float = 900.0  # 15 minutes
+    # Failure history for a key is forgotten after this long of no further
+    # failures, so one bad evening months ago never lingers.
+    login_cooldown_reset_after_seconds: float = 1800.0  # 30 minutes
+
     # Fast, cheap model for schema summarization / SQL generation.
     # Reserve a stronger model only for the final insight explanation step (see agents/insight_agent.py).
     llm_model_fast: str = "claude-haiku-4-5-20251001"

@@ -249,6 +249,30 @@ multiple workers the effective limit is (configured limit × worker count),
 not the configured number. A real multi-process deployment needs a shared
 store (Redis, or the metadata DB) for a genuine global limit.
 
+**Login cooldown** (`app/security/login_cooldown.py`) — brute-force /
+credential-stuffing protection on both login endpoints (`/auth/login` and
+`/platform/login`), which had none before. Tuned deliberately so it can
+never itself become a churn risk: it's keyed by the account being attempted
+(email), never by IP, so one guesser never collateral-damages everyone
+behind a shared office/VPN address; the first `LOGIN_FREE_ATTEMPTS`
+(default 5) wrong passwords cost nothing at all — no delay, no error beyond
+the normal 401 — since typos and stale autofill are routine, not attacks;
+only after that does a cooldown kick in, starting at
+`LOGIN_COOLDOWN_BASE_SECONDS` (default 15s) and doubling with each further
+failure up to `LOGIN_COOLDOWN_MAX_SECONDS` (default 15 min) — long enough
+that guessing thousands of passwords is infeasible, but the account is
+never permanently locked: even a correct password is turned away with a
+`429` and a plain-English retry time while a cooldown is active (otherwise
+a lucky or automated guess mid-cooldown would slip straight through), and
+the very next attempt after a real success clears the account's history
+completely. Verified end-to-end against the real app and SQLite DB: 5 free
+failures stay plain 401s, the 6th is blocked with `429 Too many failed
+attempts. Try again in 15s.`, a correct password is also blocked mid-
+cooldown, an unrelated account is unaffected, and the account logs in
+normally the moment the cooldown expires. Same honest in-process-only
+limitation as the rate limiter above — a real multi-instance deployment
+needs Redis or the metadata DB for a shared counter.
+
 **Query result cache** (`app/agents/query_cache.py`) — an identical fresh
 (non-follow-up) question skips the SQL-generation LLM call, the live DB
 query, and the insight-explanation LLM call entirely, reusing the prior

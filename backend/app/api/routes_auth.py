@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models import Tenant, User
 from app.security.auth import hash_password, verify_password, create_access_token, get_current_user, require_role, AuthContext
+from app.security.login_cooldown import (
+    check_tenant_login_cooldown, record_tenant_login_failure, record_tenant_login_success,
+    LoginCooldownActive,
+)
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -68,10 +72,17 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
+    try:
+        check_tenant_login_cooldown(body.email)
+    except LoginCooldownActive as e:
+        raise HTTPException(429, str(e))
+
     user = db.query(User).filter_by(email=body.email).first()
     if not user or not verify_password(body.password, user.password_hash):
+        record_tenant_login_failure(body.email)
         raise HTTPException(401, "Incorrect email or password.")
 
+    record_tenant_login_success(body.email)
     token = create_access_token(user.id, user.tenant_id, user.role)
     return TokenResponse(access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role)
 

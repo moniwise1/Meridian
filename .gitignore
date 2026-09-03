@@ -19,3 +19,10 @@ frontend/tsconfig.tsbuildinfo
 # Local dev logs/artifacts from running this on a dev machine
 *.log
 pip_install.log
+
+# Local Postgres instance used for testing seed_data/ against a real DB
+# (see seed_data/README.md) - pgdata/ is a full database cluster (large,
+# machine-specific, regenerable from seed.sql) and pgpass.txt holds a
+# plaintext password for it. Neither belongs in version control.
+pgdata/
+pgpass.txt

@@ -135,6 +135,7 @@ export default function ConnectionsPage() {
             value={form.tables}
             onChange={(v) => setForm({ ...form, tables: v })}
             placeholder="sales, customers"
+            required={false}
           />
         </div>
 
@@ -243,12 +244,14 @@ function Field({
   onChange,
   placeholder,
   type = "text",
+  required = true,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: string;
+  required?: boolean;
 }) {
   return (
     <label className="flex flex-col gap-1">
@@ -258,7 +261,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        required
+        required={required}
         className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
       />
     </label>
