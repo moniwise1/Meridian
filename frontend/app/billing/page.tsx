@@ -82,14 +82,36 @@ export default function BillingPage() {
         <div className="bg-panel border border-line rounded-[4px] p-5">
           <div className="flex items-center justify-between mb-4">
             <div className="text-[13.5px] text-ink">Subscription status</div>
-            <span className={`text-[11px] px-2 py-0.5 rounded-[3px] ${STATUS_COLOR[status.subscription_status]}`}>
-              {STATUS_LABEL[status.subscription_status]}
-            </span>
+            <div className="flex items-center gap-2">
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-[3px] ${
+                  status.tier === "pro" ? "bg-teal-deep text-white" : "bg-line text-ink-soft"
+                }`}
+              >
+                {status.tier === "pro" ? "Pro" : "Free"}
+              </span>
+              <span className={`text-[11px] px-2 py-0.5 rounded-[3px] ${STATUS_COLOR[status.subscription_status]}`}>
+                {STATUS_LABEL[status.subscription_status]}
+              </span>
+            </div>
           </div>
+
+          {status.tier === "free" && (
+            <div className="text-[12.5px] text-ink-soft mb-2">
+              The free plan is read-mostly: 1 account, and Ask / Risk scan / connecting new data
+              sources require Pro.
+            </div>
+          )}
 
           {status.paid_at && (
             <div className="text-[12.5px] text-ink-soft mb-2">
               Subscribed: {new Date(status.paid_at).toLocaleDateString()}
+            </div>
+          )}
+
+          {status.subscription_expires_at && status.subscription_status === "active" && (
+            <div className="text-[12.5px] text-ink-soft mb-2">
+              Renews: {new Date(status.subscription_expires_at).toLocaleDateString()}
             </div>
           )}
 

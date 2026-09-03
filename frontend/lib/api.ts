@@ -195,6 +195,7 @@ export type TeamUser = {
   email: string;
   role: string;
   row_scope: Record<string, string[]>;
+  created_at: string;
 };
 
 export async function listUsers(): Promise<TeamUser[]> {
@@ -202,6 +203,18 @@ export async function listUsers(): Promise<TeamUser[]> {
   await handleAuthFailure(res);
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not load teammates.");
+  return body;
+}
+
+export async function addTeammate(email: string, password: string, role: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ email, password, role }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not add teammate.");
   return body;
 }
 
@@ -224,8 +237,10 @@ export async function updateUserRowScope(
 
 export type BillingStatus = {
   subscription_status: "none" | "pending" | "active" | "cancelled" | "refunded";
+  tier: "free" | "pro";
   paid_at: string | null;
   refund_eligible_until: string | null;
+  subscription_expires_at: string | null;
   plan_code: string | null;
 };
 

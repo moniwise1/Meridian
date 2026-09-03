@@ -33,8 +33,10 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 
 class BillingStatus(BaseModel):
     subscription_status: str
+    tier: str
     paid_at: str | None
     refund_eligible_until: str | None
+    subscription_expires_at: str | None
     plan_code: str | None
 
 
@@ -46,8 +48,12 @@ def _status_for(tenant: Tenant) -> BillingStatus:
         ).isoformat()
     return BillingStatus(
         subscription_status=tenant.subscription_status,
+        tier=tenant.tier,
         paid_at=tenant.paid_at.isoformat() if tenant.paid_at else None,
         refund_eligible_until=refund_eligible_until,
+        subscription_expires_at=(
+            tenant.subscription_expires_at.isoformat() if tenant.subscription_expires_at else None
+        ),
         plan_code=tenant.paystack_plan_code,
     )
 
@@ -111,6 +117,17 @@ def _activate(db: Session, tenant: Tenant, transaction_data: dict, source: str,
         tenant.paystack_plan_code = plan.get("plan_code") if isinstance(plan, dict) else plan
     if not tenant.paid_at:
         tenant.paid_at = datetime.utcnow()
+    # Unlike paid_at (anchors the refund window - set once, ever), this
+    # advances on EVERY successful charge including renewals, so it always
+    # reflects the current period's actual end rather than the first one.
+    # Approximated as a 30-day cycle since there's no live Paystack account
+    # here to confirm the plan's real billing interval or read a renewal
+    # date back from - see app/billing/paystack.py's module docstring for
+    # the same honest caveat about not being verified against a real
+    # account. A production deployment with real recurring billing should
+    # instead read the actual next-charge date off the
+    # subscription.create / invoice events Paystack sends.
+    tenant.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
     db.commit()
     if not already_active:
         audit.log(db, tenant.id, "subscription_activated", user_id, detail={
@@ -185,6 +202,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
                    detail={"subscription_code": tenant.paystack_subscription_code})
     elif event == "subscription.disable":
         tenant.subscription_status = "cancelled"
+        tenant.subscription_expires_at = None
         db.commit()
         audit.log(db, tenant.id, "subscription_disabled_by_paystack", detail={"event": event})
     elif event == "invoice.payment_failed":
@@ -237,6 +255,7 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
                        detail={"reason": str(e), "reference": tenant.last_transaction_reference})
 
     tenant.subscription_status = "refunded" if refunded else "cancelled"
+    tenant.subscription_expires_at = None
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_cancelled", ctx.user_id,
                detail={"refunded": refunded, "within_refund_window": within_refund_window})

@@ -83,6 +83,62 @@ verified called out in the module docstring. Confirm the first real
 transaction in Paystack's own dashboard before trusting this in
 production.
 
+**Free/Pro tiers & sub-accounts** — `Tenant.tier` (`app/db/models.py`) is
+deliberately *derived*, not a stored column: `"pro"` means "currently has
+an active subscription" and nothing else, so it can never drift out of
+sync with `subscription_status` the way a second, independently-settable
+field could. Two gates key off it:
+- **Free plan is capped at 1 account.** `POST /auth/users` (adding a
+  teammate) checks the calling tenant's tier and returns 402 once a free
+  tenant already has one user — the admin who registered *is* that one
+  account. Pro removes the cap entirely (no ceiling specified beyond "not
+  1"). The Team page (`/team`) mirrors this client-side (disables "Add
+  teammate" and shows a plan banner) purely for UX — the 402 from the
+  backend is the actual enforcement, same pattern as every other
+  plan-gated action in this app.
+- **Free plan can't perform the core paid actions** — this was already
+  true before tiers existed: `require_active_subscription`
+  (`app/security/auth.py`) gates Ask, Risk scan, and creating a new data
+  source connection behind `subscription_status == "active"`, i.e. Pro.
+  Account/Team/Billing/Support/Audit screens are deliberately exempt, so a
+  free-tier admin can still see their org's own state and upgrade.
+
+The platform admin panel's **Tenants** page now shows, per tenant: its
+tier badge, when it subscribed (`paid_at`), when the current period
+renews/expires (`subscription_expires_at` — set on every successful charge
+*including renewals*, unlike `paid_at` which only anchors the refund
+window on the first one), and an expandable **sub-accounts** list — every
+user under that tenant with their role and `created_at` ("when they opened
+account"). A staff member setting `subscription_status` to `active` by
+hand (a comp/support override, no real Paystack charge) gets the same
+`paid_at`/`subscription_expires_at` treatment a real payment would, so a
+comped tenant doesn't show up active-but-dateless.
+
+Honest limitation on the expiry date specifically: it's a flat "+30 days
+from the last successful charge" approximation, not read from Paystack's
+actual billing-interval/next-charge data — same unverified-against-a-live-
+account caveat as the rest of `app/billing/paystack.py`. A production
+deployment with real recurring billing should read the real date off
+Paystack's `subscription.create`/`invoice.*` webhook events instead.
+
+No Alembic in this project — `app/db/session.py`'s `init_db()` runs a
+small set of tracked `ADD COLUMN` statements after `create_all()` for
+columns added to an existing model after its table might already exist on
+some database (a dev machine, an already-deployed instance); each is
+checked for existence first, so it's a safe no-op on a fresh database and
+a real migration on an old one. Verified against a real pre-existing
+SQLite DB with data already in it — columns added, existing rows
+untouched. This is a stopgap for a two-model, no-Alembic project, not a
+general migration system; a real schema-migration tool becomes worth it
+the moment there's a second one of these.
+
+Verified end-to-end (register → free tier blocks a 2nd account → platform
+owner activates the tenant → tier flips to pro and both `paid_at`/
+`subscription_expires_at` populate → pro allows a 2nd account → platform
+expand view shows both sub-accounts with real timestamps → cancel drops
+back to free and clears the expiry, without retroactively removing the
+already-added 2nd account → a 3rd account is blocked again post-downgrade).
+
 **Auth & multi-tenancy**
 - Real registration/login: PBKDF2-SHA256 password hashing, signed JWT
   sessions. Every route derives `tenant_id`/`user_id` from the verified

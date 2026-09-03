@@ -74,13 +74,24 @@ export async function addStaff(email: string, password: string, role: string): P
 
 // ---------- Tenants ----------
 
+export type PlatformTenantUser = {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+};
+
 export type PlatformTenant = {
   id: string;
   name: string;
   subscription_status: string;
+  tier: "free" | "pro";
   created_at: string;
+  subscribed_at: string | null;
+  subscription_expires_at: string | null;
   user_count: number;
   connection_count: number;
+  users: PlatformTenantUser[];
 };
 
 export async function listTenants(): Promise<PlatformTenant[]> {

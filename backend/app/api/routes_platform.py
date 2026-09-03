@@ -119,21 +119,44 @@ def add_staff(body: StaffCreateRequest, db: Session = Depends(get_db),
 
 # ---------- Tenants ----------
 
+class TenantUserOut(BaseModel):
+    """One sub-account under a tenant, for the platform panel's tenant
+    expand view - "when did they open account" is created_at, not
+    anything billing-related (a tenant's users all share the tenant's one
+    subscription; there's no per-user billing here)."""
+    id: str
+    email: str
+    role: str
+    created_at: str
+
+
 class TenantOut(BaseModel):
     id: str
     name: str
     subscription_status: str
+    tier: str
     created_at: str
+    subscribed_at: str | None
+    subscription_expires_at: str | None
     user_count: int
     connection_count: int
+    users: list[TenantUserOut]
 
 
 def _tenant_out(db: Session, t: Tenant) -> TenantOut:
+    users = db.query(User).filter_by(tenant_id=t.id).order_by(User.created_at.asc()).all()
     return TenantOut(
-        id=t.id, name=t.name, subscription_status=t.subscription_status,
+        id=t.id, name=t.name, subscription_status=t.subscription_status, tier=t.tier,
         created_at=t.created_at.isoformat(),
-        user_count=db.query(User).filter_by(tenant_id=t.id).count(),
+        subscribed_at=t.paid_at.isoformat() if t.paid_at else None,
+        subscription_expires_at=t.subscription_expires_at.isoformat() if t.subscription_expires_at else None,
+        user_count=len(users),
         connection_count=db.query(DataSourceConnection).filter_by(tenant_id=t.id).count(),
+        users=[
+            TenantUserOut(id=u.id, email=u.email, role=u.role,
+                          created_at=u.created_at.isoformat() if u.created_at else "")
+            for u in users
+        ],
     )
 
 
@@ -170,6 +193,22 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
     if body.subscription_status is not None:
         changes["subscription_status"] = {"from": t.subscription_status, "to": body.subscription_status}
         t.subscription_status = body.subscription_status
+        if body.subscription_status == "active":
+            # A staff-set "active" is a comp/support override, not a real
+            # Paystack charge (see this endpoint's own docstring/the
+            # tenants page copy) - it still needs paid_at/expires_at set
+            # so the tenant shows up correctly as "on Pro" with real dates
+            # rather than active-but-dateless. paid_at only backfills if
+            # unset, same anchoring rule _activate() uses for a real
+            # payment; expires_at always gets a fresh 30-day window.
+            if not t.paid_at:
+                t.paid_at = datetime.utcnow()
+            t.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+        else:
+            # Anything else ("none"/"pending"/"cancelled"/"refunded") is
+            # not currently-paying by definition (Tenant.tier), so there's
+            # no live expiry to show.
+            t.subscription_expires_at = None
     db.commit()
     db.refresh(t)
     audit.log(db, tenant_id, "platform_tenant_updated", detail={"by_staff_id": ctx.staff_id, "changes": changes})

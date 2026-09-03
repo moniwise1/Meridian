@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listUsers, updateUserRowScope, type TeamUser } from "@/lib/api";
+import Link from "next/link";
+import { listUsers, addTeammate, updateUserRowScope, getBillingStatus, type TeamUser, type BillingStatus } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
+
+const ROLE_OPTIONS = ["analyst", "manager", "executive", "viewer", "admin"];
 
 function rowScopeToText(scope: Record<string, string[]>): string {
   return Object.entries(scope)
@@ -24,14 +27,21 @@ function parseRowScopeText(text: string): Record<string, string[]> {
 
 export default function TeamPage() {
   const [users, setUsers] = useState<TeamUser[]>([]);
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [error, setError] = useState("");
   const [editingUser, setEditingUser] = useState<string | null>(null);
+  const [addingOpen, setAddingOpen] = useState(false);
   const isAdmin = loadSession()?.role === "admin";
 
   function refresh() {
     listUsers()
       .then(setUsers)
       .catch((e) => setError(e.message));
+    getBillingStatus()
+      .then(setBilling)
+      .catch(() => {
+        /* Team page still works without this - it only adds the plan-limit banner. */
+      });
   }
 
   useEffect(refresh, []);
@@ -44,16 +54,61 @@ export default function TeamPage() {
     );
   }
 
+  // Source of truth for the limit is the backend (app/api/routes_auth.py's
+  // add_user, 402 on a free-tier 2nd account) - this is just so the UI
+  // doesn't invite someone to fill out a form that's guaranteed to fail.
+  const atFreeLimit = billing?.tier === "free" && users.length >= 1;
+
   return (
     <div className="max-w-3xl mx-auto px-8 py-12">
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Team</h1>
-      <p className="text-[13.5px] text-ink-soft mb-8">
+      <p className="text-[13.5px] text-ink-soft mb-4">
         Row-level access restricts which rows a teammate&apos;s questions can see, by column value —
         e.g. a regional manager scoped to <code>region=South-East</code> never sees other regions&apos;
         data, regardless of what they ask. An empty scope is unrestricted.
       </p>
 
+      {billing && (
+        <div
+          className={`mb-6 rounded-[4px] border px-4 py-3 text-[12.5px] ${
+            billing.tier === "pro" ? "border-line bg-panel text-ink-soft" : "border-amber bg-amber-soft text-amber"
+          }`}
+        >
+          {billing.tier === "pro" ? (
+            <>Pro plan — no limit on the number of teammate accounts.</>
+          ) : (
+            <>
+              Free plan — limited to 1 account ({users.length} of 1 used).{" "}
+              <Link href="/billing" className="underline hover:no-underline">
+                Upgrade to Pro
+              </Link>{" "}
+              to add teammates.
+            </>
+          )}
+        </div>
+      )}
+
       {error && <div className="mb-4 text-[13px] text-red">{error}</div>}
+
+      <div className="mb-6">
+        {!addingOpen ? (
+          <button
+            onClick={() => setAddingOpen(true)}
+            disabled={atFreeLimit}
+            className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
+          >
+            Add teammate
+          </button>
+        ) : (
+          <AddTeammateForm
+            onClose={() => setAddingOpen(false)}
+            onAdded={() => {
+              setAddingOpen(false);
+              refresh();
+            }}
+          />
+        )}
+      </div>
 
       <div className="flex flex-col gap-3">
         {users.map((u) => (
@@ -61,7 +116,15 @@ export default function TeamPage() {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[13.5px] text-ink">{u.email}</div>
-                <div className="text-[12px] text-ink-soft capitalize mt-0.5">{u.role}</div>
+                <div className="text-[12px] text-ink-soft mt-0.5">
+                  <span className="capitalize">{u.role}</span>
+                  {u.created_at && (
+                    <span className="font-[family-name:var(--font-mono)]">
+                      {" "}
+                      · joined {new Date(u.created_at).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-line text-ink-soft font-[family-name:var(--font-mono)]">
@@ -83,6 +146,89 @@ export default function TeamPage() {
         )}
       </div>
     </div>
+  );
+}
+
+function AddTeammateForm({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("analyst");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await addTeammate(email, password, role);
+      onAdded();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-panel border border-line rounded-[4px] p-4 flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] text-ink-soft">Email</span>
+          <input
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="teammate@company.com"
+            className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-[12px] text-ink-soft">Temporary password</span>
+          <input
+            type="password"
+            required
+            minLength={8}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50"
+          />
+        </label>
+      </div>
+      <label className="flex flex-col gap-1">
+        <span className="text-[12px] text-ink-soft">Role</span>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+          className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink w-fit"
+        >
+          {ROLE_OPTIONS.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <div className="text-[12.5px] text-red">{error}</div>}
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[12.5px] px-3 py-1.5 rounded-[3px] text-ink-soft hover:text-ink transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={saving}
+          className="text-[12.5px] px-3 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
+        >
+          {saving ? "Adding…" : "Add teammate"}
+        </button>
+      </div>
+    </form>
   );
 }
 

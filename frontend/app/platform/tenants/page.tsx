@@ -6,12 +6,19 @@ import { loadPlatformSession } from "@/lib/platformAuth";
 
 const STATUS_OPTIONS = ["none", "pending", "active", "cancelled", "refunded"];
 
+const TIER_LABEL: Record<string, string> = { free: "Free", pro: "Pro" };
+const TIER_COLOR: Record<string, string> = {
+  free: "bg-line text-ink-soft",
+  pro: "bg-teal-deep text-white",
+};
+
 export default function PlatformTenantsPage() {
   const [tenants, setTenants] = useState<PlatformTenant[]>([]);
   const [error, setError] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const isOwner = loadPlatformSession()?.role === "owner";
 
   function refresh() {
@@ -58,11 +65,30 @@ export default function PlatformTenantsPage() {
           <div key={t.id} className="bg-panel border border-line rounded-[4px] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[13.5px] text-ink truncate">{t.name}</div>
+                <div className="flex items-center gap-2">
+                  <div className="text-[13.5px] text-ink truncate">{t.name}</div>
+                  <span className={`text-[10.5px] px-1.5 py-0.5 rounded-[3px] shrink-0 ${TIER_COLOR[t.tier]}`}>
+                    {TIER_LABEL[t.tier]}
+                  </span>
+                </div>
                 <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
                   {t.user_count} user{t.user_count === 1 ? "" : "s"} · {t.connection_count} connection
                   {t.connection_count === 1 ? "" : "s"} · joined {new Date(t.created_at).toLocaleDateString()}
                 </div>
+                <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
+                  {t.subscribed_at
+                    ? `subscribed ${new Date(t.subscribed_at).toLocaleDateString()}`
+                    : "never subscribed"}
+                  {t.subscription_expires_at && (
+                    <> · renews/expires {new Date(t.subscription_expires_at).toLocaleDateString()}</>
+                  )}
+                </div>
+                <button
+                  onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
+                  className="text-[11.5px] text-teal hover:text-teal-deep transition-colors mt-1"
+                >
+                  {expandedId === t.id ? "Hide sub-accounts" : `Show sub-accounts (${t.user_count})`}
+                </button>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <select
@@ -89,6 +115,33 @@ export default function PlatformTenantsPage() {
                 )}
               </div>
             </div>
+
+            {expandedId === t.id && (
+              <div className="mt-3 pt-3 border-t border-line">
+                <div className="text-[11.5px] text-ink-soft mb-2">
+                  Sub-accounts — every staff login under this tenant, oldest first.
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {t.users.map((u) => (
+                    <div
+                      key={u.id}
+                      className="flex items-center justify-between text-[12.5px] bg-paper border border-line rounded-[3px] px-3 py-1.5"
+                    >
+                      <span className="text-ink truncate">{u.email}</span>
+                      <span className="flex items-center gap-3 shrink-0">
+                        <span className="text-ink-soft capitalize">{u.role}</span>
+                        <span className="text-ink-soft font-[family-name:var(--font-mono)]">
+                          opened {new Date(u.created_at).toLocaleDateString()}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                  {t.users.length === 0 && (
+                    <div className="text-[12.5px] text-ink-soft">No sub-accounts.</div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {deletingId === t.id && (
               <div className="mt-3 pt-3 border-t border-line">

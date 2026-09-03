@@ -41,14 +41,34 @@ class Tenant(Base):
     # Anchors the refund window - set on first successful charge, never
     # touched again (a renewal isn't a new "paid_at").
     paid_at = Column(DateTime, nullable=True)
+    # Set on every successful charge (initial AND renewal) to "now + one
+    # billing cycle" - see app/api/routes_billing.py's _activate(). Cleared
+    # on cancel/refund since this app's cancellation is immediate, not
+    # "access continues until period end". A platform-admin comp override
+    # (setting subscription_status="active" by hand, no real payment) sets
+    # this the same way - see update_tenant in routes_platform.py.
+    subscription_expires_at = Column(DateTime, nullable=True)
 
     connections = relationship("DataSourceConnection", back_populates="tenant")
+
+    @property
+    def tier(self) -> str:
+        """Derived, not stored - "pro" is defined as "currently has an
+        active subscription", nothing more, so it can never drift out of
+        sync with subscription_status the way a duplicated column could.
+        Everything that gates a paid feature (app/security/auth.py's
+        require_active_subscription, the free-tier 1-account cap in
+        routes_auth.py's add_user) checks subscription_status directly for
+        the same reason - this property exists for display and for callers
+        that want the tier vocabulary rather than the status vocabulary."""
+        return "pro" if self.subscription_status == "active" else "free"
 
 
 class User(Base):
     __tablename__ = "users"
     id = Column(String, primary_key=True, default=_uuid)
     tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
     email = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="analyst")  # admin/analyst/manager/executive/viewer

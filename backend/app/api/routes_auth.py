@@ -95,6 +95,23 @@ def add_user(body: AddUserRequest, db: Session = Depends(get_db),
     if db.query(User).filter_by(email=body.email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
+    # Free-tier cap: one account per organization. Pro (an active paid
+    # subscription - see Tenant.tier) removes it entirely; no separate cap
+    # for pro is specified anywhere else in this app, so it's unbounded.
+    # 402, matching require_active_subscription's convention elsewhere
+    # (app/security/auth.py) - this is a plan limit, not a permissions
+    # error, and the caller IS allowed to act, just not on this plan.
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found.")
+    if tenant.tier == "free":
+        existing_count = db.query(User).filter_by(tenant_id=ctx.tenant_id).count()
+        if existing_count >= 1:
+            raise HTTPException(
+                402,
+                "The free plan is limited to 1 account. Upgrade to Pro on the Billing page to add teammates.",
+            )
+
     user = User(
         tenant_id=ctx.tenant_id, email=body.email, role=body.role,
         password_hash=hash_password(body.password),
@@ -117,14 +134,21 @@ class UserOut(BaseModel):
     email: str
     role: str
     row_scope: dict
+    created_at: str
 
     class Config:
         from_attributes = True
 
+    @classmethod
+    def from_user(cls, u: User) -> "UserOut":
+        return cls(id=u.id, email=u.email, role=u.role, row_scope=u.row_scope,
+                    created_at=u.created_at.isoformat() if u.created_at else "")
+
 
 @router.get("/users", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_role("admin"))):
-    return db.query(User).filter_by(tenant_id=ctx.tenant_id).all()
+    users = db.query(User).filter_by(tenant_id=ctx.tenant_id).all()
+    return [UserOut.from_user(u) for u in users]
 
 
 class RowScopeUpdate(BaseModel):
