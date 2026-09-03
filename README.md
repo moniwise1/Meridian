@@ -236,8 +236,24 @@ and the top-N-groups bound is respected.
 content, and — for PPTX — speaker notes, labelled `[Speaker notes]` so
 it's clear in the extracted text which content was on-slide vs. narration-
 only) is extracted once at upload time and can be attached to a question on Ask,
-where it's referenced alongside the database analysis. This is the first
-genuinely externally-authored content anywhere in this app's LLM calls —
+where it's referenced alongside the database analysis — **or a document can
+BE the data source in its own right**: pick it in the same "Data source"
+dropdown a database connection would go in (`app/page.tsx`), no database
+connection involved at all. `POST /ask/stream`'s `connection_id` is
+optional now (rejects a request with neither it nor `document_ids` set);
+`planner.py`'s document-only branch skips schema discovery/SQL generation/
+anomaly detection/forecasting entirely — none of those apply without a
+query result — and calls a dedicated `explain_document_only()` prompt
+(`insight_agent.py`) tuned for direct document Q&A rather than overloading
+the metrics-explanation prompt with an "unless there's no database" branch.
+Same subscription gating as the database path (still a core paid action),
+same rate/concurrency limits, same prompt-injection defence. `QueryRecord`
+needed no schema change for this — `connection_id` there is a plain string
+with no FK constraint, so a document-only analysis is recorded under a
+`"document-only"` sentinel rather than a real connection id, verified safe
+by reading every place that column is read (history list/detail, report/
+presentation generation) before choosing that over a migration. This is
+the first genuinely externally-authored content anywhere in this app's LLM calls —
 schema field names and row values come from a database the tenant already
 connected and authorized, but a document could contain anything, including
 text written to look like instructions. Handled with the same discipline:
@@ -261,6 +277,25 @@ delete by a non-uploader → admin delete), and separately, cross-tenant
 document access was confirmed blocked both at the API layer (404) and at
 the exact DB query `planner.py` uses to resolve `document_ids` — the one
 place a wrong tenant filter here would have mattered.
+
+Document-as-data-source verified end-to-end with a real generated PDF
+through the real app: rejected with neither a connection nor a document
+selected; a document-only question produces the correct step sequence,
+`conversation_id: null` (document-only never creates/chains a
+`Conversation`, same as the existing document-attached mode already
+excludes follow-ups and the result cache), `row_count: 0`, and — with no
+live Anthropic key in this dev environment — degrades gracefully to an
+`insight.error` rather than crashing the request, the same defensive
+pattern the database path's `explain()` call already used; the history
+list/detail endpoints correctly reconstruct it. Also verified as a genuine
+regression check against the real local seeded Postgres: a database
+question with a document *attached* (the original, still-supported
+supplementary mode) still resolves the connection, table allowlist, and
+document correctly, reaching real schema discovery before hitting the
+same pre-existing, unrelated limitation every database question hits
+without a live key (`generate_sql`'s LLM call, unlike `explain()`'s, isn't
+exception-wrapped — a real pre-existing gap, confirmed via `git diff` that
+not one line of the database branch's existing logic changed).
 
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the

@@ -26,3 +26,4 @@ pip_install.log
 # plaintext password for it. Neither belongs in version control.
 pgdata/
 pgpass.txt
+pg_log.txt

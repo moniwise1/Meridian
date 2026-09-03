@@ -320,7 +320,10 @@ export type ResultEvent = {
   type: "result";
   final: true;
   query_id: string;
-  conversation_id: string;
+  // null for a cache hit or a document-only analysis - neither creates/
+  // updates a Conversation row (see app/agents/planner.py), so there's
+  // nothing to chain a follow-up onto.
+  conversation_id: string | null;
   resolved_question: string;
   sql: string;
   sql_rationale: string;
@@ -358,7 +361,9 @@ export type ResultEvent = {
 
 export async function askStream(
   input: {
-    connection_id: string;
+    // A document can be the data source on its own now - see
+    // app/agents/planner.py's document-only branch on the backend.
+    connection_id: string | null;
     question: string;
     conversation_id?: string | null;
     document_ids?: string[];

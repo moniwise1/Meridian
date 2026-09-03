@@ -14,10 +14,25 @@ import {
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
 
+// The "Data source" select offers both database connections and uploaded
+// documents in one list — a document can now BE the thing being analysed,
+// not only supplementary context attached to a database question (see
+// app/agents/planner.py's document-only branch on the backend). Encoded
+// as "conn:<id>" / "doc:<id>" in the <select> value and parsed back out
+// on submit, so there's one selection model instead of two disconnected
+// pieces of state that could disagree about what's actually selected.
+type SourceSelection = { type: "connection"; id: string } | { type: "document"; id: string } | null;
+
+function parseSourceValue(value: string): SourceSelection {
+  if (value.startsWith("conn:")) return { type: "connection", id: value.slice(5) };
+  if (value.startsWith("doc:")) return { type: "document", id: value.slice(4) };
+  return null;
+}
+
 export default function AskPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [connectionId, setConnectionId] = useState("");
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [sourceValue, setSourceValue] = useState("");
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [steps, setSteps] = useState<StepEvent[]>([]);
@@ -30,7 +45,7 @@ export default function AskPage() {
     listConnections()
       .then((rows) => {
         setConnections(rows);
-        if (rows.length > 0) setConnectionId(rows[0].id);
+        if (rows.length > 0) setSourceValue(`conn:${rows[0].id}`);
       })
       .catch((e) => setLoadError(e.message));
     listDocuments()
@@ -38,24 +53,32 @@ export default function AskPage() {
       .catch(() => {}); // no document_retrieval capability, or none uploaded yet — fine either way
   }, []);
 
+  const source = parseSourceValue(sourceValue);
+  // Selecting a document AS the source is a distinct, single-document
+  // mode — the separate "attach a supplementary document" list (for a
+  // database-backed question) is hidden in that case rather than letting
+  // the two overlap confusingly.
+  const documentIsSource = source?.type === "document";
+
   function toggleDoc(id: string) {
     setSelectedDocIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
   }
 
   async function handleAsk(followUp = false) {
-    if (!question.trim() || !connectionId) return;
+    if (!question.trim() || !source) return;
     setRunning(true);
     setSteps([]);
     setResult(null);
     try {
       await askStream(
         {
-          connection_id: connectionId,
+          connection_id: source.type === "connection" ? source.id : null,
           question,
           conversation_id: followUp ? conversationId : null,
-          // Attaching documents forces a fresh (non-follow-up) question
-          // server-side too, but keep the UI consistent with that rule.
-          document_ids: followUp ? [] : selectedDocIds,
+          // Attaching/selecting documents forces a fresh (non-follow-up)
+          // question server-side too, but keep the UI consistent with
+          // that rule.
+          document_ids: followUp ? [] : documentIsSource ? [source.id] : selectedDocIds,
         },
         (evt) => {
           if (evt.type === "step") setSteps((prev) => [...prev, evt]);
@@ -101,9 +124,17 @@ export default function AskPage() {
       </div>
 
       {loadError && <div className="mb-6 text-[13px] text-red">{loadError}</div>}
-      {connections.length === 0 && !loadError && (
+      {connections.length === 0 && documents.length === 0 && !loadError && (
         <div className="mb-6 p-3 border border-line rounded-[4px] text-[13px] text-ink-soft">
-          No data sources connected yet. Go to <span className="text-teal">Data sources</span> to connect one.
+          No data sources connected and no documents uploaded yet. Go to{" "}
+          <Link href="/connections" className="text-teal hover:text-teal-deep transition-colors">
+            Data sources
+          </Link>{" "}
+          to connect a database, or{" "}
+          <Link href="/documents" className="text-teal hover:text-teal-deep transition-colors">
+            Documents
+          </Link>{" "}
+          to upload a PDF, Word, PowerPoint, or Excel file to analyse directly.
         </div>
       )}
 
@@ -111,18 +142,38 @@ export default function AskPage() {
         <div className="flex items-center gap-3 mb-3">
           <label className="text-[12.5px] text-ink-soft shrink-0">Data source</label>
           <select
-            value={connectionId}
-            onChange={(e) => setConnectionId(e.target.value)}
+            value={sourceValue}
+            onChange={(e) => setSourceValue(e.target.value)}
             className="text-[13px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink flex-1"
           >
-            {connections.length === 0 && <option value="">No data sources connected</option>}
-            {connections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.database})
-              </option>
-            ))}
+            {connections.length === 0 && documents.length === 0 && (
+              <option value="">No data sources or documents available</option>
+            )}
+            {connections.length > 0 && (
+              <optgroup label="Databases">
+                {connections.map((c) => (
+                  <option key={c.id} value={`conn:${c.id}`}>
+                    {c.name} ({c.database})
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {documents.length > 0 && (
+              <optgroup label="Documents">
+                {documents.map((d) => (
+                  <option key={d.id} value={`doc:${d.id}`}>
+                    {d.filename}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
+        {documentIsSource && (
+          <div className="text-[11.5px] text-ink-soft mb-3 -mt-1">
+            Analysing this document&apos;s content directly — no database query involved.
+          </div>
+        )}
         <textarea
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
@@ -138,7 +189,7 @@ export default function AskPage() {
           className="w-full text-[14px] border border-line rounded-[3px] px-3 py-2.5 bg-panel text-ink placeholder:text-ink-soft/70 resize-none focus:outline-none focus:ring-1 focus:ring-teal"
         />
 
-        {!conversationId && documents.length > 0 && (
+        {!conversationId && !documentIsSource && documents.length > 0 && (
           <div className="mt-3 pt-3 border-t border-line">
             <div className="flex items-center justify-between mb-2">
               <div className="text-[12px] text-ink-soft">
@@ -170,7 +221,7 @@ export default function AskPage() {
         <div className="flex justify-end mt-3">
           <button
             onClick={() => handleAsk(!!conversationId)}
-            disabled={running || !question.trim() || !connectionId}
+            disabled={running || !question.trim() || !source}
             className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-teal transition-colors"
           >
             {running ? "Analysing…" : conversationId ? "Ask follow-up" : "Ask"}

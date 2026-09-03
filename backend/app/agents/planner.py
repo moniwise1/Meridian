@@ -37,7 +37,7 @@ from app.agents.schema_discovery import discover_schema, schema_to_prompt_text
 from app.agents.query_generator import generate_sql
 from app.agents.data_quality import assess
 from app.agents.analytics_engine import summarize
-from app.agents.insight_agent import explain
+from app.agents.insight_agent import explain, explain_document_only
 from app.agents.anomaly_detection import detect as detect_anomalies
 from app.agents.investigation import investigate_cascade
 from app.agents.forecasting import forecast_by_group
@@ -81,7 +81,101 @@ def _json_safe(records: list[dict]) -> list[dict]:
     return json.loads(json.dumps(records, default=str))
 
 
-def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str,
+# Sentinel written to QueryRecord.connection_id for a document-only
+# analysis. Deliberately NOT a real connection id: that column has no FK
+# constraint (see app/db/models.py - it's a plain String, unlike
+# conversation_id on the same model, which is a real ForeignKey), so this
+# is safe and needs no schema/migration change. Every reader of
+# connection_id (routes_history.py's list, this file's own audit.log
+# calls) treats it as an opaque display string, never re-resolves it
+# against DataSourceConnection, so a sentinel here breaks nothing
+# downstream - verified by reading every connection_id reference in the
+# codebase before choosing this approach over adding a nullable column.
+DOCUMENT_ONLY_SOURCE_ID = "document-only"
+
+
+def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
+                                 question: str, documents: list[UploadedDocument], query_id: str):
+    """The document-only path: no DataSourceConnection at all, one or more
+    uploaded documents selected as the thing being analysed directly (as
+    opposed to attached as supplementary context to a database-backed
+    question - see the other branch in run_analysis). Always a fresh
+    question, never a follow-up: the same reason document-attached
+    questions already opt out of the result cache and conversation
+    chaining (see the comment where run_analysis checks document_ids for
+    that) applies even more directly when the document IS the source.
+
+    Emits the same StepEvent step names as the database path so the
+    frontend's progress trace needs no document-only special-casing, just
+    with "not applicable" content for the DB-specific steps (data
+    quality/anomaly detection/forecasting all operate on a query result
+    that doesn't exist here)."""
+    yield StepEvent("understanding", "done", question)
+
+    if not documents:
+        yield StepEvent("finding_data", "error", "No document selected to analyse.")
+        return
+
+    yield StepEvent(
+        "finding_data", "done",
+        f"{len(documents)} document(s) available: {', '.join(d.filename for d in documents)}.",
+    )
+    yield StepEvent("running_analysis", "done", "No database query — analysing document content directly.")
+    yield StepEvent("checking_quality", "done", "Not applicable — no database result to assess for a document-only analysis.")
+    yield StepEvent("investigating_drivers", "done", "Not applicable for a document-only analysis.")
+    yield StepEvent("forecasting", "done", "Not applicable for a document-only analysis.")
+
+    yield StepEvent("preparing_insights", "running")
+    document_payload = [{"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents]
+    try:
+        insight = explain_document_only(question, document_payload)
+        insight_dict = asdict(insight)
+    except Exception as e:
+        insight_dict = {"error": f"Insight generation unavailable: {e}"}
+    yield StepEvent("preparing_insights", "done")
+
+    data_quality = {
+        "row_count": 0, "completeness_pct": 100.0, "duplicate_pct": 0.0,
+        "missing_by_column": {}, "outlier_notes": [], "excluded_row_count": 0,
+        "notes": ["Document-only analysis — no database query was run; this reflects the "
+                  "selected document(s)' content only."],
+    }
+    snapshot = {
+        "sql": "-- No SQL executed; this analysis used document content only.",
+        "sql_rationale": "Document-only analysis — the data source was a document, not a database.",
+        "row_count": 0,
+        "duration_ms": 0,
+        "truncated": False,
+        "metrics": {},
+        "by_group": [],
+        "insight": insight_dict,
+        "data_quality": data_quality,
+        "anomalies": [],
+        "investigation": [],
+        "forecast": [],
+        "documents_used": [d.filename for d in documents],
+        "preview_rows": [],
+    }
+
+    db.add(QueryRecord(
+        id=query_id, tenant_id=tenant_id, user_id=user_id, connection_id=DOCUMENT_ONLY_SOURCE_ID,
+        conversation_id=None, question=question, generated_sql=snapshot["sql"],
+        row_count=0, duration_ms=0, result_snapshot=snapshot,
+    ))
+    audit.log(db, tenant_id, "document_only_query_executed", user_id, DOCUMENT_ONLY_SOURCE_ID, query_id,
+              {"documents": [d.filename for d in documents]})
+    db.commit()
+
+    yield {
+        "final": True,
+        "query_id": query_id,
+        "conversation_id": None,
+        "resolved_question": question,
+        **snapshot,
+    }
+
+
+def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str | None,
                   question: str, row_scope: dict, conversation_id: str | None = None,
                   document_ids: list[str] | None = None):
     """Generator yielding StepEvent progress, ending with a final dict result."""
@@ -97,6 +191,14 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str,
             .filter(UploadedDocument.id.in_(document_ids), UploadedDocument.tenant_id == tenant_id)
             .all()
         )
+
+    if not connection_id:
+        # A document IS the data source here, not a database - see
+        # _run_document_only_analysis above. routes_ask.py already
+        # rejects a request with neither connection_id nor document_ids
+        # before this is ever called.
+        yield from _run_document_only_analysis(db, tenant_id, user_id, question, documents, query_id)
+        return
 
     conn_row = db.query(DataSourceConnection).filter_by(id=connection_id, tenant_id=tenant_id).first()
     if not conn_row:

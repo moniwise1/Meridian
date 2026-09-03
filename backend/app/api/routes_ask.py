@@ -27,7 +27,11 @@ router = APIRouter(prefix="/ask", tags=["ask"])
 
 
 class AskRequest(BaseModel):
-    connection_id: str
+    # Optional now: a document can BE the data source (document_ids alone,
+    # no connection at all) rather than only ever supplementing a
+    # database-backed question - see app/agents/planner.py's document-only
+    # branch. ask_stream below rejects a request with neither set.
+    connection_id: str | None = None
     question: str
     conversation_id: str | None = None
     document_ids: list[str] = []
@@ -54,6 +58,12 @@ def ask_stream(body: AskRequest, db: Session = Depends(get_db),
             yield _sse({"type": "step", "step": "policy", "status": "error",
                         "detail": "Your account does not have document retrieval enabled."})
         return StreamingResponse(_denied_docs(), media_type="text/event-stream")
+
+    if not body.connection_id and not body.document_ids:
+        def _denied_no_source():
+            yield _sse({"type": "step", "step": "policy", "status": "error",
+                        "detail": "Select a data source or a document to analyse."})
+        return StreamingResponse(_denied_no_source(), media_type="text/event-stream")
 
     try:
         check_ask_rate_limit(ctx.user_id)
