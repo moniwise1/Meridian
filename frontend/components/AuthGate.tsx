@@ -15,15 +15,19 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // access, and gating it here would just bounce staff to the customer
   // login screen before platform's own auth ever runs.
   const isPlatformRoute = pathname.startsWith("/platform");
+  // /status is the public status page - unauthenticated by design,
+  // mirroring the backend's own GET /status (app/api/routes_status.py).
+  const isPublicRoute = pathname === "/status";
+  const skipGate = isPlatformRoute || isPublicRoute;
 
   useEffect(() => {
-    if (isPlatformRoute) return;
+    if (skipGate) return;
     const s = loadSession();
     setSession(s);
     if (!s && pathname !== "/login") router.replace("/login");
-  }, [pathname, router, isPlatformRoute]);
+  }, [pathname, router, skipGate]);
 
-  if (pathname === "/login" || isPlatformRoute) return <>{children}</>;
+  if (pathname === "/login" || skipGate) return <>{children}</>;
   if (session === undefined) return null; // avoid a flash before session check resolves
   if (!session) return null; // redirecting
 

@@ -28,9 +28,10 @@ export default function Sidebar() {
     setSession(loadSession());
   }, [pathname]);
 
-  // /platform/* has its own nav (app/platform/layout.tsx) - this sidebar
-  // is tenant-scoped and has no business appearing there.
-  if (pathname === "/login" || pathname.startsWith("/platform")) return null;
+  // /platform/* has its own nav (app/platform/layout.tsx); /status is the
+  // public status page (no session at all) - this sidebar is tenant-scoped
+  // and has no business appearing on either.
+  if (pathname === "/login" || pathname === "/status" || pathname.startsWith("/platform")) return null;
 
   function handleLogout() {
     clearSession();

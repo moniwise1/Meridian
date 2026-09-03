@@ -18,6 +18,28 @@ async function handleAuthFailure(res: Response) {
   }
 }
 
+// ---------- Public status page ----------
+// Unauthenticated by design (mirrors backend GET /status) - no
+// authHeaders(), no session, no handleAuthFailure.
+
+export type PublicIncidentUpdate = { status: string; body: string; created_at: string };
+export type PublicIncident = {
+  id: string;
+  title: string;
+  status: string;
+  severity: string;
+  started_at: string;
+  resolved_at: string | null;
+  updates: PublicIncidentUpdate[];
+};
+export type PublicStatus = { operational: boolean; incidents: PublicIncident[] };
+
+export async function getPublicStatus(): Promise<PublicStatus> {
+  const res = await fetch(`${API_BASE}/status`);
+  if (!res.ok) throw new Error("Could not load status.");
+  return res.json();
+}
+
 // ---------- Auth ----------
 
 export type AuthResponse = {
