@@ -33,6 +33,7 @@ from app.security.output_guard import check_dataframe
 from app.connectors.postgres import PostgresConnector
 from app.connectors.mysql import MySQLConnector
 from app.connectors.mssql import MSSQLConnector
+from app.connectors.snowflake import SnowflakeConnector
 from app.agents.schema_discovery import discover_schema, schema_to_prompt_text
 from app.agents.query_generator import generate_sql
 from app.agents.data_quality import assess
@@ -59,7 +60,10 @@ class PolicyViolation(Exception):
     pass
 
 
-_CONNECTOR_REGISTRY = {"postgres": PostgresConnector, "mysql": MySQLConnector, "mssql": MSSQLConnector}
+_CONNECTOR_REGISTRY = {
+    "postgres": PostgresConnector, "mysql": MySQLConnector, "mssql": MSSQLConnector,
+    "snowflake": SnowflakeConnector,
+}
 
 
 def build_connector(conn_row: DataSourceConnection):
@@ -71,6 +75,7 @@ def build_connector(conn_row: DataSourceConnection):
         host=conn_row.host, port=conn_row.port, database=conn_row.database,
         username=conn_row.username, password=password,
         timeout_seconds=settings.query_timeout_seconds,
+        extra_config=conn_row.extra_config or {},
     )
 
 

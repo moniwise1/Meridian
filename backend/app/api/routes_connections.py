@@ -16,11 +16,15 @@ from app.security.auth import get_current_user, require_role, require_active_sub
 from app.connectors.postgres import PostgresConnector
 from app.connectors.mysql import MySQLConnector
 from app.connectors.mssql import MSSQLConnector
+from app.connectors.snowflake import SnowflakeConnector
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
-_CONNECTOR_CLASSES = {"postgres": PostgresConnector, "mysql": MySQLConnector, "mssql": MSSQLConnector}
+_CONNECTOR_CLASSES = {
+    "postgres": PostgresConnector, "mysql": MySQLConnector, "mssql": MSSQLConnector,
+    "snowflake": SnowflakeConnector,
+}
 
 
 class ConnectionCreate(BaseModel):
@@ -33,6 +37,10 @@ class ConnectionCreate(BaseModel):
     password: str
     table_allowlist: list[str] = []
     column_policy: dict[str, list[str]] = {}
+    # Connector-specific parameters that don't fit host/port/database -
+    # currently only meaningful for Snowflake (warehouse, optional schema/
+    # role). See app/connectors/snowflake.py and app/db/models.py.
+    extra_config: dict = {}
 
 
 class ConnectionOut(BaseModel):
@@ -44,6 +52,7 @@ class ConnectionOut(BaseModel):
     verified_read_only: bool
     table_allowlist: list[str]
     column_policy: dict[str, list[str]]
+    extra_config: dict
 
     class Config:
         from_attributes = True
@@ -58,10 +67,18 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
         raise HTTPException(400, f"Unsupported connector kind '{body.kind}'. "
                                   f"Supported: {', '.join(_CONNECTOR_CLASSES)}.")
 
-    connector = connector_cls(
-        host=body.host, port=body.port, database=body.database,
-        username=body.username, password=RedactedSecret(body.password),
-    )
+    try:
+        connector = connector_cls(
+            host=body.host, port=body.port, database=body.database,
+            username=body.username, password=RedactedSecret(body.password),
+            extra_config=body.extra_config,
+        )
+    except ValueError as e:
+        # e.g. Snowflake's "extra_config.warehouse is required" - a
+        # config-shape error, not a connectivity failure, so it's worth
+        # its own message rather than folding into the generic
+        # "could not connect" below.
+        raise HTTPException(400, str(e))
     if not connector.test_connection():
         raise HTTPException(400, "Could not connect with the supplied credentials.")
 
@@ -79,6 +96,7 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
         port=body.port, database=body.database, username=body.username,
         encrypted_password=encrypt(body.password),
         table_allowlist=body.table_allowlist, column_policy=body.column_policy,
+        extra_config=body.extra_config,
         verified_read_only=True,
     )
     db.add(row)

@@ -1,6 +1,6 @@
 anthropic==0.34.2
 boto3==1.35.36
-cryptography==43.0.1
+cryptography==50.0.1
 email-validator==2.2.0
 fastapi==0.115.0
 fpdf2==2.7.9
@@ -11,7 +11,7 @@ pandas==2.3.3
 psycopg2-binary==2.9.12
 pydantic-settings==2.5.2
 pydantic==2.13.5
-pyjwt==2.9.0
+pyjwt==2.13.0
 pymysql==1.1.1
 pymssql==2.4.0
 pypdf==6.16.2
@@ -20,6 +20,8 @@ python-dotenv==1.0.1
 python-multipart==0.0.32
 python-pptx==1.0.2
 redis==8.1.0
+snowflake-connector-python==4.7.3
+snowflake-sqlalchemy==1.11.0
 sqlalchemy==2.0.35
 sqlparse==0.5.1
 uvicorn[standard]==0.30.6

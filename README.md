@@ -214,10 +214,50 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   creation time but fail every time someone actually asked a question
   against it. Fixed; both registries now agree, and `build_connector` is
   exported from `planner.py` so the risk scan reuses the same one.)
+- **Snowflake** connector (`app/connectors/snowflake.py`) — same
+  interface, same shape, but honestly weaker on the one thing the other
+  three lean on hardest: Snowflake has no session-level read-only
+  transaction mode at all (no `BEGIN TRANSACTION READ ONLY` equivalent),
+  so `verify_read_only()` there is a real attempted write (`CREATE
+  TEMPORARY TABLE`, genuinely rejected or not by the server) with no
+  independent backstop the way Postgres/MySQL have one — its correctness
+  is only as strong as the connected role's own grants, stated plainly in
+  the connector's own docstring rather than presented as equivalent.
+  Snowflake's connection model also doesn't fit the existing host:port:
+  database shape at all — it needs a *warehouse* (compute) and optionally
+  a *role*, neither of which any other connector needed a place for. Gave
+  `DataSourceConnection` a new `extra_config` JSON column for exactly this
+  (connector-specific parameters that don't generalize) rather than
+  bolting warehouse/role onto columns that don't mean that for anyone
+  else. Unverified against a live Snowflake account (none available here)
+  — built strictly to snowflake-sqlalchemy's documented contract, same
+  category of caveat as Paystack; verified everything that *can* be
+  proven without one: the connector's own validation (rejects a missing
+  warehouse before ever attempting a connection), that it builds a
+  correct SQLAlchemy engine/URL, and a real Postgres regression check
+  (still connects and verifies read-only against the real local seeded
+  database) confirming the new shared `extra_config` parameter didn't
+  disturb the three connectors that don't use it.
+
+  Caught and fixed two real bugs while adding this, both before either
+  ever reached production: (1) `cryptography` needed bumping
+  (`43.0.1` → `50.0.1`) to satisfy Snowflake's driver — reverified the
+  app's own Fernet credential encryption still round-trips correctly
+  under the new version rather than assuming it. (2) The light-migration
+  path (`app/db/session.py`, see the Free/Pro tier section above for why
+  it exists) added `extra_config` as plain `TEXT` — which silently
+  accepts a JSON write but returns a raw string instead of a parsed dict
+  on read, because SQLAlchemy's `JSON` type on Postgres only applies its
+  read-side deserialization when the underlying column is genuinely
+  Postgres's native `json` type. Caught by actually writing a dict
+  through a migrated column and reading it back against real Postgres,
+  not by reasoning about it — the migration is dialect-aware now
+  (`json` on Postgres/MySQL, `TEXT` on SQLite, matching what
+  `create_all` would produce natively on each).
 - Connector interface (`app/connectors/base.py`) is small enough that
-  adding Oracle/Snowflake/BigQuery/etc. means implementing 4 methods, not a
-  redesign — not built in this slice, since I can't test them without real
-  instances.
+  adding Oracle/BigQuery/Databricks/etc. means implementing 4 methods,
+  not a redesign — not built in this slice, since I can't test them
+  without real instances.
 
 **The analysis pipeline** (`app/agents/planner.py`)
 - Schema discovery filtered to each tenant's table/column policy before it
@@ -490,7 +530,7 @@ maintaining the status page; see "Internal admin panel" above.
 
 | Gap | Why |
 |---|---|
-| Oracle/Snowflake/BigQuery/Databricks connectors | No test infrastructure for them in this environment; interface is ready |
+| Oracle/BigQuery/Databricks connectors | No test infrastructure for them in this environment; interface is ready (Snowflake is now built — see the Connectors section above) |
 | Real OAuth/SSO (Google/Microsoft/Salesforce/SAP/etc.) | Needs a registered app with each provider — can't create that here |
 | Document OCR / scanned-PDF text extraction | pypdf only reads an embedded text layer; a scanned document extracts to nothing, honestly, rather than pretending to work — see the Document intelligence section above |
 | Real SMTP/email provider | Console backend stands in; swap-in point is documented above |
@@ -562,6 +602,24 @@ This one matters more than for Postgres/MySQL — SQL Server has no
 session-level read-only transaction mode, so the connector's read-only
 guarantee rests entirely on this role having no write grants. See the
 caveat in `app/connectors/mssql.py`.
+
+**Snowflake:**
+```sql
+CREATE ROLE analytics_readonly;
+GRANT USAGE ON WAREHOUSE your_warehouse TO ROLE analytics_readonly;
+GRANT USAGE ON DATABASE your_db TO ROLE analytics_readonly;
+GRANT USAGE ON SCHEMA your_db.your_schema TO ROLE analytics_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA your_db.your_schema TO ROLE analytics_readonly;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA your_db.your_schema TO ROLE analytics_readonly;
+CREATE USER analytics_readonly PASSWORD = 'a-real-password' DEFAULT_ROLE = analytics_readonly;
+GRANT ROLE analytics_readonly TO USER analytics_readonly;
+```
+This matters even more than for SQL Server: Snowflake has no read-only
+transaction mode *at all*, so unlike every other connector here there's
+no independent, universal backstop behind this role's own grants — see
+the caveat in `app/connectors/snowflake.py`. When connecting, the
+warehouse name above goes in the "Warehouse" field on Data sources (not
+in the account identifier or database field).
 
 The app double-checks this at connection time regardless of your GRANTs —
 see `verify_read_only()` in each connector.
