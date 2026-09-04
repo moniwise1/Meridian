@@ -298,6 +298,40 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   leftover same-named local test tenants) could both compute the
   identical "unique" subdomain and collide for real at commit. Fixed with
   a flush after each assignment.
+- **Cross-subdomain session handoff** (`POST /auth/handoff/create` +
+  `POST /auth/handoff/redeem` in `app/api/routes_auth.py`, landing page at
+  `frontend/app/auth/handoff/page.tsx`) — a login or registration that
+  happens on the generic domain now visibly lands the user on their OWN
+  tenant subdomain (the address bar actually changes), rather than
+  leaving them on `www` forever with the subdomain only reachable by
+  typing it in manually. `sessionStorage` is deliberately per-origin (a
+  real security property — one tenant's session must never be readable
+  from another's subdomain, the "mall vs. individual store" boundary the
+  per-tenant-subdomain login check above already enforces), so a plain
+  redirect can't carry a session across origins — a genuine hand-off is
+  required. Built by reusing the existing short-lived (5-minute) pre-auth
+  JWT machinery from the MFA login flow (`create_pre_auth_token` /
+  `decode_pre_auth_token` in `app/security/auth.py`) with a new
+  `purpose="handoff"`: minted at the exact moment of redirect (not
+  earlier, so its window is never eaten by however long MFA entry took),
+  carried in the URL **fragment** (`#token=...`, never sent to any
+  server, unlike a query string — deliberately NOT the discredited OAuth
+  "implicit flow" pattern of putting the real long-lived `access_token`
+  itself in a URL), and redeemed at `/auth/handoff` for a genuinely fresh
+  `access_token` — the handoff token itself never carries real session
+  material, and `get_current_user` already rejects any `pre_auth` token
+  outright regardless of purpose. Deliberately NOT single-use/replay-
+  tracked, relying on the short TTL alone — the same trade-off the
+  existing MFA pre-auth tokens already make. If the handoff can't be
+  minted for any reason (network blip, no subdomain assigned yet), the
+  frontend falls back to the session already saved locally on the generic
+  domain rather than leaving the user stuck. Verified end-to-end against
+  a real local SQLite DB: register → mint handoff token → redeem with NO
+  Authorization header at all (the whole point) → fresh access_token
+  authenticates a real request → a garbage token is rejected → an MFA
+  pre-auth token (`purpose="mfa_login"`) is correctly refused when
+  presented as a handoff token, confirming purpose isolation holds in
+  both directions.
 - Session-signing and credential-encryption now use independently
   rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
   a shared key if unset, for backward compatibility) — rotating one no

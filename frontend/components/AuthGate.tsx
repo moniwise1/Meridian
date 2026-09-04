@@ -18,7 +18,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const isPlatformRoute = pathname.startsWith("/platform");
   // /status is the public status page - unauthenticated by design,
   // mirroring the backend's own GET /status (app/api/routes_status.py).
-  const isPublicRoute = pathname === "/status";
+  // /auth/handoff is the cross-subdomain session handoff landing page
+  // (see lib/api.ts's redeemHandoff) - visited with NO session at all by
+  // design, since establishing one is the whole point of being there;
+  // gating it here would bounce the visitor to /login before the handoff
+  // token in the URL fragment ever gets a chance to be redeemed.
+  const isPublicRoute = pathname === "/status" || pathname === "/auth/handoff";
   const skipGate = isPlatformRoute || isPublicRoute;
 
   // "/" is the one route this gate does NOT force-redirect when logged

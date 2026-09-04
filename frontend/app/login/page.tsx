@@ -4,11 +4,13 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   login, register, verifyMfaLogin, setupMfaLogin, confirmMfaLogin,
-  startMfaSetup, confirmMfaSetup, getTenantBySubdomain, type AuthResponse, type TenantBySubdomain,
+  startMfaSetup, confirmMfaSetup, getTenantBySubdomain, createHandoff, type AuthResponse, type TenantBySubdomain,
 } from "@/lib/api";
-import { saveSession } from "@/lib/auth";
+import { saveSession, loadSession } from "@/lib/auth";
 import { getTenantSubdomain } from "@/lib/subdomain";
 import MfaEnroll from "@/components/MfaEnroll";
+
+const APEX_DOMAIN = process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com";
 
 // "none" = the generic domain (no tenant subdomain in the URL at all) -
 // login stays fully unrestricted, register stays available, exactly as
@@ -66,7 +68,33 @@ function LoginPageInner() {
   }, []);
   const tenant = tenantContext && tenantContext !== "none" && tenantContext !== "not_found" ? tenantContext : null;
 
-  function finishLogin(auth: AuthResponse) {
+  // Every tenant subdomain is its own independent store in the mall - this
+  // is what makes the address bar actually SHOW that after a login on the
+  // generic domain (the mall entrance), rather than leaving the visitor on
+  // www forever. saveSession() above already grants a real, working
+  // session on the generic domain, so if the handoff can't be minted for
+  // any reason (network blip, the account has no subdomain yet, etc.) the
+  // user still lands on a working dashboard - just not the branded one -
+  // instead of getting stuck. See routes_auth.py's /auth/handoff/* pair
+  // and app/auth/handoff/page.tsx for the redemption side of this.
+  async function redirectToOwnSubdomain(subdomain: string | null | undefined, accessToken: string) {
+    // Already ON that tenant's own subdomain (logged in directly at
+    // wamco.getmeridiananalytics.com rather than via the generic domain) -
+    // the session just saved is already on the right origin, no handoff
+    // needed at all.
+    if (!subdomain || tenant?.subdomain === subdomain) {
+      router.push("/");
+      return;
+    }
+    try {
+      const handoffToken = await createHandoff(accessToken);
+      window.location.href = `https://${subdomain}.${APEX_DOMAIN}/auth/handoff#token=${handoffToken}`;
+    } catch {
+      router.push("/");
+    }
+  }
+
+  async function finishLogin(auth: AuthResponse) {
     saveSession({
       token: auth.access_token,
       tenantId: auth.tenant_id,
@@ -74,7 +102,7 @@ function LoginPageInner() {
       role: auth.role,
       email,
     });
-    router.push("/");
+    await redirectToOwnSubdomain(auth.subdomain, auth.access_token);
   }
 
   // Registration always creates a brand-new tenant with its OWN
@@ -106,7 +134,7 @@ function LoginPageInner() {
 
       const result = await login(email, password, tenant?.subdomain);
       if (!result.mfa_required) {
-        finishLogin(result as AuthResponse);
+        await finishLogin(result as AuthResponse);
         return;
       }
       setPreAuthToken(result.pre_auth_token!);
@@ -124,7 +152,7 @@ function LoginPageInner() {
     setSubmitting(true);
     try {
       const auth = await verifyMfaLogin(preAuthToken, mfaCode);
-      finishLogin(auth);
+      await finishLogin(auth);
     } catch (e) {
       setError((e as Error).message);
       setMfaCode("");
@@ -189,7 +217,7 @@ function LoginPageInner() {
           onStart={(signal) => setupMfaLogin(preAuthToken, signal)}
           onConfirm={async (code) => {
             const auth = await confirmMfaLogin(preAuthToken, code);
-            finishLogin(auth);
+            await finishLogin(auth);
           }}
         />
       </Shell>
@@ -239,7 +267,16 @@ function LoginPageInner() {
           onStart={startMfaSetup}
           onConfirm={async (code) => {
             await confirmMfaSetup(code);
-            router.push("/");
+            // register()'s own saveSession() call in handleSubmit already
+            // put a working access_token in sessionStorage - confirming
+            // MFA setup doesn't rotate it, so it's still good for minting
+            // the handoff token here.
+            const token = loadSession()?.token;
+            if (token) {
+              await redirectToOwnSubdomain(assignedSubdomain, token);
+            } else {
+              router.push("/");
+            }
           }}
         />
       </Shell>

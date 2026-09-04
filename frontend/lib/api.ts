@@ -49,6 +49,10 @@ export type AuthResponse = {
   user_id: string;
   role: string;
   subdomain: string | null;
+  // Only populated by redeemHandoff() below - register()/login() leave
+  // this unset since the caller already has it from whatever form they
+  // just typed it into.
+  email?: string | null;
 };
 
 export async function register(companyName: string, email: string, password: string): Promise<AuthResponse> {
@@ -70,6 +74,35 @@ export async function getTenantBySubdomain(subdomain: string): Promise<TenantByS
   const res = await fetch(`${API_BASE}/auth/tenant-by-subdomain/${encodeURIComponent(subdomain)}`);
   if (!res.ok) throw new Error("No workspace found at this address.");
   return res.json();
+}
+
+// Cross-subdomain session handoff — logging in on the generic domain and
+// landing on the tenant's own subdomain afterward means handing a session
+// across to a genuinely different browser origin (sessionStorage is
+// per-origin by design). Deliberately NOT "put the real access_token in
+// the URL" — a short-lived, single-purpose handoff token instead, see
+// backend/app/api/routes_auth.py's own comment on this pair of endpoints
+// for the full reasoning.
+
+export async function createHandoff(token: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/auth/handoff/create`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Could not prepare handoff.");
+  const body = await res.json();
+  return body.handoff_token as string;
+}
+
+export async function redeemHandoff(handoffToken: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/handoff/redeem`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ handoff_token: handoffToken }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "This link has expired. Please sign in again.");
+  return body;
 }
 
 // Login is a two-step handshake once MFA is involved (see
