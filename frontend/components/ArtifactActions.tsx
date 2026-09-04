@@ -83,6 +83,9 @@ export default function ArtifactActions({ queryId }: { queryId: string }) {
           {emailStatus && emailStatus.status === "sent" && (
             <div className="mt-2 text-[12.5px] text-teal">Sent to {recipient}.</div>
           )}
+          {emailStatus && emailStatus.status === "failed" && (
+            <div className="mt-2 text-[12.5px] text-red">{emailStatus.reason}</div>
+          )}
         </div>
       )}
 

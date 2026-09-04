@@ -111,6 +111,25 @@ class Settings(BaseSettings):
     paystack_plan_code_premium: str = ""
     paystack_plan_amount_premium: int = 2_500_000  # NGN 25,000
 
+    # Email delivery (app/agents/email_delivery.py). "console" (default):
+    # logs instead of sending - the original MVP stand-in, still what a
+    # fresh dev environment gets with zero config. "smtp": a real generic
+    # SMTP backend - deliberately provider-agnostic (stdlib smtplib, no
+    # vendor SDK) rather than committing to one specific provider's API,
+    # so it works with anything that speaks SMTP: Gmail (an app password),
+    # Postmark/SendGrid/SES's SMTP relays, or a domain's own mail hosting.
+    email_provider: str = "console"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    # What recipients see in the "From" field - falls back to
+    # smtp_username (the common case: they're the same address) if unset,
+    # since some providers' SMTP auth username IS the send-as address and
+    # requiring it twice would be redundant.
+    smtp_from_address: str = ""
+    smtp_use_tls: bool = True  # STARTTLS - true for every mainstream provider's port 587
+
     class Config:
         env_file = ".env"
 

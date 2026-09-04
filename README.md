@@ -507,10 +507,24 @@ independent of the FastAPI/DB/pandas stack.
   same already-computed, already-authorized result snapshot, never a fresh
   unrestricted query.
 - Email delivery: sending to yourself is auto-approved; any other
-  recipient requires explicit confirmation. Ships a `ConsoleEmailBackend`
-  that logs instead of sending — there's no real SMTP relay available here;
-  swapping in SES/Postmark/SMTP means implementing one `EmailBackend.send`
-  method.
+  recipient requires explicit confirmation. Two backends behind
+  `EMAIL_PROVIDER`: `console` (default) logs instead of sending; `smtp` is
+  a real, generic SMTP backend (stdlib `smtplib`, no vendor SDK) —
+  deliberately provider-agnostic rather than committing to one specific
+  API, so it works with Gmail (an app password), any transactional
+  provider's SMTP relay (Postmark/SendGrid/SES all offer one), or a
+  domain's own mail hosting. A failed real send (bad credentials, refused
+  recipient, connection timeout) degrades to a clean, logged `"failed"`
+  result surfaced back to the user — not an unhandled exception turning
+  into a 500 for what's a completely ordinary "delivery didn't work"
+  outcome. Verified against a stubbed `smtplib.SMTP` client (exact command
+  sequence — EHLO/STARTTLS/LOGIN/send — and MIME structure, including
+  attachment content-type guessing) since no live SMTP account is
+  available here, same honesty norm as the AWS KMS backend elsewhere in
+  this doc; separately verified the failure-degrades-cleanly path against
+  a *real* connection failure (a port nothing listens on) through the real
+  FastAPI route, confirming a 200 with `status: "failed"` rather than a
+  crash, and a real `EmailDeliveryLog` row written either way.
 
 **Redis (optional, `app/security/redis_client.py`)** — the rate limiter,
 login cooldown, and query cache below were originally in-process-only
@@ -666,12 +680,11 @@ maintaining the status page; see "Internal admin panel" above.
 |---|---|
 | Oracle/BigQuery/Databricks connectors | No test infrastructure for them in this environment; interface is ready (Snowflake is now built — see the Connectors section above) |
 | Real OAuth/SSO (Google/Microsoft/Salesforce/SAP/etc.) | Needs a registered app with each provider — can't create that here |
-| Real SMTP/email provider | Console backend stands in; swap-in point is documented above |
 | Automatic re-encryption when switching KMS backends | Existing credentials stay encrypted with whichever backend wrote them; migrating a live database needs a one-off script that runs both backends at once — see `docs/CLOUD_KMS.md` §4 |
 | Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
-| Real invite-by-email | No SMTP identity to build a real invite link on |
+| Real invite-by-email | Real SMTP now exists (see Outputs above) but nothing generates or emails an actual invite link yet — `add_user` still creates a teammate directly with a temp password, a separate feature from having a working mail transport |
 | Externally-anchored (fully tamper-*proof*) audit trail | Audit log is hash-chained and self-verifying now, but the chain's head hash isn't anchored outside this database — see the audit log section above |
 
 ## Running it
