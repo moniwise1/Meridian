@@ -77,14 +77,21 @@ def create_access_token(user_id: str, tenant_id: str, role: str, ttl_seconds: in
 PRE_AUTH_TTL_SECONDS = 5 * 60
 
 
-def create_pre_auth_token(user_id: str, tenant_id: str, purpose: str) -> str:
+def create_pre_auth_token(user_id: str, tenant_id: str, purpose: str, ttl_seconds: int | None = None) -> str:
+    # ttl_seconds defaults to the shared 5-minute window - only overridden
+    # for purposes that genuinely need longer (currently "mfa_recovery",
+    # see routes_mfa.py: checking an inbox and clicking a link realistically
+    # takes longer than the few seconds "mfa_verify"/"mfa_setup"/"handoff"
+    # are sized for). Passed explicitly per call, not by changing
+    # PRE_AUTH_TTL_SECONDS itself, so this never silently loosens those
+    # other purposes' short window.
     payload = {
         "pre_auth": True,
-        "purpose": purpose,  # "mfa_verify" | "mfa_setup"
+        "purpose": purpose,  # "mfa_verify" | "mfa_setup" | "mfa_recovery" | "handoff"
         "sub": user_id,
         "tenant_id": tenant_id,
         "iat": int(time.time()),
-        "exp": int(time.time()) + PRE_AUTH_TTL_SECONDS,
+        "exp": int(time.time()) + (ttl_seconds if ttl_seconds is not None else PRE_AUTH_TTL_SECONDS),
     }
     return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
 

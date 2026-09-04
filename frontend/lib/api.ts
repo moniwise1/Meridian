@@ -242,6 +242,33 @@ export async function confirmMfaLogin(preAuthToken: string, code: string): Promi
   return body;
 }
 
+// Lost-device recovery - only reachable from the mfa_code step (i.e. only
+// after a correct password), never a bare "enter your email" form. See
+// backend/app/api/routes_mfa.py's module docstring, #3.
+
+export async function requestMfaRecovery(preAuthToken: string): Promise<{ masked_email: string }> {
+  const res = await fetch(`${API_BASE}/auth/mfa/recovery/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not send a recovery link.");
+  return body;
+}
+
+export async function redeemMfaRecovery(token: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/recovery/redeem`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "This link is invalid or has expired.");
+  }
+}
+
 // ---------- Connections ----------
 
 export type Connection = {

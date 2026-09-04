@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  login, register, verifyMfaLogin, setupMfaLogin, confirmMfaLogin,
+  login, register, verifyMfaLogin, setupMfaLogin, confirmMfaLogin, requestMfaRecovery,
   startMfaSetup, confirmMfaSetup, getTenantBySubdomain, createHandoff, type AuthResponse, type TenantBySubdomain,
 } from "@/lib/api";
 import { saveSession, loadSession } from "@/lib/auth";
@@ -51,6 +51,9 @@ function LoginPageInner() {
   const [preAuthToken, setPreAuthToken] = useState("");
   const [mfaCode, setMfaCode] = useState("");
   const [assignedSubdomain, setAssignedSubdomain] = useState("");
+  const [recoverySending, setRecoverySending] = useState(false);
+  const [recoverySentTo, setRecoverySentTo] = useState("");
+  const [recoveryError, setRecoveryError] = useState("");
 
   // undefined until resolved client-side (window isn't available during
   // SSR) - rendered as a blank Shell until then, same "avoid a flash of
@@ -197,12 +200,45 @@ function LoginPageInner() {
                 setStep("credentials");
                 setError("");
                 setMfaCode("");
+                setRecoverySentTo("");
+                setRecoveryError("");
               }}
               className="text-[12px] text-ink-soft hover:text-ink transition-colors"
             >
               ← Back
             </button>
           </form>
+
+          <div className="mt-4 pt-4 border-t border-line">
+            {recoverySentTo ? (
+              <p className="text-[12px] text-ink-soft leading-relaxed">
+                We sent a recovery link to <span className="text-ink">{recoverySentTo}</span> — it
+                expires in 15 minutes. Following it disables your lost authenticator so you can set
+                up a new one.
+              </p>
+            ) : (
+              <button
+                type="button"
+                disabled={recoverySending}
+                onClick={async () => {
+                  setRecoveryError("");
+                  setRecoverySending(true);
+                  try {
+                    const { masked_email } = await requestMfaRecovery(preAuthToken);
+                    setRecoverySentTo(masked_email);
+                  } catch (e) {
+                    setRecoveryError((e as Error).message);
+                  } finally {
+                    setRecoverySending(false);
+                  }
+                }}
+                className="text-[12px] text-ink-soft hover:text-ink transition-colors disabled:opacity-40"
+              >
+                {recoverySending ? "Sending…" : "Lost your authenticator? Send a recovery link"}
+              </button>
+            )}
+            {recoveryError && <div className="mt-1.5 text-[12px] text-red">{recoveryError}</div>}
+          </div>
         </div>
       </Shell>
     );

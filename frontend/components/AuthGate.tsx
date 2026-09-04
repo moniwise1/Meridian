@@ -25,8 +25,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // token in the URL fragment ever gets a chance to be redeemed.
   // /accept-invite is the team-invite acceptance page (see lib/api.ts's
   // acceptTeamInvite) - same reasoning, visited by someone with no
-  // account yet at all.
-  const isPublicRoute = pathname === "/status" || pathname === "/auth/handoff" || pathname === "/accept-invite";
+  // account yet at all. /mfa-recovery is the lost-authenticator recovery
+  // page (see lib/api.ts's redeemMfaRecovery) - visited by someone who,
+  // by definition, can't complete login yet either.
+  const isPublicRoute =
+    pathname === "/status" || pathname === "/auth/handoff" ||
+    pathname === "/accept-invite" || pathname === "/mfa-recovery";
   const skipGate = isPlatformRoute || isPublicRoute;
 
   // "/" is the one route this gate does NOT force-redirect when logged

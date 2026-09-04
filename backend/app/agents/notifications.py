@@ -80,6 +80,21 @@ def send_welcome_email(to_email: str, company_name: str) -> None:
     _send_best_effort(to_email, subject, body)
 
 
+def send_mfa_recovery_email(to_email: str, recovery_url: str) -> None:
+    subject = "Reset two-factor authentication for your Meridian account"
+    body = (
+        f"Hi,\n\n"
+        f"Someone (hopefully you) entered the correct password for your Meridian account but "
+        f"couldn't provide a two-factor code, and requested this recovery link.\n\n"
+        f"Use it to disable the lost authenticator and set up a new one (expires in 15 minutes):\n"
+        f"{recovery_url}\n\n"
+        f"If this wasn't you, someone else knows your password - sign in and change it right "
+        f"away, and ignore this link.\n\n"
+        f"Meridian"
+    )
+    _send_best_effort(to_email, subject, body)
+
+
 def send_invite_email(to_email: str, org_label: str, inviter_email: str, role: str, accept_url: str) -> None:
     subject = f"You're invited to join {org_label} on Meridian"
     body = (
