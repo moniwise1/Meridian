@@ -269,6 +269,35 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   own separate session entirely). Deliberately no fixed absolute session
   cap — activity alone keeps a session usable, only inactivity ever ends
   one early.
+- **Per-tenant subdomains** (`app/tenant_slug.py`, `wamco.
+  getmeridiananalytics.com`) — auto-assigned from the company name at
+  registration (`generate_unique_subdomain`, collision-resolved: a second
+  "Wamco Inc" gets `wamco-inc2`, not a silent clash), and a genuine login
+  boundary, not decoration: `POST /auth/login` accepts an optional
+  `subdomain`, and when the caller sends one, the account must belong to
+  the tenant that subdomain actually resolves to — a fully correct
+  password for the wrong tenant's subdomain is refused with the same
+  generic message a nonexistent subdomain gets, so neither response leaks
+  which case actually happened. The generic domain's login is completely
+  unaffected — unrestricted, exactly as before this existed — since the
+  boundary only ever activates when a subdomain is actually sent. One
+  wildcard Railway custom domain (`*.getmeridiananalytics.com`) covers
+  every tenant's subdomain at once — see `docs/RAILWAY_DEPLOY.md` §9 — so
+  this doesn't consume a custom-domain slot per tenant. Existing tenants
+  from before this feature shipped are backfilled automatically on boot
+  (`_backfill_tenant_subdomains()` in `app/db/session.py`), and
+  `/platform/tenants` lets staff view or rename any tenant's subdomain by
+  hand. Verified end-to-end against the real app (24 checks): the login
+  boundary in both directions (tenant A's correct password refused on
+  tenant B's subdomain, and vice versa), the generic domain staying fully
+  unrestricted, collision-resolved auto-generation, staff rename/reject-
+  invalid/reject-reserved/reject-clash, and the backfill path for a
+  pre-existing tenant — which caught a real bug before it shipped: the
+  backfill loop's uniqueness check queried the database without flushing
+  first, so two same-named tenants in the same batch (a real case:
+  leftover same-named local test tenants) could both compute the
+  identical "unique" subdomain and collide for real at commit. Fixed with
+  a flush after each assignment.
 - Session-signing and credential-encryption now use independently
   rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
   a shared key if unset, for backward compatibility) — rotating one no
@@ -651,9 +680,48 @@ knowledge of this code rewriting a run of rows and recomputing every hash
 after them consistently. It does catch anything short of that — accidental
 edits, an app bug writing to the table directly, a careless tamper attempt,
 corruption. A genuinely tamper-proof trail needs the chain's head hash
-anchored outside this database entirely; not implemented here. Full
-caveats, including a known race on concurrent writers, are in the
-module docstring.
+anchored outside this database entirely — now implemented, see
+**Externally-anchored checkpoints** below. Full caveats, including a
+known race on concurrent writers, are in the module docstring.
+
+**Externally-anchored checkpoints** (`app/audit/anchor.py`,
+`POST /platform/audit/checkpoint`, owner-only) — the specific fix for the
+gap the paragraph above calls out. `verify_chain()` alone can't tell an
+untouched hash chain apart from a *fabricated-but-internally-consistent
+replacement* — someone with DB write access could delete every row and
+insert a brand-new chain from a fresh genesis, and verification would
+report `intact: True`, since a self-consistent-with-itself chain is all
+that check can see. A checkpoint closes that: it computes a single root
+hash over every tenant's current chain head and commits it to a real file
+in an external GitHub repo — a system this app can only append to via an
+explicit token, whose own commit history is nobody's to unilaterally
+rewrite the way a database is. Verifying (`GET
+/platform/audit/checkpoint/latest`, open to any staff role) checks
+whether each anchored hash still literally appears in that tenant's
+current chain — a replacement chain built from different content will
+never happen to reproduce the exact same hash at the exact same point,
+since the hash covers full entry content down to a timestamp.
+
+Writes go to a dedicated branch (not the default branch), created
+automatically from the repo's tip on first publish — deliberately not
+main. A real, live discovery while building this, not a design
+guess: this exact repo has PR-required branch protection on `main` with
+`enforce_admins: true`, and a direct Contents API write there is rejected
+with a 409 regardless of the token's own permissions. Deliberately
+admin-triggered, not an automatic timer — this app has no job scheduler;
+pair it with an external cron (a scheduled GitHub Action, a Railway cron
+service) for genuinely periodic anchoring.
+
+Verified two ways: the fabrication-detection property itself (build a
+tenant's real chain, checkpoint it, then delete every row and replace it
+with a brand-new self-consistent fabricated chain — confirmed
+`verify_chain()` alone reports the fabrication as `intact: True`, exactly
+the gap this closes, and confirmed `verify_checkpoint()` correctly flags
+it as unverified since the anchored hash no longer appears anywhere in
+the replacement chain) against a real local database; and the GitHub
+integration itself — not mocked — with a real publish, real read-back,
+and real verification against this actual repository during development,
+cleaned up afterward via the same API. 17/17 checks passed.
 
 **Frontend** (Next.js/TypeScript/Tailwind) — login/register, Home dashboard
 (connection/analysis/artifact counts and recent activity, pure client-side
@@ -685,7 +753,6 @@ maintaining the status page; see "Internal admin panel" above.
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 | Real invite-by-email | Real SMTP now exists (see Outputs above) but nothing generates or emails an actual invite link yet — `add_user` still creates a teammate directly with a temp password, a separate feature from having a working mail transport |
-| Externally-anchored (fully tamper-*proof*) audit trail | Audit log is hash-chained and self-verifying now, but the chain's head hash isn't anchored outside this database — see the audit log section above |
 
 ## Running it
 

@@ -15,6 +15,9 @@ export default function PlatformTenantsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingSubdomainId, setEditingSubdomainId] = useState<string | null>(null);
+  const [subdomainInput, setSubdomainInput] = useState("");
+  const [subdomainError, setSubdomainError] = useState("");
   const isOwner = loadPlatformSession()?.role === "owner";
 
   function refresh() {
@@ -40,6 +43,17 @@ export default function PlatformTenantsPage() {
       refresh();
     } catch (e) {
       setError((e as Error).message);
+    }
+  }
+
+  async function handleSubdomainSave(tenantId: string) {
+    setSubdomainError("");
+    try {
+      await updateTenant(tenantId, { subdomain: subdomainInput.trim().toLowerCase() });
+      setEditingSubdomainId(null);
+      refresh();
+    } catch (e) {
+      setSubdomainError((e as Error).message);
     }
   }
 
@@ -84,6 +98,40 @@ export default function PlatformTenantsPage() {
                   {t.user_count} user{t.user_count === 1 ? "" : "s"} · {t.connection_count} connection
                   {t.connection_count === 1 ? "" : "s"} · joined {new Date(t.created_at).toLocaleDateString()}
                 </div>
+                <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5 flex items-center gap-2">
+                  <span>
+                    {t.subdomain
+                      ? `${t.subdomain}.${process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com"}`
+                      : "no subdomain assigned"}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setEditingSubdomainId(editingSubdomainId === t.id ? null : t.id);
+                      setSubdomainInput(t.subdomain ?? "");
+                      setSubdomainError("");
+                    }}
+                    className="text-teal hover:text-teal-deep transition-colors"
+                  >
+                    edit
+                  </button>
+                </div>
+                {editingSubdomainId === t.id && (
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <input
+                      value={subdomainInput}
+                      onChange={(e) => setSubdomainInput(e.target.value)}
+                      placeholder="wamco"
+                      className="text-[12px] font-[family-name:var(--font-mono)] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink placeholder:text-ink-soft/50 w-40"
+                    />
+                    <button
+                      onClick={() => handleSubdomainSave(t.id)}
+                      className="text-[11.5px] px-2 py-1 rounded-[3px] bg-teal-deep text-white hover:bg-teal transition-colors"
+                    >
+                      Save
+                    </button>
+                    {subdomainError && <span className="text-[11.5px] text-red">{subdomainError}</span>}
+                  </div>
+                )}
                 <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
                   {t.subscribed_at
                     ? `subscribed ${new Date(t.subscribed_at).toLocaleDateString()}`

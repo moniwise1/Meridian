@@ -181,6 +181,31 @@ stops you from giving it one too (`api.yourcompany.com`) — just remember to
 update `NEXT_PUBLIC_API_BASE` (frontend, triggers a rebuild) and
 `FRONTEND_ORIGIN` (backend) to match if you do.
 
+## 9. Optional: per-tenant subdomains (wamco.yourcompany.com)
+
+Each paying tenant gets a real subdomain, auto-assigned from their company
+name at registration, and it's a genuine login boundary - not just
+branding - see `app/api/routes_auth.py`'s `login()` and
+`app/tenant_slug.py`. Wiring it up:
+
+1. **Frontend service** → Settings → Networking → Custom Domain → add
+   `*.yourcompany.com` (a literal `*`, not a specific subdomain) — this is
+   ONE custom domain entry that covers every possible subdomain, not one
+   per tenant, so it doesn't eat into your plan's custom-domain limit no
+   matter how many companies sign up. Railway gives you a CNAME + TXT
+   record, same as any other custom domain.
+2. Add both records at your DNS provider, same as step 8 above, with `*`
+   as the record name instead of `www`.
+3. That's it on the infrastructure side - the frontend already knows how
+   to read the subdomain out of the browser's own URL
+   (`lib/subdomain.ts`) and the backend already enforces it as a real
+   boundary. Nothing else to configure unless the apex domain itself ever
+   changes, in which case update `NEXT_PUBLIC_APEX_DOMAIN` (frontend).
+
+**A platform-staff-only escape hatch**: `/platform/tenants` lets you view
+and rename any tenant's subdomain by hand (a typo in the auto-generated
+slug, a rename request) — no tenant-admin self-service for this yet.
+
 ## Optional: Redis, before you scale the backend past one replica
 
 The rate limiter, login cooldown, and query cache (`app/security/

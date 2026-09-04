@@ -25,8 +25,10 @@ from app.security.login_cooldown import (
     check_platform_login_cooldown, record_platform_login_failure, record_platform_login_success,
     LoginCooldownActive,
 )
+import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
+from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
 from app.billing.plans import PLANS
 
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -219,6 +221,7 @@ class TenantUserOut(BaseModel):
 class TenantOut(BaseModel):
     id: str
     name: str
+    subdomain: str | None
     subscription_status: str
     tier: str
     plan: str | None
@@ -233,7 +236,8 @@ class TenantOut(BaseModel):
 def _tenant_out(db: Session, t: Tenant) -> TenantOut:
     users = db.query(User).filter_by(tenant_id=t.id).order_by(User.created_at.asc()).all()
     return TenantOut(
-        id=t.id, name=t.name, subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
+        id=t.id, name=t.name, subdomain=t.subdomain,
+        subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
         created_at=t.created_at.isoformat(),
         subscribed_at=t.paid_at.isoformat() if t.paid_at else None,
         subscription_expires_at=t.subscription_expires_at.isoformat() if t.subscription_expires_at else None,
@@ -264,6 +268,11 @@ def get_tenant(tenant_id: str, db: Session = Depends(get_db),
 
 class TenantUpdate(BaseModel):
     name: str | None = None
+    # A real login boundary (see routes_auth.py's login()) - editable here
+    # since this is a functional identifier a company might reasonably
+    # want changed (a typo in the auto-generated slug, a rename), not
+    # just cosmetic. No tenant-admin self-service for this yet, only staff.
+    subdomain: str | None = None
     subscription_status: str | None = None
     # Which plan to comp them onto when setting subscription_status to
     # "active" by hand (see app/billing/plans.py) - optional; defaults to
@@ -287,6 +296,19 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
     if body.name is not None:
         changes["name"] = {"from": t.name, "to": body.name}
         t.name = body.name
+    if body.subdomain is not None:
+        import re
+        from app.tenant_slug import RESERVED_SUBDOMAINS
+        candidate = body.subdomain.strip().lower()
+        if not re.fullmatch(r"[a-z0-9-]{1,63}", candidate):
+            raise HTTPException(400, "Subdomain can only contain lowercase letters, numbers, and hyphens.")
+        if candidate in RESERVED_SUBDOMAINS:
+            raise HTTPException(400, f"'{candidate}' is reserved and can't be used as a subdomain.")
+        clash = db.query(Tenant).filter(Tenant.subdomain == candidate, Tenant.id != tenant_id).first()
+        if clash:
+            raise HTTPException(400, f"'{candidate}' is already in use by another tenant.")
+        changes["subdomain"] = {"from": t.subdomain, "to": candidate}
+        t.subdomain = candidate
     if body.subscription_status is not None:
         changes["subscription_status"] = {"from": t.subscription_status, "to": body.subscription_status}
         t.subscription_status = body.subscription_status
@@ -568,6 +590,37 @@ def list_platform_audit(limit: int = 200, db: Session = Depends(get_db),
 @router.get("/audit/verify")
 def verify_platform_audit(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
     return verify_chain(db, "platform")
+
+
+# ---------- Externally-anchored checkpoints (app/audit/anchor.py) ----------
+# Owner-only to PUBLISH (a real write to an external system, using a real
+# credential - same gating tier as staff/tenant management, not the
+# read-only audit views above). Any staff role can VERIFY, matching this
+# section's own "seeing isn't as sensitive as changing" convention.
+
+@router.post("/audit/checkpoint")
+def publish_audit_checkpoint(db: Session = Depends(get_db),
+                              ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    try:
+        result = publish_checkpoint(db)
+    except AnchorNotConfigured as e:
+        raise HTTPException(400, str(e))
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"GitHub rejected the checkpoint write ({e.response.status_code}).")
+    audit.log(db, "platform", "audit_checkpoint_published", ctx.staff_id,
+              detail={"root_hash": result["checkpoint"]["root_hash"], "commit_url": result["commit_url"]})
+    return result
+
+
+@router.get("/audit/checkpoint/latest")
+def get_latest_audit_checkpoint(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
+    try:
+        checkpoint = fetch_latest_checkpoint()
+    except AnchorNotConfigured as e:
+        raise HTTPException(400, str(e))
+    if not checkpoint:
+        raise HTTPException(404, "No checkpoint has been published yet.")
+    return verify_checkpoint(db, checkpoint)
 
 
 # ---------- Health snapshot ----------

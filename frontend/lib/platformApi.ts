@@ -108,6 +108,7 @@ export type PlatformTenantUser = {
 export type PlatformTenant = {
   id: string;
   name: string;
+  subdomain: string | null;
   subscription_status: string;
   tier: "free" | "pro";
   plan: "basic" | "pro" | "premium" | null;
@@ -128,7 +129,7 @@ export async function listTenants(): Promise<PlatformTenant[]> {
 
 export async function updateTenant(
   tenantId: string,
-  updates: { name?: string; subscription_status?: string; plan?: string },
+  updates: { name?: string; subdomain?: string; subscription_status?: string; plan?: string },
 ): Promise<PlatformTenant> {
   const res = await fetch(`${API_BASE}/platform/tenants/${tenantId}`, {
     method: "PATCH",
@@ -285,6 +286,49 @@ export async function verifyPlatformAudit(): Promise<PlatformAuditVerification> 
   await handleAuthFailure(res);
   if (!res.ok) throw new Error("Could not verify the activity log.");
   return res.json();
+}
+
+// ---------- Externally-anchored checkpoints (app/audit/anchor.py) ----------
+// Anchors every tenant's current chain head to a GitHub repo via a real
+// commit - the fix for the one thing verifyPlatformAudit() above can't
+// catch on its own: a full fabricated-but-self-consistent chain
+// replacement (see the backend module's docstring for why).
+
+export type AuditCheckpoint = {
+  generated_at: string;
+  root_hash: string;
+  tenant_heads: Record<string, string>;
+};
+
+export type PublishCheckpointResult = {
+  checkpoint: AuditCheckpoint;
+  commit_sha: string;
+  commit_url: string;
+};
+
+export async function publishAuditCheckpoint(): Promise<PublishCheckpointResult> {
+  const res = await fetch(`${API_BASE}/platform/audit/checkpoint`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not publish a checkpoint.");
+  return body;
+}
+
+export type CheckpointVerification = {
+  verified: boolean;
+  checkpoint: AuditCheckpoint;
+  tenants: Record<string, { anchored_hash_still_present: boolean; current_chain_intact: boolean; verified: boolean }>;
+};
+
+export async function getLatestAuditCheckpoint(): Promise<CheckpointVerification> {
+  const res = await fetch(`${API_BASE}/platform/audit/checkpoint/latest`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load the latest checkpoint.");
+  return body;
 }
 
 // ---------- Health snapshot ----------
