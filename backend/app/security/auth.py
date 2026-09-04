@@ -91,9 +91,10 @@ def create_pre_auth_token(user_id: str, tenant_id: str, purpose: str) -> str:
 
 def decode_pre_auth_token(token: str, expected_purpose: str) -> dict:
     """Returns {"sub": user_id, "tenant_id": tenant_id} or raises
-    HTTPException(401) - used only by the two login-time MFA endpoints,
-    never by get_current_user (a pre-auth token is explicitly rejected
-    there, see below)."""
+    HTTPException(401) - used by the login-time MFA endpoints and by the
+    cross-subdomain session handoff (app/api/routes_auth.py's
+    /auth/handoff/redeem, purpose="handoff"), never by get_current_user
+    (a pre-auth token is explicitly rejected there, see below)."""
     try:
         payload = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:

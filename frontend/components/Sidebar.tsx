@@ -38,6 +38,7 @@ export default function Sidebar() {
   if (
     pathname === "/login" ||
     pathname === "/status" ||
+    pathname === "/auth/handoff" ||
     pathname.startsWith("/platform") ||
     (pathname === "/" && !session)
   ) {

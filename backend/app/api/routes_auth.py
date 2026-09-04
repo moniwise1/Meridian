@@ -15,7 +15,7 @@ from app.db.session import get_db
 from app.db.models import Tenant, User
 from app.security.auth import (
     hash_password, verify_password, create_access_token, create_pre_auth_token,
-    get_current_user, require_role, AuthContext,
+    decode_pre_auth_token, get_current_user, require_role, AuthContext,
 )
 from app.security.login_cooldown import (
     check_tenant_login_cooldown, record_tenant_login_failure, record_tenant_login_success,
@@ -54,6 +54,10 @@ class TokenResponse(BaseModel):
     user_id: str
     role: str
     subdomain: str | None = None
+    # Only populated by /auth/handoff/redeem below - register()/login()
+    # leave this unset since the frontend already has the email from
+    # whatever form the caller just typed it into.
+    email: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -101,6 +105,62 @@ def get_tenant_by_subdomain(subdomain: str, db: Session = Depends(get_db)):
     if not tenant:
         raise HTTPException(404, "No workspace found at this address.")
     return TenantBySubdomain(name=tenant.name, subdomain=tenant.subdomain)
+
+
+# ---------- Cross-subdomain session handoff ----------
+# Logging in on the generic domain (www/bare) and landing on
+# wamco.getmeridiananalytics.com afterward means handing a session across
+# to a genuinely different browser origin - sessionStorage is per-origin
+# by design (that isolation is exactly what makes one tenant's subdomain
+# unable to read another's session), so this can't be a plain redirect.
+#
+# Deliberately NOT "put the real access_token in the URL and let the
+# other side read it" (the old OAuth "implicit flow" pattern, now
+# considered unsafe precisely because a long-lived credential sitting in
+# a URL can linger in browser history/referrers/logs). Instead, a short-
+# lived (5 min, same TTL as the login-time MFA pre-auth tokens - reuses
+# the exact same create_pre_auth_token/decode_pre_auth_token machinery,
+# purpose="handoff") single-purpose token goes in the URL FRAGMENT
+# specifically (never sent to any server, browser-only) - even if it
+# lingers somewhere, it can only ever be redeemed for a session belonging
+# to the user who already had one, never a privilege escalation, and only
+# within its short window.
+#
+# Not single-use-tracked (no server-side revocation list for it) - the
+# short TTL is doing that job instead, same trade-off the MFA pre-auth
+# tokens already make. A production system with Redis available could
+# tighten this to one-time-use; not implemented here.
+
+class HandoffTokenOut(BaseModel):
+    handoff_token: str
+
+
+@router.post("/handoff/create", response_model=HandoffTokenOut)
+def create_handoff(ctx: AuthContext = Depends(get_current_user)):
+    """Called by the frontend, authenticated with whatever access_token it
+    JUST obtained (from register/login/MFA), right before navigating to
+    the tenant's own subdomain - minted at the moment of redirect, not
+    earlier, so its 5-minute window is never eaten by however long MFA
+    setup/entry took first."""
+    return HandoffTokenOut(handoff_token=create_pre_auth_token(ctx.user_id, ctx.tenant_id, purpose="handoff"))
+
+
+@router.post("/handoff/redeem", response_model=TokenResponse)
+def redeem_handoff(body: HandoffTokenOut, db: Session = Depends(get_db)):
+    """Public - the whole point is the caller has NO session yet on this
+    origin. Issues a genuinely fresh access_token rather than reusing
+    anything from the original login, so the handoff token itself never
+    needs to carry the real session material."""
+    claims = decode_pre_auth_token(body.handoff_token, expected_purpose="handoff")
+    user = db.query(User).filter_by(id=claims["sub"], tenant_id=claims["tenant_id"]).first()
+    if not user:
+        raise HTTPException(401, "This link has expired. Please sign in again.")
+    tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
+    token = create_access_token(user.id, user.tenant_id, user.role)
+    return TokenResponse(
+        access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+        subdomain=tenant.subdomain if tenant else None, email=user.email,
+    )
 
 
 @router.post("/register", response_model=TokenResponse)
