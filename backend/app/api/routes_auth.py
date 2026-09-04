@@ -18,6 +18,7 @@ from app.security.login_cooldown import (
     check_tenant_login_cooldown, record_tenant_login_failure, record_tenant_login_success,
     LoginCooldownActive,
 )
+from app.billing.plans import seat_limit_for, get_plan
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -96,21 +97,30 @@ def add_user(body: AddUserRequest, db: Session = Depends(get_db),
     if db.query(User).filter_by(email=body.email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
-    # Free-tier cap: one account per organization. Pro (an active paid
-    # subscription - see Tenant.tier) removes it entirely; no separate cap
-    # for pro is specified anywhere else in this app, so it's unbounded.
-    # 402, matching require_active_subscription's convention elsewhere
+    # Seat cap: each plan (see app/billing/plans.py) allows a different
+    # number of accounts - free is 1 (the admin who registered), Basic 3,
+    # Pro 10, Premium unlimited. 402, matching
+    # require_active_subscription's convention elsewhere
     # (app/security/auth.py) - this is a plan limit, not a permissions
     # error, and the caller IS allowed to act, just not on this plan.
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     if not tenant:
         raise HTTPException(404, "Tenant not found.")
-    if tenant.tier == "free":
+    seat_limit = seat_limit_for(tenant.plan if tenant.tier == "pro" else None)
+    if seat_limit is not None:
         existing_count = db.query(User).filter_by(tenant_id=ctx.tenant_id).count()
-        if existing_count >= 1:
+        if existing_count >= seat_limit:
+            if tenant.tier == "free":
+                raise HTTPException(
+                    402,
+                    "The free plan is limited to 1 account. Subscribe on the Billing page to add teammates.",
+                )
+            plan = get_plan(tenant.plan) if tenant.plan else None
+            plan_label = plan.label if plan else "current"
             raise HTTPException(
                 402,
-                "The free plan is limited to 1 account. Upgrade to Pro on the Billing page to add teammates.",
+                f"The {plan_label} plan is limited to {seat_limit} accounts. "
+                f"Upgrade on the Billing page to add more teammates.",
             )
 
     user = User(

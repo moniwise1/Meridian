@@ -27,6 +27,7 @@ from app.security.login_cooldown import (
 )
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
+from app.billing.plans import PLANS
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 
@@ -220,6 +221,7 @@ class TenantOut(BaseModel):
     name: str
     subscription_status: str
     tier: str
+    plan: str | None
     created_at: str
     subscribed_at: str | None
     subscription_expires_at: str | None
@@ -231,7 +233,7 @@ class TenantOut(BaseModel):
 def _tenant_out(db: Session, t: Tenant) -> TenantOut:
     users = db.query(User).filter_by(tenant_id=t.id).order_by(User.created_at.asc()).all()
     return TenantOut(
-        id=t.id, name=t.name, subscription_status=t.subscription_status, tier=t.tier,
+        id=t.id, name=t.name, subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
         created_at=t.created_at.isoformat(),
         subscribed_at=t.paid_at.isoformat() if t.paid_at else None,
         subscription_expires_at=t.subscription_expires_at.isoformat() if t.subscription_expires_at else None,
@@ -263,6 +265,13 @@ def get_tenant(tenant_id: str, db: Session = Depends(get_db),
 class TenantUpdate(BaseModel):
     name: str | None = None
     subscription_status: str | None = None
+    # Which plan to comp them onto when setting subscription_status to
+    # "active" by hand (see app/billing/plans.py) - optional; defaults to
+    # "premium" (see below) rather than leaving it unset, since an unset
+    # plan on an "active" tenant would otherwise fall back to the FREE
+    # tier's 1-seat cap (seat_limit_for(None) == 1) despite being marked
+    # active - the opposite of what a comp override is for.
+    plan: str | None = None
 
 
 @router.patch("/tenants/{tenant_id}", response_model=TenantOut)
@@ -271,6 +280,9 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
     t = db.query(Tenant).filter_by(id=tenant_id).first()
     if not t:
         raise HTTPException(404, "Tenant not found.")
+    if body.plan is not None and body.plan not in PLANS and body.plan != "":
+        raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}, or '' to clear it.")
+
     changes = {}
     if body.name is not None:
         changes["name"] = {"from": t.name, "to": body.name}
@@ -289,11 +301,18 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
             if not t.paid_at:
                 t.paid_at = datetime.utcnow()
             t.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+            t.plan = body.plan if body.plan else (t.plan or "premium")
         else:
             # Anything else ("none"/"pending"/"cancelled"/"refunded") is
             # not currently-paying by definition (Tenant.tier), so there's
-            # no live expiry to show.
+            # no live expiry or plan to show.
             t.subscription_expires_at = None
+            t.plan = None
+    elif body.plan is not None:
+        # Changing just the plan on an already-active tenant (e.g.
+        # comping them up from Basic to Premium) without touching status.
+        changes["plan"] = {"from": t.plan, "to": body.plan or None}
+        t.plan = body.plan or None
     db.commit()
     db.refresh(t)
     audit.log(db, tenant_id, "platform_tenant_updated", detail={"by_staff_id": ctx.staff_id, "changes": changes})

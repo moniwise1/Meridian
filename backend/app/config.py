@@ -70,19 +70,29 @@ class Settings(BaseSettings):
     llm_model_fast: str = "claude-haiku-4-5-20251001"
     llm_model_reasoning: str = "claude-sonnet-5"
 
-    # Billing (app/billing/paystack.py, app/api/routes_billing.py). Paid-
-    # from-onset model: a tenant is charged immediately on subscribe, with a
-    # self-serve full refund if they cancel within billing_refund_window_days.
+    # Billing (app/billing/paystack.py, app/billing/plans.py,
+    # app/api/routes_billing.py). Paid-from-onset model: a tenant is
+    # charged immediately on subscribe, with a self-serve full refund if
+    # they cancel within billing_refund_window_days.
     paystack_secret_key: str = ""
     paystack_public_key: str = ""
-    paystack_plan_code: str = ""
-    # Smallest currency unit (kobo for NGN, cents for USD, pesewas for GHS,
-    # ...) - must match the plan's real price. Passed explicitly on every
-    # initialize call rather than relying on Paystack's documented (but
-    # unverified here - no live account to test against) behavior of
-    # inferring the amount from the plan code alone.
-    paystack_plan_amount: int = 0
     billing_refund_window_days: int = 7
+
+    # Three plans (Basic/Pro/Premium), each its own real Paystack Plan
+    # object - not one plan reused at different prices, since Paystack's
+    # own model is "a plan has one price". Amount is the smallest currency
+    # unit (kobo for NGN) - must match the real price configured on each
+    # Paystack plan exactly; passed explicitly on every initialize call
+    # rather than relying on Paystack's documented (but unverified here -
+    # no live account to test against) behavior of inferring the amount
+    # from the plan code alone. See app/billing/plans.py for where these
+    # combine with each plan's seat limit and feature copy.
+    paystack_plan_code_basic: str = ""
+    paystack_plan_amount_basic: int = 500_000  # NGN 5,000
+    paystack_plan_code_pro: str = ""
+    paystack_plan_amount_pro: int = 999_900  # NGN 9,999
+    paystack_plan_code_premium: str = ""
+    paystack_plan_amount_premium: int = 2_500_000  # NGN 25,000
 
     class Config:
         env_file = ".env"

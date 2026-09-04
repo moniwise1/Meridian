@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  listUsers, addTeammate, updateUserRowScope, updateUserRole, deleteUser, getBillingStatus,
-  type TeamUser, type BillingStatus,
+  listUsers, addTeammate, updateUserRowScope, updateUserRole, deleteUser, getBillingStatus, listPlans,
+  type TeamUser, type BillingStatus, type Plan,
 } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 
@@ -31,6 +31,7 @@ function parseRowScopeText(text: string): Record<string, string[]> {
 export default function TeamPage() {
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [error, setError] = useState("");
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [addingOpen, setAddingOpen] = useState(false);
@@ -46,6 +47,7 @@ export default function TeamPage() {
       .catch(() => {
         /* Team page still works without this - it only adds the plan-limit banner. */
       });
+    listPlans().then(setPlans).catch(() => {});
   }
 
   useEffect(refresh, []);
@@ -79,10 +81,16 @@ export default function TeamPage() {
     );
   }
 
-  // Source of truth for the limit is the backend (app/api/routes_auth.py's
-  // add_user, 402 on a free-tier 2nd account) - this is just so the UI
-  // doesn't invite someone to fill out a form that's guaranteed to fail.
-  const atFreeLimit = billing?.tier === "free" && users.length >= 1;
+  // Source of truth for the limit is always the backend
+  // (app/api/routes_auth.py's add_user, 402 once a plan's seat cap is
+  // hit) - this is just so the UI doesn't invite someone to fill out a
+  // form that's guaranteed to fail. Free (no plan) is a hardcoded 1-seat
+  // cap on the backend (see seat_limit_for(None) in
+  // app/billing/plans.py); a paid plan's real limit comes from
+  // GET /billing/plans, keyed by billing.plan.
+  const currentPlan = billing?.plan ? plans.find((p) => p.key === billing.plan) : null;
+  const seatLimit = billing?.tier === "free" ? 1 : currentPlan?.seat_limit ?? null;
+  const atSeatLimit = seatLimit !== null && users.length >= seatLimit;
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-12">
@@ -96,18 +104,31 @@ export default function TeamPage() {
       {billing && (
         <div
           className={`mb-6 rounded-[4px] border px-4 py-3 text-[12.5px] ${
-            billing.tier === "pro" ? "border-line bg-panel text-ink-soft" : "border-amber bg-amber-soft text-amber"
+            seatLimit === null ? "border-line bg-panel text-ink-soft" : atSeatLimit ? "border-amber bg-amber-soft text-amber" : "border-line bg-panel text-ink-soft"
           }`}
         >
-          {billing.tier === "pro" ? (
-            <>Pro plan — no limit on the number of teammate accounts.</>
-          ) : (
+          {billing.tier === "free" ? (
             <>
               Free plan — limited to 1 account ({users.length} of 1 used).{" "}
               <Link href="/billing" className="underline hover:no-underline">
-                Upgrade to Pro
+                Subscribe
               </Link>{" "}
               to add teammates.
+            </>
+          ) : seatLimit === null ? (
+            <>{currentPlan?.label ?? "Your plan"} — no limit on the number of teammate accounts.</>
+          ) : (
+            <>
+              {currentPlan?.label ?? "Your plan"} — up to {seatLimit} accounts ({users.length} of {seatLimit} used).
+              {atSeatLimit && (
+                <>
+                  {" "}
+                  <Link href="/billing" className="underline hover:no-underline">
+                    Upgrade
+                  </Link>{" "}
+                  to add more teammates.
+                </>
+              )}
             </>
           )}
         </div>
@@ -119,7 +140,7 @@ export default function TeamPage() {
         {!addingOpen ? (
           <button
             onClick={() => setAddingOpen(true)}
-            disabled={atFreeLimit}
+            disabled={atSeatLimit}
             className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
           >
             Add teammate

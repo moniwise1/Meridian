@@ -5,12 +5,8 @@ import { listTenants, updateTenant, deleteTenant, type PlatformTenant } from "@/
 import { loadPlatformSession } from "@/lib/platformAuth";
 
 const STATUS_OPTIONS = ["none", "pending", "active", "cancelled", "refunded"];
-
-const TIER_LABEL: Record<string, string> = { free: "Free", pro: "Pro" };
-const TIER_COLOR: Record<string, string> = {
-  free: "bg-line text-ink-soft",
-  pro: "bg-teal-deep text-white",
-};
+const PLAN_OPTIONS = ["basic", "pro", "premium"];
+const PLAN_LABEL: Record<string, string> = { basic: "Basic", pro: "Pro", premium: "Premium" };
 
 export default function PlatformTenantsPage() {
   const [tenants, setTenants] = useState<PlatformTenant[]>([]);
@@ -32,6 +28,15 @@ export default function PlatformTenantsPage() {
   async function handleStatusChange(tenantId: string, status: string) {
     try {
       await updateTenant(tenantId, { subscription_status: status });
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function handlePlanChange(tenantId: string, plan: string) {
+    try {
+      await updateTenant(tenantId, { plan });
       refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -67,8 +72,12 @@ export default function PlatformTenantsPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <div className="text-[13.5px] text-ink truncate">{t.name}</div>
-                  <span className={`text-[10.5px] px-1.5 py-0.5 rounded-[3px] shrink-0 ${TIER_COLOR[t.tier]}`}>
-                    {TIER_LABEL[t.tier]}
+                  <span
+                    className={`text-[10.5px] px-1.5 py-0.5 rounded-[3px] shrink-0 ${
+                      t.tier === "pro" ? "bg-teal-deep text-white" : "bg-line text-ink-soft"
+                    }`}
+                  >
+                    {t.plan ? PLAN_LABEL[t.plan] : t.tier === "pro" ? "Pro" : "Free"}
                   </span>
                 </div>
                 <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
@@ -91,6 +100,20 @@ export default function PlatformTenantsPage() {
                 </button>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {t.tier === "pro" && (
+                  <select
+                    value={t.plan ?? ""}
+                    onChange={(e) => handlePlanChange(t.id, e.target.value)}
+                    title="Which plan to comp this tenant onto - only affects seat/connection limits, not the real Paystack subscription."
+                    className="text-[12px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink"
+                  >
+                    {PLAN_OPTIONS.map((p) => (
+                      <option key={p} value={p}>
+                        {PLAN_LABEL[p]}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <select
                   value={t.subscription_status}
                   onChange={(e) => handleStatusChange(t.id, e.target.value)}
