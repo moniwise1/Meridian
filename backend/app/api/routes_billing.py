@@ -44,11 +44,14 @@ class PlanOut(BaseModel):
 
 
 @router.get("/plans", response_model=list[PlanOut])
-def list_plans(ctx: AuthContext = Depends(get_current_user)):
+def list_plans():
     """Single source of truth for pricing-card content - see
-    app/billing/plans.py. Requires auth (same as /billing/status) purely
-    because there's nowhere in this app for an unauthenticated visitor to
-    land yet, not because the pricing itself is sensitive."""
+    app/billing/plans.py. Deliberately public, no auth (unlike every other
+    /billing/* route) - it now backs the public marketing landing page's
+    pricing section (frontend/components/LandingPage.tsx), and none of
+    plan/label/amount/seat_limit/connection_limit/features/tagline/
+    configured is tenant-specific or sensitive; it's the same content a
+    real SaaS pricing page always shows a logged-out visitor."""
     return [
         PlanOut(
             key=p.key, label=p.label, amount=p.amount, seat_limit=p.seat_limit,

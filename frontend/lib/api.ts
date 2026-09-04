@@ -106,8 +106,18 @@ export async function getMfaStatus(): Promise<MfaStatus> {
   return res.json();
 }
 
-export async function startMfaSetup(): Promise<MfaEnrollment> {
-  const res = await fetch(`${API_BASE}/auth/mfa/setup`, { method: "POST", headers: authHeaders() });
+export async function startMfaSetup(signal?: AbortSignal): Promise<MfaEnrollment> {
+  // signal matters here specifically: /auth/mfa/setup is NOT a read — every
+  // call generates a new secret server-side and invalidates whatever was
+  // pending before. A caller effect that fires twice (React Strict Mode in
+  // dev, or any other legitimate remount) and merely IGNORES the stale
+  // response client-side can still lose a race server-side if the stale
+  // request happens to complete after the real one — the DB would then
+  // hold a secret the screen never showed. Passing an AbortSignal lets
+  // MfaEnroll actually cancel the stale request instead, so it can never
+  // win that race. Caught live against a real dev server, not reasoned
+  // about — see MfaEnroll.tsx's own comment.
+  const res = await fetch(`${API_BASE}/auth/mfa/setup`, { method: "POST", headers: authHeaders(), signal });
   await handleAuthFailure(res);
   if (!res.ok) throw new Error("Could not start two-factor setup.");
   return res.json();
@@ -159,11 +169,13 @@ export async function verifyMfaLogin(preAuthToken: string, code: string): Promis
   return body;
 }
 
-export async function setupMfaLogin(preAuthToken: string): Promise<MfaEnrollment> {
+export async function setupMfaLogin(preAuthToken: string, signal?: AbortSignal): Promise<MfaEnrollment> {
+  // Same non-idempotent-request race as startMfaSetup above — see its comment.
   const res = await fetch(`${API_BASE}/auth/mfa/setup-login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pre_auth_token: preAuthToken }),
+    signal,
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not start two-factor setup.");
@@ -404,8 +416,16 @@ export type Plan = {
 };
 
 export async function listPlans(): Promise<Plan[]> {
-  const res = await fetch(`${API_BASE}/billing/plans`, { headers: authHeaders() });
-  await handleAuthFailure(res);
+  // Deliberately unauthenticated-safe: this backs both the (authenticated)
+  // Billing page AND the public marketing landing page's pricing section,
+  // and the backend route itself requires no auth at all now (see
+  // routes_billing.py's list_plans docstring). authHeaders() would throw
+  // for a logged-out visitor, so send it only when a session actually
+  // exists rather than requiring one.
+  const session = loadSession();
+  const res = await fetch(`${API_BASE}/billing/plans`, {
+    headers: session ? { Authorization: `Bearer ${session.token}` } : {},
+  });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not load plans.");
   return body;
