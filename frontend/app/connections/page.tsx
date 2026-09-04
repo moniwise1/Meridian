@@ -8,6 +8,7 @@ const DB_KINDS = [
   { value: "postgres", label: "PostgreSQL", defaultPort: "5432" },
   { value: "mysql", label: "MySQL / MariaDB", defaultPort: "3306" },
   { value: "mssql", label: "SQL Server", defaultPort: "1433" },
+  { value: "snowflake", label: "Snowflake", defaultPort: "443" },
 ];
 
 const emptyForm = {
@@ -19,6 +20,11 @@ const emptyForm = {
   username: "",
   password: "",
   tables: "",
+  // Snowflake-only - see app/connectors/snowflake.py. Sent as
+  // extra_config on submit, ignored by every other connector kind.
+  warehouse: "",
+  schema: "",
+  role: "",
 };
 
 export default function ConnectionsPage() {
@@ -35,16 +41,24 @@ export default function ConnectionsPage() {
 
   useEffect(refresh, []);
 
+  const isSnowflake = form.kind === "snowflake";
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setSubmitting(true);
     try {
       const tableAllowlist = form.tables.split(",").map((t) => t.trim()).filter(Boolean);
+      const extraConfig: Record<string, string> = {};
+      if (isSnowflake) {
+        extraConfig.warehouse = form.warehouse.trim();
+        if (form.schema.trim()) extraConfig.schema = form.schema.trim();
+        if (form.role.trim()) extraConfig.role = form.role.trim();
+      }
       await createConnection({
         name: form.name, kind: form.kind, host: form.host, port: Number(form.port),
         database: form.database, username: form.username, password: form.password,
-        table_allowlist: tableAllowlist, column_policy: {},
+        table_allowlist: tableAllowlist, column_policy: {}, extra_config: extraConfig,
       });
       setForm(emptyForm);
       refresh();
@@ -98,7 +112,7 @@ export default function ConnectionsPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="bg-panel border border-line rounded-[4px] p-5">
-        <div className="text-[13px] text-ink-soft mb-4">Connect a PostgreSQL, MySQL, or SQL Server database</div>
+        <div className="text-[13px] text-ink-soft mb-4">Connect a PostgreSQL, MySQL, SQL Server, or Snowflake database</div>
 
         <div className="mb-3">
           <label className="flex flex-col gap-1">
@@ -124,11 +138,27 @@ export default function ConnectionsPage() {
         <div className="grid grid-cols-2 gap-3">
           <Field label="Connection name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="Sales warehouse" />
           <Field label="Database" value={form.database} onChange={(v) => setForm({ ...form, database: v })} placeholder="demo_company" />
-          <Field label="Host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} placeholder="127.0.0.1" />
-          <Field label="Port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="5432" />
+          <Field
+            label={isSnowflake ? "Account identifier" : "Host"}
+            value={form.host}
+            onChange={(v) => setForm({ ...form, host: v })}
+            placeholder={isSnowflake ? "xy12345.us-east-1" : "127.0.0.1"}
+          />
+          {!isSnowflake && (
+            <Field label="Port" value={form.port} onChange={(v) => setForm({ ...form, port: v })} placeholder="5432" />
+          )}
           <Field label="Read-only username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} placeholder="analytics_readonly" />
           <Field label="Password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} placeholder="••••••••" type="password" />
         </div>
+
+        {isSnowflake && (
+          <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-line">
+            <Field label="Warehouse" value={form.warehouse} onChange={(v) => setForm({ ...form, warehouse: v })} placeholder="COMPUTE_WH" />
+            <Field label="Schema (optional, defaults to PUBLIC)" value={form.schema} onChange={(v) => setForm({ ...form, schema: v })} placeholder="PUBLIC" required={false} />
+            <Field label="Role (optional)" value={form.role} onChange={(v) => setForm({ ...form, role: v })} placeholder="ANALYST_RO" required={false} />
+          </div>
+        )}
+
         <div className="mt-3">
           <Field
             label="Authorized tables (comma-separated, optional)"

@@ -26,20 +26,38 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 # exists, so a plain new `Column(...)` on an existing model would silently
 # do nothing on any database that predates it and then blow up the first
 # time it's read or written. Each entry here is applied with a plain
-# `ADD COLUMN` (valid on both SQLite and Postgres) exactly once, tracked by
-# checking whether the column already exists - safe to run on every boot,
-# including a totally fresh database where create_all just made the column
-# already exist and every entry here becomes a no-op.
+# `ADD COLUMN` exactly once, tracked by checking whether the column
+# already exists - safe to run on every boot, including a totally fresh
+# database where create_all just made the column already exist and every
+# entry here becomes a no-op.
+#
+# The SQL type can be a plain string (used for every dialect) or a dict of
+# {dialect_name: type}, with "default" as the fallback for any dialect not
+# listed. A JSON-typed model column NEEDS this: a bare `Column(JSON, ...)`
+# on Postgres is only correctly read back as a dict by SQLAlchemy's own
+# JSON type when the underlying column is genuinely Postgres's native
+# `json` type - a generic `TEXT` column silently accepts the write (the
+# serialized string goes in fine) but comes back as a raw string on read,
+# not a parsed dict, since the JSON-aware bind/result processing SQLAlchemy
+# applies is tied to the dialect recognizing the column as JSON, not just
+# to the Python-side column type. Caught by actually reading a value back
+# after writing it through a migrated column, against real Postgres, not
+# by reasoning about it in the abstract - see the git history for the
+# specific real regression this fixed before it ever reached production.
 _ADDED_COLUMNS = [
     ("users", "created_at", "TIMESTAMP"),
     ("tenants", "subscription_expires_at", "TIMESTAMP"),
+    ("data_source_connections", "extra_config", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),
 ]
 
 
 def _run_light_migrations() -> None:
     inspector = inspect(engine)
+    dialect = engine.dialect.name
     with engine.begin() as conn:
         for table, column, sql_type in _ADDED_COLUMNS:
+            if isinstance(sql_type, dict):
+                sql_type = sql_type.get(dialect, sql_type["default"])
             existing = {c["name"] for c in inspector.get_columns(table)}
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))

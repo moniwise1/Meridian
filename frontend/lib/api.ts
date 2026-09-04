@@ -83,6 +83,9 @@ export type Connection = {
   verified_read_only: boolean;
   table_allowlist: string[];
   column_policy: Record<string, string[]>;
+  // Connector-specific params that don't fit host/port/database - e.g.
+  // Snowflake's {warehouse, schema?, role?}. Empty for every other kind.
+  extra_config: Record<string, string>;
 };
 
 export async function listConnections(): Promise<Connection[]> {
@@ -102,6 +105,7 @@ export type CreateConnectionInput = {
   password: string;
   table_allowlist: string[];
   column_policy: Record<string, string[]>;
+  extra_config?: Record<string, string>;
 };
 
 export async function createConnection(input: CreateConnectionInput): Promise<Connection> {

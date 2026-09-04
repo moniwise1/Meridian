@@ -23,7 +23,9 @@ from app.security.secrets import RedactedSecret
 
 class MySQLConnector(Connector):
     def __init__(self, host: str, port: int, database: str, username: str,
-                 password: RedactedSecret, timeout_seconds: int = 15):
+                 password: RedactedSecret, timeout_seconds: int = 15,
+                 extra_config: dict | None = None):
+        # extra_config: see the note in app/connectors/postgres.py - unused here.
         url = (
             f"mysql+pymysql://{username}:{password.reveal()}"
             f"@{host}:{port}/{database}"

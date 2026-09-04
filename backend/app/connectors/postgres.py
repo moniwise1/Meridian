@@ -20,7 +20,14 @@ from app.security.secrets import RedactedSecret
 
 class PostgresConnector(Connector):
     def __init__(self, host: str, port: int, database: str, username: str,
-                 password: RedactedSecret, timeout_seconds: int = 15):
+                 password: RedactedSecret, timeout_seconds: int = 15,
+                 extra_config: dict | None = None):
+        # extra_config exists for interface parity with every connector
+        # (build_connector()/routes_connections.py construct all of them
+        # identically) - unused here, Postgres needs nothing beyond
+        # host/port/database/username/password. See
+        # app/connectors/snowflake.py for the connector that actually
+        # needs it.
         self._timeout_seconds = timeout_seconds
         url = (
             f"postgresql+psycopg2://{username}:{password.reveal()}"

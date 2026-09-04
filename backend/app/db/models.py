@@ -98,6 +98,14 @@ class DataSourceConnection(Base):
     # Tables the AI is permitted to discover/query at all.
     table_allowlist = Column(JSON, default=list)
     verified_read_only = Column(Boolean, default=False)
+    # Connector-specific parameters that don't fit host/port/database/
+    # username/password - e.g. Snowflake's warehouse/role, which have no
+    # equivalent in a traditional host:port connection. Empty dict for
+    # every connector that doesn't need it (Postgres/MySQL/MSSQL today).
+    # A JSON blob here rather than a growing list of nullable columns, one
+    # per connector-specific quirk, most of which would be NULL for every
+    # other connector kind.
+    extra_config = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     tenant = relationship("Tenant", back_populates="connections")
