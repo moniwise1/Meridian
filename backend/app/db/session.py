@@ -53,6 +53,7 @@ _ADDED_COLUMNS = [
     ("tenants", "require_mfa", "BOOLEAN DEFAULT FALSE"),
     ("users", "totp_secret", "TEXT"),
     ("users", "totp_enabled", "BOOLEAN DEFAULT FALSE"),
+    ("tenants", "subdomain", "VARCHAR"),
 ]
 
 
@@ -67,10 +68,47 @@ def _run_light_migrations() -> None:
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
 
+        # A plain ADD COLUMN can't carry a UNIQUE constraint along with it
+        # portably across SQLite/Postgres in one statement - added as its
+        # own idempotent step. NULLs don't collide with each other under a
+        # unique index (standard SQL behavior), so this is safe to create
+        # before the backfill below has run on every existing row yet.
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_tenants_subdomain ON tenants (subdomain)"
+        ))
+
+
+def _backfill_tenant_subdomains() -> None:
+    """Every tenant created before this feature existed has subdomain=NULL
+    - since a subdomain is now a real login boundary (see
+    routes_auth.py's login()), a tenant stuck without one would have no
+    way to use it at all. Runs on every boot; a no-op once every tenant
+    has one."""
+    from app.db.models import Tenant
+    from app.tenant_slug import generate_unique_subdomain
+
+    db = SessionLocal()
+    try:
+        missing = db.query(Tenant).filter(Tenant.subdomain.is_(None)).all()
+        for tenant in missing:
+            tenant.subdomain = generate_unique_subdomain(db, tenant.name)
+            # generate_unique_subdomain's collision check queries the DB -
+            # without flushing, two tenants with the same name IN THIS
+            # SAME BATCH (real case: leftover same-named test tenants)
+            # wouldn't see each other's not-yet-flushed assignment and
+            # could both compute the identical "unique" subdomain, only
+            # to collide for real at commit. Caught live, not assumed.
+            db.flush()
+        if missing:
+            db.commit()
+    finally:
+        db.close()
+
 
 def init_db():
     Base.metadata.create_all(engine)
     _run_light_migrations()
+    _backfill_tenant_subdomains()
 
 
 def get_db():

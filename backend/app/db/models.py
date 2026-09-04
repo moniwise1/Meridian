@@ -25,6 +25,12 @@ class Tenant(Base):
     id = Column(String, primary_key=True, default=_uuid)
     name = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # A real functional boundary, not decoration: wamco.getmeridiananalytics.com
+    # only ever lets WAMCO's own users log in (see app/tenant_slug.py and
+    # routes_auth.py's login()). Auto-generated from `name` at registration,
+    # unique, editable afterward only by platform staff
+    # (PATCH /platform/tenants/{id}) - no tenant-admin self-service yet.
+    subdomain = Column(String, nullable=True, unique=True)
 
     # Billing (app/billing/paystack.py) - paid-from-onset model, not a
     # delayed-billing free trial. "none" until the first successful charge.

@@ -22,6 +22,7 @@ from app.security.login_cooldown import (
     LoginCooldownActive,
 )
 from app.billing.plans import seat_limit_for, get_plan
+from app.tenant_slug import generate_unique_subdomain
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -36,6 +37,14 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    # The subdomain the caller is currently on (wamco.getmeridiananalytics.com
+    # -> "wamco"), sent by the frontend - see lib/subdomain.ts. Omitted
+    # entirely (None) when signing in from the generic domain, which stays
+    # unrestricted - any valid user, any tenant, exactly as before this
+    # feature existed. Provided, it's a real boundary: the account must
+    # belong to the tenant that subdomain resolves to, or login is
+    # refused even with a correct password - see login() below.
+    subdomain: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -44,6 +53,7 @@ class TokenResponse(BaseModel):
     tenant_id: str
     user_id: str
     role: str
+    subdomain: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -67,6 +77,7 @@ class LoginResponse(BaseModel):
     tenant_id: str
     user_id: str
     role: str
+    subdomain: str | None = None
 
 
 class AddUserRequest(BaseModel):
@@ -75,12 +86,35 @@ class AddUserRequest(BaseModel):
     role: str = "analyst"
 
 
+class TenantBySubdomain(BaseModel):
+    name: str
+    subdomain: str
+
+
+@router.get("/tenant-by-subdomain/{subdomain}", response_model=TenantBySubdomain)
+def get_tenant_by_subdomain(subdomain: str, db: Session = Depends(get_db)):
+    """Public, unauthenticated - lets the login page show "Sign in to
+    WAMCO" before anyone's identified themselves. Deliberately returns
+    only the company's own display name - nothing here is sensitive, the
+    same reasoning already applied to making GET /billing/plans public."""
+    tenant = db.query(Tenant).filter_by(subdomain=subdomain).first()
+    if not tenant:
+        raise HTTPException(404, "No workspace found at this address.")
+    return TenantBySubdomain(name=tenant.name, subdomain=tenant.subdomain)
+
+
 @router.post("/register", response_model=TokenResponse)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter_by(email=body.email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     tenant = Tenant(name=body.company_name)
+    # Assigned once, here, and never silently regenerated - this is a real
+    # login boundary from this point on (see login() below), so a
+    # mid-life change would need a deliberate platform-staff edit
+    # (PATCH /platform/tenants/{id}), not happen as a side effect of
+    # something else.
+    tenant.subdomain = generate_unique_subdomain(db, body.company_name)
     db.add(tenant)
     db.commit()
     db.refresh(tenant)
@@ -94,7 +128,10 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     db.refresh(user)
 
     token = create_access_token(user.id, tenant.id, user.role)
-    return TokenResponse(access_token=token, tenant_id=tenant.id, user_id=user.id, role=user.role)
+    return TokenResponse(
+        access_token=token, tenant_id=tenant.id, user_id=user.id, role=user.role,
+        subdomain=tenant.subdomain,
+    )
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -116,12 +153,26 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     record_tenant_login_success(body.email)
 
     tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
+
+    # Subdomain boundary (wamco.getmeridiananalytics.com only lets WAMCO's
+    # own users in). Only enforced when the caller actually sent one - the
+    # generic domain's login stays fully unrestricted, unchanged from
+    # before this feature existed. Deliberately checked AFTER password
+    # verification (a wrong password still gets the ordinary "incorrect
+    # email or password", unaffected by this) and with ONE generic message
+    # regardless of whether the subdomain doesn't exist at all or just
+    # doesn't match this user's tenant - either way tells an attacker
+    # nothing more than "not this account, not here."
+    if body.subdomain and (not tenant or tenant.subdomain != body.subdomain):
+        raise HTTPException(403, "This account isn't part of this organization's workspace.")
+
     mfa_required = bool(user.totp_enabled) or bool(tenant and tenant.require_mfa)
     if not mfa_required:
         audit.log(db, user.tenant_id, "user_logged_in", user.id)
         token = create_access_token(user.id, user.tenant_id, user.role)
         return LoginResponse(
             access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+            subdomain=tenant.subdomain if tenant else None,
         )
 
     # MFA needed. Withhold a real session until a second endpoint
@@ -133,6 +184,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         return LoginResponse(
             mfa_required=True, mfa_setup_required=False, pre_auth_token=pre_auth_token,
             tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+            subdomain=tenant.subdomain if tenant else None,
         )
     # Tenant policy requires MFA but this user hasn't enrolled yet (e.g.
     # added before the policy existed, or before their first login since
@@ -141,6 +193,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     return LoginResponse(
         mfa_required=True, mfa_setup_required=True, pre_auth_token=pre_auth_token,
         tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+        subdomain=tenant.subdomain if tenant else None,
     )
 
 

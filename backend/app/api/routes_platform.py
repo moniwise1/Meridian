@@ -219,6 +219,7 @@ class TenantUserOut(BaseModel):
 class TenantOut(BaseModel):
     id: str
     name: str
+    subdomain: str | None
     subscription_status: str
     tier: str
     plan: str | None
@@ -233,7 +234,8 @@ class TenantOut(BaseModel):
 def _tenant_out(db: Session, t: Tenant) -> TenantOut:
     users = db.query(User).filter_by(tenant_id=t.id).order_by(User.created_at.asc()).all()
     return TenantOut(
-        id=t.id, name=t.name, subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
+        id=t.id, name=t.name, subdomain=t.subdomain,
+        subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
         created_at=t.created_at.isoformat(),
         subscribed_at=t.paid_at.isoformat() if t.paid_at else None,
         subscription_expires_at=t.subscription_expires_at.isoformat() if t.subscription_expires_at else None,
@@ -264,6 +266,11 @@ def get_tenant(tenant_id: str, db: Session = Depends(get_db),
 
 class TenantUpdate(BaseModel):
     name: str | None = None
+    # A real login boundary (see routes_auth.py's login()) - editable here
+    # since this is a functional identifier a company might reasonably
+    # want changed (a typo in the auto-generated slug, a rename), not
+    # just cosmetic. No tenant-admin self-service for this yet, only staff.
+    subdomain: str | None = None
     subscription_status: str | None = None
     # Which plan to comp them onto when setting subscription_status to
     # "active" by hand (see app/billing/plans.py) - optional; defaults to
@@ -287,6 +294,19 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
     if body.name is not None:
         changes["name"] = {"from": t.name, "to": body.name}
         t.name = body.name
+    if body.subdomain is not None:
+        import re
+        from app.tenant_slug import RESERVED_SUBDOMAINS
+        candidate = body.subdomain.strip().lower()
+        if not re.fullmatch(r"[a-z0-9-]{1,63}", candidate):
+            raise HTTPException(400, "Subdomain can only contain lowercase letters, numbers, and hyphens.")
+        if candidate in RESERVED_SUBDOMAINS:
+            raise HTTPException(400, f"'{candidate}' is reserved and can't be used as a subdomain.")
+        clash = db.query(Tenant).filter(Tenant.subdomain == candidate, Tenant.id != tenant_id).first()
+        if clash:
+            raise HTTPException(400, f"'{candidate}' is already in use by another tenant.")
+        changes["subdomain"] = {"from": t.subdomain, "to": candidate}
+        t.subdomain = candidate
     if body.subscription_status is not None:
         changes["subscription_status"] = {"from": t.subscription_status, "to": body.subscription_status}
         t.subscription_status = body.subscription_status

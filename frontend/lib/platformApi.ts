@@ -108,6 +108,7 @@ export type PlatformTenantUser = {
 export type PlatformTenant = {
   id: string;
   name: string;
+  subdomain: string | null;
   subscription_status: string;
   tier: "free" | "pro";
   plan: "basic" | "pro" | "premium" | null;
@@ -128,7 +129,7 @@ export async function listTenants(): Promise<PlatformTenant[]> {
 
 export async function updateTenant(
   tenantId: string,
-  updates: { name?: string; subscription_status?: string; plan?: string },
+  updates: { name?: string; subdomain?: string; subscription_status?: string; plan?: string },
 ): Promise<PlatformTenant> {
   const res = await fetch(`${API_BASE}/platform/tenants/${tenantId}`, {
     method: "PATCH",
