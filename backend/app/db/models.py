@@ -159,6 +159,26 @@ class QueryRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PinnedAnalysis(Base):
+    """A user's personal bookmark on a past analysis (BUILD SPEC section
+    "Saved/pinned analyses"). Deliberately per-USER, not per-tenant like
+    QueryRecord/audit log — everyone on a team already sees every analysis
+    in the shared history, but which of those matter enough to want at a
+    glance is a personal judgment call, the same "starred" convention as
+    Gmail/GitHub, not a team-wide fact. No FK to query_records (matching
+    QueryRecord's own connection_id/tenant_id convention of plain strings,
+    not FK columns) - a pin outliving its analysis is harmless since
+    /history/analyses always joins pins against whatever analyses still
+    exist, never the reverse.
+    """
+    __tablename__ = "pinned_analyses"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    query_id = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Conversation(Base):
     """
     Holds analytical context across follow-up questions (BUILD SPEC section

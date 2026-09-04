@@ -370,6 +370,10 @@ export type ResultEvent = {
   type: "result";
   final: true;
   query_id: string;
+  // Only present when reopened via getAnalysis() (per-user pin state) — a
+  // freshly-run /ask/stream result doesn't check pins, so this is absent
+  // there rather than always false.
+  pinned?: boolean;
   // null for a cache hit or a document-only analysis - neither creates/
   // updates a Conversation row (see app/agents/planner.py), so there's
   // nothing to chain a follow-up onto.
@@ -558,11 +562,16 @@ export type AnalysisSummary = {
   connection_id: string;
   row_count: number;
   duration_ms: number;
+  // Per-user, not per-tenant — see PinnedAnalysis's docstring on the backend.
+  pinned: boolean;
   created_at: string;
 };
 
-export async function listAnalyses(): Promise<AnalysisSummary[]> {
-  const res = await fetch(`${API_BASE}/history/analyses`, { headers: authHeaders() });
+export async function listAnalyses(pinnedOnly = false): Promise<AnalysisSummary[]> {
+  const res = await fetch(
+    `${API_BASE}/history/analyses${pinnedOnly ? "?pinned_only=true" : ""}`,
+    { headers: authHeaders() },
+  );
   await handleAuthFailure(res);
   if (!res.ok) throw new Error("Could not load past analyses.");
   return res.json();
@@ -574,6 +583,24 @@ export async function getAnalysis(queryId: string): Promise<ResultEvent> {
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not load this analysis.");
   return body;
+}
+
+export async function pinAnalysis(queryId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/history/analyses/${queryId}/pin`, {
+    method: "PUT",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not pin this analysis.");
+}
+
+export async function unpinAnalysis(queryId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/history/analyses/${queryId}/pin`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not unpin this analysis.");
 }
 
 export type ArtifactHistoryEntry = {
