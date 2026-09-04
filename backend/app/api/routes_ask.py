@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import User
+from app.db.models import User, Tenant
 from app.security.auth import get_current_user, require_active_subscription, AuthContext
 from app.security.rate_limit import (
     check_ask_rate_limit, acquire_concurrency_slot, release_concurrency_slot,
@@ -22,6 +22,8 @@ from app.security.rate_limit import (
 )
 from app.agents.planner import run_analysis, StepEvent, PolicyViolation
 from app.audit import logger as audit
+from app.billing.plans import query_limit_for
+from app.billing.usage import count_queries_this_month
 
 router = APIRouter(prefix="/ask", tags=["ask"])
 
@@ -64,6 +66,21 @@ def ask_stream(body: AskRequest, db: Session = Depends(get_db),
             yield _sse({"type": "step", "step": "policy", "status": "error",
                         "detail": "Select a data source or a document to analyse."})
         return StreamingResponse(_denied_no_source(), media_type="text/event-stream")
+
+    # Monthly question cap (see app/billing/plans.py / app/billing/usage.py)
+    # - a plan limit, not a permissions error, hence 402 (matching every
+    # other plan-limit check in this app: seats, connections). Checked
+    # before the rate-limit/concurrency guards below since those are about
+    # PACING within a window, this is about the tenant's total allotment
+    # for the month - a distinct, unrelated constraint.
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    query_limit = query_limit_for(tenant.plan if tenant and tenant.tier == "pro" else None)
+    if query_limit is not None and count_queries_this_month(db, ctx.tenant_id) >= query_limit:
+        raise HTTPException(
+            402,
+            f"Your plan's monthly limit of {query_limit} questions has been reached. "
+            f"Upgrade on the Billing page for more.",
+        )
 
     try:
         check_ask_rate_limit(ctx.user_id)

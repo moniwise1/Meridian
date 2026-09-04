@@ -145,6 +145,36 @@ everywhere the binary paywall gate already was; `plan` answers "which of
 the three" and is what the seat/connection limits actually key off) so
 changing one could never silently break the other.
 
+**Monthly usage caps** (`app/billing/plans.py`, `app/billing/usage.py`) -
+seats and connections aren't the only thing that now differs by tier:
+Basic is capped at 50 questions and 20 report/presentation/export
+downloads a month, Pro at 150/100, Premium unlimited/unlimited (free,
+unchanged, never reaches either check - both `/ask` and artifact
+generation are already blocked earlier by `require_active_subscription`).
+Deliberately NOT a separate counter that increments per action and needs
+a monthly reset job - there's no background scheduler in this app, and a
+counter needing a reset is exactly the kind of thing that silently drifts
+if that job is ever missed. Usage is instead just a live COUNT of
+`QueryRecord`/`GeneratedArtifact` rows already created since the start of
+the current calendar month - always correct by construction, and "this
+month" resets itself for free the moment the calendar turns over.
+Enforced as a 402 (a plan limit, not a permissions error, same convention
+as every other cap in this app) in `routes_ask.py`'s `ask_stream` and in
+`routes_artifacts.py`'s `create_report`/`create_presentation`/
+`create_export` — the three artifact endpoints share ONE document cap,
+not three separate ones, since they're structurally identical actions.
+`GET /billing/status` now also reports `queries_used`/`query_limit`/
+`documents_used`/`document_limit`, rendered on the Billing page as two
+progress bars that turn amber at the cap. Verified end-to-end against a
+real local SQLite DB (8 checks): a fresh Basic tenant reports the right
+caps with zero usage, the 50th question is correctly NOT blocked but the
+51st is (with a clear 402 message), the same shape for the 21st document
+across all three artifact endpoints (rejected before even looking up the
+underlying query record), `GET /billing/status` reports the real counts,
+upgrading to Pro immediately raises the cap for the SAME existing usage,
+and Premium stays genuinely unlimited even past 500 queries/documents on
+record.
+
 A platform-staff comp override (`PATCH /platform/tenants/{id}`,
 `subscription_status: "active"`) now also accepts an optional `plan` -
 defaults to Premium if omitted, specifically so a comped tenant never
