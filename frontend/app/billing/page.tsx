@@ -124,6 +124,17 @@ export default function BillingPage() {
                 </div>
               )}
 
+              {status.subscription_status === "active" && (
+                <div className="flex flex-col gap-2 mb-4 pt-1">
+                  <UsageBar label="Questions this month" used={status.queries_used} limit={status.query_limit} />
+                  <UsageBar
+                    label="Report/presentation downloads this month"
+                    used={status.documents_used}
+                    limit={status.document_limit}
+                  />
+                </div>
+              )}
+
               {withinRefundWindow && status.refund_eligible_until && (
                 <div className="text-[12.5px] text-amber mb-4">
                   Eligible for a full refund if you cancel before{" "}
@@ -211,6 +222,29 @@ export default function BillingPage() {
             </>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+function UsageBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  const atLimit = limit !== null && used >= limit;
+  const pct = limit !== null ? Math.min(100, (used / Math.max(limit, 1)) * 100) : 0;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-[12px] mb-1">
+        <span className="text-ink-soft">{label}</span>
+        <span className={atLimit ? "text-amber" : "text-ink-soft"}>
+          {used} {limit !== null ? `of ${limit}` : "· unlimited"}
+        </span>
+      </div>
+      {limit !== null && (
+        <div className="h-1 rounded-full bg-line overflow-hidden">
+          <div
+            className={`h-full rounded-full ${atLimit ? "bg-amber" : "bg-teal-deep"}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
       )}
     </div>
   );

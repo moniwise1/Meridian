@@ -524,6 +524,12 @@ export type BillingStatus = {
   refund_eligible_until: string | null;
   subscription_expires_at: string | null;
   plan_code: string | null;
+  // This calendar month's usage against the plan's caps - *_limit is null
+  // for unlimited (Premium, or no cap at all).
+  queries_used: number;
+  query_limit: number | null;
+  documents_used: number;
+  document_limit: number | null;
 };
 
 export async function getBillingStatus(): Promise<BillingStatus> {
@@ -540,6 +546,8 @@ export type Plan = {
   amount: number; // smallest currency unit (kobo for NGN)
   seat_limit: number | null;
   connection_limit: number | null;
+  query_limit: number | null;
+  document_limit: number | null;
   features: string[];
   tagline: string;
   configured: boolean;

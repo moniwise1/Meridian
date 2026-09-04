@@ -25,7 +25,8 @@ from app.db.models import Tenant, User
 from app.security.auth import get_current_user, require_role, AuthContext
 from app.billing import paystack
 from app.billing.paystack import PaystackError
-from app.billing.plans import PLANS, get_plan
+from app.billing.plans import PLANS, get_plan, query_limit_for, document_limit_for
+from app.billing.usage import count_queries_this_month, count_documents_this_month
 from app.audit import logger as audit
 from app.config import settings
 
@@ -38,6 +39,8 @@ class PlanOut(BaseModel):
     amount: int
     seat_limit: int | None
     connection_limit: int | None
+    query_limit: int | None
+    document_limit: int | None
     features: list[str]
     tagline: str
     configured: bool  # False if this plan's Paystack plan code isn't set yet - lets the frontend disable "Subscribe" with a clear reason instead of a confusing checkout failure
@@ -49,13 +52,15 @@ def list_plans():
     app/billing/plans.py. Deliberately public, no auth (unlike every other
     /billing/* route) - it now backs the public marketing landing page's
     pricing section (frontend/components/LandingPage.tsx), and none of
-    plan/label/amount/seat_limit/connection_limit/features/tagline/
-    configured is tenant-specific or sensitive; it's the same content a
-    real SaaS pricing page always shows a logged-out visitor."""
+    plan/label/amount/seat_limit/connection_limit/query_limit/
+    document_limit/features/tagline/configured is tenant-specific or
+    sensitive; it's the same content a real SaaS pricing page always shows
+    a logged-out visitor."""
     return [
         PlanOut(
             key=p.key, label=p.label, amount=p.amount, seat_limit=p.seat_limit,
-            connection_limit=p.connection_limit, features=p.features, tagline=p.tagline,
+            connection_limit=p.connection_limit, query_limit=p.query_limit,
+            document_limit=p.document_limit, features=p.features, tagline=p.tagline,
             configured=bool(p.paystack_plan_code),
         )
         for p in PLANS.values()
@@ -70,14 +75,23 @@ class BillingStatus(BaseModel):
     refund_eligible_until: str | None
     subscription_expires_at: str | None
     plan_code: str | None
+    # This calendar month's usage against the plan's caps (see
+    # app/billing/plans.py / app/billing/usage.py) - *_limit is None for
+    # unlimited (Premium, or no cap at all), matching seat_limit/
+    # connection_limit's own None-means-unlimited convention elsewhere.
+    queries_used: int
+    query_limit: int | None
+    documents_used: int
+    document_limit: int | None
 
 
-def _status_for(tenant: Tenant) -> BillingStatus:
+def _status_for(db: Session, tenant: Tenant) -> BillingStatus:
     refund_eligible_until = None
     if tenant.paid_at and tenant.subscription_status == "active":
         refund_eligible_until = (
             tenant.paid_at + timedelta(days=settings.billing_refund_window_days)
         ).isoformat()
+    plan_key = tenant.plan if tenant.tier == "pro" else None
     return BillingStatus(
         subscription_status=tenant.subscription_status,
         tier=tenant.tier,
@@ -88,6 +102,10 @@ def _status_for(tenant: Tenant) -> BillingStatus:
             tenant.subscription_expires_at.isoformat() if tenant.subscription_expires_at else None
         ),
         plan_code=tenant.paystack_plan_code,
+        queries_used=count_queries_this_month(db, tenant.id),
+        query_limit=query_limit_for(plan_key),
+        documents_used=count_documents_this_month(db, tenant.id),
+        document_limit=document_limit_for(plan_key),
     )
 
 
@@ -96,7 +114,7 @@ def get_status(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_cur
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     if not tenant:
         raise HTTPException(404, "Tenant not found.")
-    return _status_for(tenant)
+    return _status_for(db, tenant)
 
 
 class SubscribeRequest(BaseModel):
@@ -194,7 +212,7 @@ def verify(reference: str, db: Session = Depends(get_db), ctx: AuthContext = Dep
                    status="denied", detail={"reference": reference, "paystack_status": data.get("status")})
         raise HTTPException(400, "Payment was not successful.")
     _activate(db, tenant, data, source="client_verify", user_id=ctx.user_id)
-    return _status_for(tenant)
+    return _status_for(db, tenant)
 
 
 @router.post("/webhook")
@@ -306,4 +324,4 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_cancelled", ctx.user_id,
                detail={"refunded": refunded, "within_refund_window": within_refund_window})
-    return _status_for(tenant)
+    return _status_for(db, tenant)

@@ -12,7 +12,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import QueryRecord, GeneratedArtifact
+from app.db.models import QueryRecord, GeneratedArtifact, Tenant
 from app.security.auth import get_current_user, AuthContext
 from app.agents.export import export_csv, export_xlsx
 from app.agents.report_generator import generate_report_pdf
@@ -20,6 +20,8 @@ from app.agents.presentation_generator import generate_presentation_pptx
 from app.agents.email_delivery import send_report
 from app.audit import logger as audit
 from app.config import settings
+from app.billing.plans import document_limit_for
+from app.billing.usage import count_documents_this_month
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -64,10 +66,26 @@ def _require_capability(db: Session, ctx: AuthContext, capability: str):
         raise HTTPException(403, f"Your account does not have '{capability}' enabled.")
 
 
+def _check_document_limit(db: Session, ctx: AuthContext):
+    """Shared monthly cap across report/presentation/export (see
+    app/billing/plans.py's document_limit docstring) - a plan limit, not a
+    permissions error, hence 402, matching every other plan-limit check in
+    this app."""
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    limit = document_limit_for(tenant.plan if tenant and tenant.tier == "pro" else None)
+    if limit is not None and count_documents_this_month(db, ctx.tenant_id) >= limit:
+        raise HTTPException(
+            402,
+            f"Your plan's monthly limit of {limit} report/presentation downloads has been "
+            f"reached. Upgrade on the Billing page for more.",
+        )
+
+
 @router.post("/report/{query_id}", response_model=ArtifactOut)
 def create_report(query_id: str, db: Session = Depends(get_db),
                    ctx: AuthContext = Depends(get_current_user)):
     _require_capability(db, ctx, "report_generation")
+    _check_document_limit(db, ctx)
     record = _get_query_record(db, ctx.tenant_id, query_id)
     snap = record.result_snapshot
     path = generate_report_pdf(
@@ -85,6 +103,7 @@ def create_report(query_id: str, db: Session = Depends(get_db),
 def create_presentation(query_id: str, db: Session = Depends(get_db),
                          ctx: AuthContext = Depends(get_current_user)):
     _require_capability(db, ctx, "presentation_generation")
+    _check_document_limit(db, ctx)
     record = _get_query_record(db, ctx.tenant_id, query_id)
     snap = record.result_snapshot
     path = generate_presentation_pptx(
@@ -100,6 +119,7 @@ def create_presentation(query_id: str, db: Session = Depends(get_db),
 @router.post("/export/{query_id}", response_model=ArtifactOut)
 def create_export(query_id: str, format: str = "csv", db: Session = Depends(get_db),
                    ctx: AuthContext = Depends(get_current_user)):
+    _check_document_limit(db, ctx)
     record = _get_query_record(db, ctx.tenant_id, query_id)
     rows = record.result_snapshot.get("preview_rows", [])
     if not rows:
