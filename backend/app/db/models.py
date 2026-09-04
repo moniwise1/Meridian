@@ -59,6 +59,13 @@ class Tenant(Base):
     # limits, the pricing cards) actually keys off.
     plan = Column(String, nullable=True)
 
+    # Org-wide MFA policy (app/api/routes_mfa.py) - admin-controlled, not a
+    # per-user preference. Once on, EVERY user on this tenant (present and
+    # future) must complete TOTP at every login - see User.totp_enabled
+    # below for the per-user "have they actually enrolled yet" flag this
+    # gets checked alongside.
+    require_mfa = Column(Boolean, default=False)
+
     connections = relationship("DataSourceConnection", back_populates="tenant")
 
     @property
@@ -93,6 +100,15 @@ class User(Base):
         "anomaly_detection", "report_generation", "presentation_generation",
         "email_delivery",
     ])
+    # TOTP multi-factor auth (app/api/routes_mfa.py). Encrypted at rest with
+    # the same backend that protects connected-database credentials
+    # (app/security/secrets.py) - a metadata-DB leak alone shouldn't be
+    # enough to generate valid codes for every user. Set (but totp_enabled
+    # still False) the moment setup starts; only flips to True once the
+    # user proves they actually scanned it by entering one real code -
+    # never trust "a secret exists" as "MFA is protecting this account".
+    totp_secret = Column(Text, nullable=True)
+    totp_enabled = Column(Boolean, default=False)
 
 
 class DataSourceConnection(Base):
@@ -156,6 +172,26 @@ class QueryRecord(Base):
     result_snapshot = Column(JSON, default=dict)  # full result payload (metrics/insight/by_group/anomalies/
                                                     # investigation/preview_rows/data_quality) so Reports,
                                                     # Analyses history, and exports can render without re-querying
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PinnedAnalysis(Base):
+    """A user's personal bookmark on a past analysis (BUILD SPEC section
+    "Saved/pinned analyses"). Deliberately per-USER, not per-tenant like
+    QueryRecord/audit log — everyone on a team already sees every analysis
+    in the shared history, but which of those matter enough to want at a
+    glance is a personal judgment call, the same "starred" convention as
+    Gmail/GitHub, not a team-wide fact. No FK to query_records (matching
+    QueryRecord's own connection_id/tenant_id convention of plain strings,
+    not FK columns) - a pin outliving its analysis is harmless since
+    /history/analyses always joins pins against whatever analyses still
+    exist, never the reverse.
+    """
+    __tablename__ = "pinned_analyses"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    query_id = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

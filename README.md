@@ -228,6 +228,47 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
 - Role-based access (`admin` can connect data sources and edit policy;
   other roles can't) and per-user capabilities (querying, report
   generation, email delivery, etc. can each be individually enabled).
+- **Two-factor authentication** (TOTP, `app/api/routes_mfa.py`, `/security`)
+  — scan a QR code with an authenticator app, then a 6-digit code joins
+  the password at every login. Personal (any user can opt in) and
+  org-wide (an admin can require it for everyone, present and future —
+  anyone not yet enrolled is walked through setup the next time they log
+  in, rather than being locked out). Secrets are encrypted at rest with
+  the same backend that protects connected-database credentials
+  (`app/security/secrets.py`). The real reason this needed backend
+  changes, not just a frontend screen: `POST /auth/login` can't hand back
+  a real session token before a required code is checked — a correct
+  password alone would otherwise already be enough to reach every
+  authenticated route — so it instead returns a short-lived "pre-auth"
+  token, redeemable only at the two dedicated MFA endpoints, that
+  `get_current_user` explicitly refuses to accept anywhere else. Code
+  guessing at login is rate-limited the same way password guessing
+  already is (a third `login_cooldown.py` guard, keyed by user id).
+  Verified end-to-end against the real app (28 checks: enroll → confirm →
+  disable, wrong-code rejection, the login-time code prompt AND the
+  login-time enrollment path for a teammate who joined before the org
+  policy existed, the pre-auth token's rejection by every normal
+  endpoint, and the code-guessing cooldown) — and, live in a real browser
+  against a real dev server, a genuine bug: React Strict Mode's
+  deliberate double-invocation of effects called `/auth/mfa/setup` twice,
+  and the QR code actually displayed on screen ended up for a secret the
+  second call had already silently overwritten, so the confirm step it
+  belonged to could never succeed — every code the user tried against the
+  screen in front of them would fail. Fixed by ignoring the stale call's
+  result rather than letting either response win the race arbitrarily,
+  and reproduced fixed against the same live server before shipping. NOT
+  built: self-service recovery for a lost authenticator device — an admin
+  removing and re-adding the account is currently the only way back in,
+  same "no email-sending identity to build a real recovery flow on top
+  of" gap as the rest of this app's account recovery.
+- **Idle sign-out**: independent of the session token's own (much longer)
+  expiry, 10 minutes with no mouse/keyboard/scroll activity shows an "Are
+  you still here?" prompt; one more minute unanswered signs out and
+  requires signing back in (`components/InactivityWatcher.tsx`, mounted
+  in `AuthGate` for the tenant app only — not `/platform`, which has its
+  own separate session entirely). Deliberately no fixed absolute session
+  cap — activity alone keeps a session usable, only inactivity ever ends
+  one early.
 - Session-signing and credential-encryption now use independently
   rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
   a shared key if unset, for backward compatibility) — rotating one no
@@ -560,6 +601,30 @@ questions are never cached (their meaning depends on evolving conversation
 context) and a cache-served answer can't be chained into a follow-up
 directly for the same reason — ask a new question to continue.
 
+**Saved/pinned analyses** (`app/db/models.py`'s `PinnedAnalysis`, `/history/analyses/{id}/pin`)
+— star any past analysis from Analyses history (list view or the reopened
+detail view) to keep it in a "Saved" filter for quick access, without
+scrolling the full shared history. Deliberately per-**user**, not
+per-tenant like `QueryRecord`/the audit log: everyone on a team already
+sees every analysis in the shared history, but which of those matter
+enough to keep at a glance is a personal judgment call — the same
+"starred" convention as Gmail/GitHub, not a team-wide fact, so two users
+on the same tenant can pin entirely different analyses without affecting
+each other. `PUT`/`DELETE .../pin` are both idempotent (pinning an
+already-pinned analysis, or unpinning one that was never pinned, is a
+no-op 200, not an error) so the frontend's star button can toggle on a
+single click without tracking prior state itself. No FK from
+`PinnedAnalysis` to `QueryRecord` — matching `QueryRecord`'s own
+`connection_id`/`tenant_id` convention of plain string columns, not FK
+constraints — since a pin outliving its analysis is harmless: listing
+always joins pins against whatever analyses still exist, never the
+reverse. Verified end-to-end against a real local SQLite database and the
+real FastAPI app (not reimplemented logic): pin/unpin/re-pin idempotency,
+the `pinned_only` filter, the per-analysis detail view, and — the one
+property actually worth a dedicated check — that two different users on
+the *same* tenant each see the shared analysis history but maintain fully
+independent pin state on it.
+
 **Audit log** — every query, rejection, connection event, and artifact
 generation, tenant-scoped, queryable via `/audit`. Hash-chained
 (`app/audit/logger.py`): each entry's hash covers its own fields plus the
@@ -587,9 +652,10 @@ on Ask, Data Sources screen with per-connection table- and column-policy
 editor (admin only), Team screen for setting per-user row-level access
 scope (admin only), Billing screen (subscribe/cancel, refund-window
 status), a Support screen for filing/viewing tickets, Analyses history
-(reopen any past question) and a Library of generated reports/
+(reopen any past question, star one to keep it in a Saved filter) and a Library of generated reports/
 presentations/exports, Audit log screen with a one-click hash-chain
-verification check. Separately, `/platform/*` is Meridian's own internal
+verification check, a Security screen for two-factor setup/disable and
+(admin only) the org-wide MFA policy. Separately, `/platform/*` is Meridian's own internal
 admin panel — its own login, own nav, own session storage key — for
 managing tenants, answering support tickets across every organization, and
 maintaining the status page; see "Internal admin panel" above.
@@ -604,7 +670,6 @@ maintaining the status page; see "Internal admin panel" above.
 | Automatic re-encryption when switching KMS backends | Existing credentials stay encrypted with whichever backend wrote them; migrating a live database needs a one-off script that runs both backends at once — see `docs/CLOUD_KMS.md` §4 |
 | Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
-| Saved Work (manual bookmarking) | Not built — Analyses/Library cover browsing all past work, but there's no way to pin/save specific items |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 | Real invite-by-email | No SMTP identity to build a real invite link on |
 | Externally-anchored (fully tamper-*proof*) audit trail | Audit log is hash-chained and self-verifying now, but the chain's head hash isn't anchored outside this database — see the audit log section above |

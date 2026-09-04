@@ -61,7 +61,27 @@ export async function register(companyName: string, email: string, password: str
   return body;
 }
 
-export async function login(email: string, password: string): Promise<AuthResponse> {
+// Login is a two-step handshake once MFA is involved (see
+// app/api/routes_mfa.py's module docstring on the backend for why). Exactly
+// one of two shapes comes back — mirrors backend's LoginResponse exactly:
+// - mfa_required false: access_token is set, same as a plain login always
+//   was — the common case, unchanged for any tenant that hasn't turned MFA on.
+// - mfa_required true: access_token is null, pre_auth_token is set instead.
+//   mfa_setup_required tells the caller which of the two next screens to
+//   show — a code prompt (already enrolled) or a QR setup screen (the
+//   org's policy requires MFA but this user hasn't enrolled yet).
+export type LoginResult = {
+  mfa_required: boolean;
+  mfa_setup_required: boolean;
+  pre_auth_token: string | null;
+  access_token: string | null;
+  token_type: string;
+  tenant_id: string;
+  user_id: string;
+  role: string;
+};
+
+export async function login(email: string, password: string): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -69,6 +89,107 @@ export async function login(email: string, password: string): Promise<AuthRespon
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Incorrect email or password.");
+  return body;
+}
+
+// ---------- MFA (TOTP authenticator apps) ----------
+
+export type MfaEnrollment = { secret: string; qr_code: string };
+export type MfaStatus = { enabled: boolean; tenant_requires_mfa: boolean };
+
+// Self-service — the caller already has a real session (authHeaders()).
+
+export async function getMfaStatus(): Promise<MfaStatus> {
+  const res = await fetch(`${API_BASE}/auth/mfa/status`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load two-factor status.");
+  return res.json();
+}
+
+export async function startMfaSetup(signal?: AbortSignal): Promise<MfaEnrollment> {
+  // signal matters here specifically: /auth/mfa/setup is NOT a read — every
+  // call generates a new secret server-side and invalidates whatever was
+  // pending before. A caller effect that fires twice (React Strict Mode in
+  // dev, or any other legitimate remount) and merely IGNORES the stale
+  // response client-side can still lose a race server-side if the stale
+  // request happens to complete after the real one — the DB would then
+  // hold a secret the screen never showed. Passing an AbortSignal lets
+  // MfaEnroll actually cancel the stale request instead, so it can never
+  // win that race. Caught live against a real dev server, not reasoned
+  // about — see MfaEnroll.tsx's own comment.
+  const res = await fetch(`${API_BASE}/auth/mfa/setup`, { method: "POST", headers: authHeaders(), signal });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not start two-factor setup.");
+  return res.json();
+}
+
+export async function confirmMfaSetup(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect code.");
+}
+
+export async function disableMfa(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/disable`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not disable two-factor authentication.");
+}
+
+export async function setMfaPolicy(requireMfa: boolean): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/policy`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ require_mfa: requireMfa }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update this setting.");
+}
+
+// Login-time — no real session yet, redeems the pre_auth_token from login().
+
+export async function verifyMfaLogin(preAuthToken: string, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/mfa/verify-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken, code }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect code.");
+  return body;
+}
+
+export async function setupMfaLogin(preAuthToken: string, signal?: AbortSignal): Promise<MfaEnrollment> {
+  // Same non-idempotent-request race as startMfaSetup above — see its comment.
+  const res = await fetch(`${API_BASE}/auth/mfa/setup-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken }),
+    signal,
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not start two-factor setup.");
+  return body;
+}
+
+export async function confirmMfaLogin(preAuthToken: string, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/mfa/confirm-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken, code }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect code.");
   return body;
 }
 
@@ -295,8 +416,16 @@ export type Plan = {
 };
 
 export async function listPlans(): Promise<Plan[]> {
-  const res = await fetch(`${API_BASE}/billing/plans`, { headers: authHeaders() });
-  await handleAuthFailure(res);
+  // Deliberately unauthenticated-safe: this backs both the (authenticated)
+  // Billing page AND the public marketing landing page's pricing section,
+  // and the backend route itself requires no auth at all now (see
+  // routes_billing.py's list_plans docstring). authHeaders() would throw
+  // for a logged-out visitor, so send it only when a session actually
+  // exists rather than requiring one.
+  const session = loadSession();
+  const res = await fetch(`${API_BASE}/billing/plans`, {
+    headers: session ? { Authorization: `Bearer ${session.token}` } : {},
+  });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not load plans.");
   return body;
@@ -370,6 +499,10 @@ export type ResultEvent = {
   type: "result";
   final: true;
   query_id: string;
+  // Only present when reopened via getAnalysis() (per-user pin state) — a
+  // freshly-run /ask/stream result doesn't check pins, so this is absent
+  // there rather than always false.
+  pinned?: boolean;
   // null for a cache hit or a document-only analysis - neither creates/
   // updates a Conversation row (see app/agents/planner.py), so there's
   // nothing to chain a follow-up onto.
@@ -558,11 +691,16 @@ export type AnalysisSummary = {
   connection_id: string;
   row_count: number;
   duration_ms: number;
+  // Per-user, not per-tenant — see PinnedAnalysis's docstring on the backend.
+  pinned: boolean;
   created_at: string;
 };
 
-export async function listAnalyses(): Promise<AnalysisSummary[]> {
-  const res = await fetch(`${API_BASE}/history/analyses`, { headers: authHeaders() });
+export async function listAnalyses(pinnedOnly = false): Promise<AnalysisSummary[]> {
+  const res = await fetch(
+    `${API_BASE}/history/analyses${pinnedOnly ? "?pinned_only=true" : ""}`,
+    { headers: authHeaders() },
+  );
   await handleAuthFailure(res);
   if (!res.ok) throw new Error("Could not load past analyses.");
   return res.json();
@@ -574,6 +712,24 @@ export async function getAnalysis(queryId: string): Promise<ResultEvent> {
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not load this analysis.");
   return body;
+}
+
+export async function pinAnalysis(queryId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/history/analyses/${queryId}/pin`, {
+    method: "PUT",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not pin this analysis.");
+}
+
+export async function unpinAnalysis(queryId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/history/analyses/${queryId}/pin`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not unpin this analysis.");
 }
 
 export type ArtifactHistoryEntry = {

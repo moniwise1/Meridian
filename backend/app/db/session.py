@@ -50,6 +50,9 @@ _ADDED_COLUMNS = [
     ("data_source_connections", "extra_config", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),
     ("tenants", "plan", "VARCHAR"),
     ("uploaded_documents", "ocr_pages_used", "INTEGER"),
+    ("tenants", "require_mfa", "BOOLEAN DEFAULT FALSE"),
+    ("users", "totp_secret", "TEXT"),
+    ("users", "totp_enabled", "BOOLEAN DEFAULT FALSE"),
 ]
 
 

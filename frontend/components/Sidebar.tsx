@@ -15,6 +15,7 @@ const NAV = [
   { href: "/connections", label: "Data sources" },
   { href: "/team", label: "Team", adminOnly: true },
   { href: "/billing", label: "Billing" },
+  { href: "/security", label: "Security" },
   { href: "/support", label: "Support" },
   { href: "/audit", label: "Audit log" },
 ];
@@ -30,8 +31,18 @@ export default function Sidebar() {
 
   // /platform/* has its own nav (app/platform/layout.tsx); /status is the
   // public status page (no session at all) - this sidebar is tenant-scoped
-  // and has no business appearing on either.
-  if (pathname === "/login" || pathname === "/status" || pathname.startsWith("/platform")) return null;
+  // and has no business appearing on either. "/" is special: logged-in
+  // it's the Ask dashboard (sidebar shows, as always); logged-out it's
+  // the public marketing landing page (app/page.tsx), which has its own
+  // nav/footer and must not show the internal app chrome at all.
+  if (
+    pathname === "/login" ||
+    pathname === "/status" ||
+    pathname.startsWith("/platform") ||
+    (pathname === "/" && !session)
+  ) {
+    return null;
+  }
 
   function handleLogout() {
     clearSession();

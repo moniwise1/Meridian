@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { loadSession, type Session } from "@/lib/auth";
+import InactivityWatcher from "@/components/InactivityWatcher";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -20,16 +21,31 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const isPublicRoute = pathname === "/status";
   const skipGate = isPlatformRoute || isPublicRoute;
 
+  // "/" is the one route this gate does NOT force-redirect when logged
+  // out — a stranger visiting it should see the public marketing landing
+  // page, not get bounced straight to /login before ever seeing what the
+  // product is. app/page.tsx itself decides what to render (LandingPage
+  // vs. the real Ask dashboard) based on session presence; this gate's
+  // only job here is to not redirect. A LOGGED-IN user at "/" is treated
+  // exactly like every other protected route below (InactivityWatcher
+  // included) — only the logged-OUT case at "/" is special.
+  const isRoot = pathname === "/";
+
   useEffect(() => {
     if (skipGate) return;
     const s = loadSession();
     setSession(s);
-    if (!s && pathname !== "/login") router.replace("/login");
-  }, [pathname, router, skipGate]);
+    if (!s && pathname !== "/login" && !isRoot) router.replace("/login");
+  }, [pathname, router, skipGate, isRoot]);
 
   if (pathname === "/login" || skipGate) return <>{children}</>;
   if (session === undefined) return null; // avoid a flash before session check resolves
-  if (!session) return null; // redirecting
+  if (!session) return isRoot ? <>{children}</> : null; // "/" renders (the landing page); everything else waits on its redirect
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <InactivityWatcher />
+    </>
+  );
 }

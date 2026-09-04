@@ -1,6 +1,10 @@
 """
 Login-attempt cooldown - brute-force / credential-stuffing protection for
-both login endpoints (`POST /auth/login` and `POST /platform/login`).
+both login endpoints (`POST /auth/login` and `POST /platform/login`), and
+(a third guard, same machinery, keyed by user_id instead of email) the
+login-time TOTP code check in `POST /auth/mfa/verify-login` - a 6-digit
+code is a much smaller search space than a password, so guessing it
+matters just as much to rate-limit.
 Neither had any protection against repeated password guessing before this;
 for a SaaS asking enterprise customers to trust it with their data, that's
 close to a table-stakes gap any real security review would flag.
@@ -243,6 +247,19 @@ if _redis is not None:
         max_seconds=settings.login_cooldown_max_seconds,
         reset_after_seconds=settings.login_cooldown_reset_after_seconds,
     )
+    # Same machinery, keyed by user_id instead of email - guards the
+    # login-time TOTP code check (app/api/routes_mfa.py's verify-login)
+    # against brute-forcing a 6-digit code the same way the guards above
+    # already protect passwords. A separate namespace/instance so a
+    # burst of wrong codes never touches (or is touched by) the password
+    # cooldown for the same account.
+    _mfa_login_guard = _RedisLoginCooldownGuard(
+        namespace="mfa",
+        free_attempts=settings.login_free_attempts,
+        base_seconds=settings.login_cooldown_base_seconds,
+        max_seconds=settings.login_cooldown_max_seconds,
+        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
+    )
 else:
     _tenant_login_guard = _LoginCooldownGuard(
         free_attempts=settings.login_free_attempts,
@@ -251,6 +268,12 @@ else:
         reset_after_seconds=settings.login_cooldown_reset_after_seconds,
     )
     _platform_login_guard = _LoginCooldownGuard(
+        free_attempts=settings.login_free_attempts,
+        base_seconds=settings.login_cooldown_base_seconds,
+        max_seconds=settings.login_cooldown_max_seconds,
+        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
+    )
+    _mfa_login_guard = _LoginCooldownGuard(
         free_attempts=settings.login_free_attempts,
         base_seconds=settings.login_cooldown_base_seconds,
         max_seconds=settings.login_cooldown_max_seconds,
@@ -280,3 +303,15 @@ def record_platform_login_failure(email: str) -> None:
 
 def record_platform_login_success(email: str) -> None:
     _platform_login_guard.record_success(email)
+
+
+def check_mfa_login_cooldown(user_id: str) -> None:
+    _mfa_login_guard.check(user_id)
+
+
+def record_mfa_login_failure(user_id: str) -> None:
+    _mfa_login_guard.record_failure(user_id)
+
+
+def record_mfa_login_success(user_id: str) -> None:
+    _mfa_login_guard.record_success(user_id)

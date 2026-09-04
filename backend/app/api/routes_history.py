@@ -12,22 +12,28 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import QueryRecord, GeneratedArtifact
+from app.db.models import QueryRecord, GeneratedArtifact, PinnedAnalysis
 from app.security.auth import get_current_user, AuthContext
 
 router = APIRouter(prefix="/history", tags=["history"])
 
 
 @router.get("/analyses")
-def list_analyses(limit: int = 50, db: Session = Depends(get_db),
+def list_analyses(limit: int = 50, pinned_only: bool = False, db: Session = Depends(get_db),
                    ctx: AuthContext = Depends(get_current_user)):
-    rows = (
-        db.query(QueryRecord)
-        .filter_by(tenant_id=ctx.tenant_id)
-        .order_by(QueryRecord.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    # Pins are per-user (see PinnedAnalysis's docstring), so which rows show
+    # a filled star - and which rows `pinned_only` even considers - depends
+    # on who's asking, unlike everything else on this tenant-scoped endpoint.
+    pinned_ids = {
+        p.query_id for p in
+        db.query(PinnedAnalysis).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id).all()
+    }
+    q = db.query(QueryRecord).filter_by(tenant_id=ctx.tenant_id)
+    if pinned_only:
+        if not pinned_ids:
+            return []
+        q = q.filter(QueryRecord.id.in_(pinned_ids))
+    rows = q.order_by(QueryRecord.created_at.desc()).limit(limit).all()
     return [
         {
             "query_id": r.id,
@@ -35,10 +41,44 @@ def list_analyses(limit: int = 50, db: Session = Depends(get_db),
             "connection_id": r.connection_id,
             "row_count": r.row_count,
             "duration_ms": r.duration_ms,
+            "pinned": r.id in pinned_ids,
             "created_at": r.created_at.isoformat(),
         }
         for r in rows
     ]
+
+
+@router.put("/analyses/{query_id}/pin")
+def pin_analysis(query_id: str, db: Session = Depends(get_db),
+                  ctx: AuthContext = Depends(get_current_user)):
+    """Idempotent: pinning an already-pinned analysis is a no-op, not a
+    duplicate-row error - the frontend toggles this on a single click
+    without needing to track prior state itself."""
+    if not db.query(QueryRecord).filter_by(id=query_id, tenant_id=ctx.tenant_id).first():
+        raise HTTPException(404, "Analysis not found.")
+    existing = (
+        db.query(PinnedAnalysis)
+        .filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id, query_id=query_id)
+        .first()
+    )
+    if not existing:
+        db.add(PinnedAnalysis(tenant_id=ctx.tenant_id, user_id=ctx.user_id, query_id=query_id))
+        db.commit()
+    return {"pinned": True}
+
+
+@router.delete("/analyses/{query_id}/pin")
+def unpin_analysis(query_id: str, db: Session = Depends(get_db),
+                    ctx: AuthContext = Depends(get_current_user)):
+    existing = (
+        db.query(PinnedAnalysis)
+        .filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id, query_id=query_id)
+        .first()
+    )
+    if existing:
+        db.delete(existing)
+        db.commit()
+    return {"pinned": False}
 
 
 @router.get("/analyses/{query_id}")
@@ -51,9 +91,15 @@ def get_analysis(query_id: str, db: Session = Depends(get_db),
     if not r:
         raise HTTPException(404, "Analysis not found.")
     snap = r.result_snapshot or {}
+    pinned = bool(
+        db.query(PinnedAnalysis)
+        .filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id, query_id=query_id)
+        .first()
+    )
     return {
         "final": True,
         "query_id": r.id,
+        "pinned": pinned,
         "conversation_id": r.conversation_id,
         "resolved_question": r.question,
         "sql": snap.get("sql", r.generated_sql),
