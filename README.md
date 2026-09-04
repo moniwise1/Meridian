@@ -256,11 +256,30 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   belonged to could never succeed — every code the user tried against the
   screen in front of them would fail. Fixed by ignoring the stale call's
   result rather than letting either response win the race arbitrarily,
-  and reproduced fixed against the same live server before shipping. NOT
-  built: self-service recovery for a lost authenticator device — an admin
-  removing and re-adding the account is currently the only way back in,
-  same "no email-sending identity to build a real recovery flow on top
-  of" gap as the rest of this app's account recovery.
+  and reproduced fixed against the same live server before shipping.
+  **Email recovery** for a lost authenticator device — reachable only
+  from the login-time code prompt, i.e. only after a correct password
+  (never a bare "enter your email" form, so it can't enumerate accounts
+  or spam an address), it emails a longer-lived (15 min, not the shared
+  5) recovery link to the account's own registered address; following it
+  disables the lost authenticator so the next login re-enrolls a fresh
+  one — self-service, rather than an admin removing and re-adding the
+  account by hand. A security-REDUCING action, so the recovery page
+  (`app/mfa-recovery/page.tsx`) deliberately requires an explicit confirm
+  click rather than firing on page load, so an automated email link-
+  scanner's prefetch can't silently disable someone's MFA. The tenant's
+  other admin(s) are emailed about it immediately either way (see
+  "Owner-activity email notifications" below) — a lost-device recovery
+  triggered by someone else is exactly the kind of event an owner needs
+  to see right away. Verified end-to-end against a real local SQLite DB
+  (8 checks: recovery only reachable via a correct-password pre-auth
+  token, a garbage token rejected, redeeming disables MFA and notifies
+  the OTHER admin but never the recovering user themselves, a wrong-
+  purpose token rejected, login correctly re-opens fully when MFA was
+  self-enrolled vs. correctly re-demanding a fresh SETUP when the org
+  policy requires MFA) and a real local browser session confirming the
+  page does NOT redeem on load, only on the explicit confirm click. NOT
+  built: backup/recovery codes as an alternative to the email path.
 - **Idle sign-out**: independent of the session token's own (much longer)
   expiry, 10 minutes with no mouse/keyboard/scroll activity shows an "Are
   you still here?" prompt; one more minute unanswered signs out and

@@ -40,6 +40,7 @@ export default function Sidebar() {
     pathname === "/status" ||
     pathname === "/auth/handoff" ||
     pathname === "/accept-invite" ||
+    pathname === "/mfa-recovery" ||
     pathname.startsWith("/platform") ||
     (pathname === "/" && !session)
   ) {

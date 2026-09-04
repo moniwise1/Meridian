@@ -22,28 +22,37 @@ of this file:
    other authenticated endpoint, defeating the point. Instead it hands
    back a short-lived "pre-auth" token (`app/security/auth.py`) that is
    explicitly rejected by `get_current_user` and can only ever be redeemed
-   here, at `/verify-login` or `/setup-login` + `/confirm-login`.
+   here, at `/verify-login` or `/setup-login` + `/confirm-login`. Login-
+   time code guessing is rate-limited the same way password guessing
+   already is (`app/security/login_cooldown.py`'s dedicated mfa guard) -
+   a 6-digit code is a much smaller space than a password.
 
-Secrets are encrypted at rest via `app/security/secrets.py` - the same
-backend that protects connected-database credentials - so a metadata-DB
-leak alone isn't enough to generate valid codes for every user; someone
-would also need whatever decrypts it (the local Fernet key, or real AWS
-KMS access in production).
+3. **Email recovery**, for a user who's lost their authenticator device
+   entirely (no code to enter, no self-service way back in otherwise).
+   Reachable only from the mfa_verify step of #2 above - i.e. only after
+   a correct password, never a bare "enter your email" form, so it can't
+   be used to enumerate accounts or spam an arbitrary address. Emails a
+   longer-lived (15 min, not the shared 5) recovery link to the account's
+   OWN registered address; following it disables the lost authenticator
+   (`totp_enabled=False`), so the next login re-enrolls a fresh one -
+   exactly what an admin does by hand removing and re-adding a locked-out
+   teammate today, just self-service. A security-REDUCING action, so the
+   frontend requires an explicit confirm click on the recovery page
+   rather than firing automatically on load (an automated link-scanner
+   prefetching the URL must not silently disable someone's MFA). The
+   tenant's other admin(s) are emailed about it immediately either way -
+   see app/agents/notifications.py - since if it wasn't the real user,
+   that's exactly the kind of event an owner needs to see right away.
 
-Login-time code guessing is rate-limited the same way password guessing
-already is (`app/security/login_cooldown.py`'s dedicated mfa guard) -
-a 6-digit code is a much smaller space than a password.
-
-NOT built: backup/recovery codes for a lost authenticator device. A user
-who loses their device and has no admin available to help currently has
-no self-service way back in - see the Security page's copy, which says
-this plainly rather than pretending a recovery flow exists. An admin CAN
-always get someone back in by removing then re-adding them as a teammate
-(a new account has totp_enabled=False), or - if admin themselves is
-locked out - via a platform-staff comp/support path, same as any other
-account-recovery gap in this app that has no email-sending identity to
-build a real "reset link" flow on top of (see
-`app/agents/email_delivery.py` for why).
+NOT built: backup/recovery CODES (a printed list of one-time-use backup
+codes) as an alternative to the email-recovery path above - a real
+product might offer both; only the email path is built here. If the
+account's own email is itself compromised, both a password reset (not
+built - see the honesty note in app/agents/email_delivery.py, same
+"no live SMTP identity to test a real reset flow against until now"
+gap that's since closed enough to build this) and this MFA-recovery
+path share that limitation; the platform-staff support path remains the
+final backstop for a fully locked-out admin.
 """
 import base64
 import io
@@ -54,6 +63,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.session import get_db
 from app.db.models import Tenant, User
 from app.security.auth import (
@@ -64,11 +74,35 @@ from app.security.login_cooldown import (
 )
 from app.security.secrets import decrypt, encrypt
 from app.audit import logger as audit
-from app.agents.notifications import notify_owners
+from app.agents.notifications import notify_owners, tenant_admin_emails, send_mfa_recovery_email
 
 router = APIRouter(prefix="/auth/mfa", tags=["mfa"])
 
 ISSUER = "Meridian"
+
+# Longer than the shared 5-minute PRE_AUTH_TTL_SECONDS (see
+# create_pre_auth_token's ttl_seconds override) - realistically checking
+# an inbox and clicking a link takes longer than the few seconds the
+# other pre-auth purposes are sized for.
+RECOVERY_TTL_SECONDS = 15 * 60
+
+
+def _recovery_url(tenant: Tenant | None, token: str) -> str:
+    if tenant and tenant.subdomain:
+        return f"https://{tenant.subdomain}.{settings.apex_domain}/mfa-recovery?token={token}"
+    return f"{settings.frontend_origins[0].rstrip('/')}/mfa-recovery?token={token}"
+
+
+def _mask_email(email: str) -> str:
+    """For display only ("we sent a link to j***9@gmail.com") - never used
+    for anything security-relevant, the real recovery email always goes to
+    the account's own address regardless of what this shows."""
+    local, _, domain = email.partition("@")
+    if len(local) <= 2:
+        masked = local[0] + "*" * max(len(local) - 1, 1)
+    else:
+        masked = local[0] + "*" * (len(local) - 2) + local[-1]
+    return f"{masked}@{domain}" if domain else masked
 
 
 def _qr_data_uri(otpauth_uri: str) -> str:
@@ -275,3 +309,76 @@ def confirm_login(body: LoginCodeRequest, db: Session = Depends(get_db)):
         "access_token": token, "token_type": "bearer",
         "tenant_id": user.tenant_id, "user_id": user.id, "role": user.role,
     }
+
+
+# ---------- Email recovery (see module docstring, #3) ----------
+
+class RecoveryRequestBody(BaseModel):
+    pre_auth_token: str
+
+
+class RecoveryRequestOut(BaseModel):
+    masked_email: str
+
+
+@router.post("/recovery/request", response_model=RecoveryRequestOut)
+def request_recovery(body: RecoveryRequestBody, db: Session = Depends(get_db)):
+    """Reachable only with a pre_auth_token from a successful password
+    check (POST /auth/login's mfa_verify path, mfa_setup_required=False) -
+    deliberately NOT a bare "enter your email" form, so this can't be used
+    to enumerate accounts or spam an arbitrary address. Mints a SEPARATE,
+    longer-lived (RECOVERY_TTL_SECONDS) token with its own purpose, rather
+    than just extending the mfa_verify token's life - a stolen mfa_verify
+    token should still only be redeemable at /verify-login, never here."""
+    claims = decode_pre_auth_token(body.pre_auth_token, expected_purpose="mfa_verify")
+    user = db.query(User).filter_by(id=claims["sub"], tenant_id=claims["tenant_id"]).first()
+    if not user:
+        raise HTTPException(401, "Invalid login attempt.")
+    tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
+    recovery_token = create_pre_auth_token(
+        user.id, user.tenant_id, purpose="mfa_recovery", ttl_seconds=RECOVERY_TTL_SECONDS,
+    )
+    send_mfa_recovery_email(user.email, _recovery_url(tenant, recovery_token))
+    audit.log(db, user.tenant_id, "mfa_recovery_requested", user.id)
+    return RecoveryRequestOut(masked_email=_mask_email(user.email))
+
+
+class RecoveryRedeemBody(BaseModel):
+    token: str
+
+
+@router.post("/recovery/redeem")
+def redeem_recovery(body: RecoveryRedeemBody, db: Session = Depends(get_db)):
+    """Public - reached from the emailed link with no session at all.
+    Disables the lost authenticator (mirrors what an admin does by hand
+    today: remove + re-add a locked-out teammate) rather than issuing a
+    session directly - the next login re-enrolls a fresh one through the
+    ordinary mfa_setup_required path, so this endpoint's blast radius if
+    the link itself leaked is "one more MFA setup prompt", never a free
+    session. A SECURITY-REDUCING action - see the frontend's own
+    confirm-click requirement (app/mfa-recovery/page.tsx) for why this
+    must never fire from an automated link-scanner's prefetch."""
+    claims = decode_pre_auth_token(body.token, expected_purpose="mfa_recovery")
+    user = db.query(User).filter_by(id=claims["sub"], tenant_id=claims["tenant_id"]).first()
+    if not user:
+        raise HTTPException(401, "This link has expired. Please sign in again.")
+
+    user.totp_enabled = False
+    user.totp_secret = None
+    audit.log(db, user.tenant_id, "mfa_recovery_used", user.id)
+    db.commit()
+
+    # A security-reducing action taken with no MFA proof at all (by
+    # design - that's the whole point) - the tenant's other admin(s)
+    # should know about this immediately, not just find it in the audit
+    # log later. Excludes the user themselves, same as every other
+    # owner-notification here.
+    notify_owners(
+        tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
+        f"Two-factor authentication reset for {user.email}",
+        f"{user.email} used the email-recovery link to disable their lost authenticator - "
+        f"they'll be prompted to set up a new one on next sign-in. If this wasn't them, "
+        f"someone else may have access to their email or password; reset their password "
+        f"from the Team page right away.",
+    )
+    return {"status": "disabled"}
