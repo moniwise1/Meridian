@@ -203,7 +203,7 @@ export default function LandingPage() {
           <h2 className="text-[26px] font-medium tracking-tight text-ink mb-3">Simple, per-seat pricing</h2>
           <p className="text-[14.5px] text-ink-soft leading-relaxed">
             One plan per team, not per feature. Every plan includes the full product — plans differ
-            only in how many teammates and data sources are connected.
+            only in how many teammates, data sources, questions, and downloads you get each month.
           </p>
         </div>
 
