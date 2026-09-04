@@ -266,6 +266,8 @@ export async function deleteUser(userId: string): Promise<void> {
 export type BillingStatus = {
   subscription_status: "none" | "pending" | "active" | "cancelled" | "refunded";
   tier: "free" | "pro";
+  // Which of the 3 plans below - null when not on a paid plan.
+  plan: "basic" | "pro" | "premium" | null;
   paid_at: string | null;
   refund_eligible_until: string | null;
   subscription_expires_at: string | null;
@@ -280,11 +282,30 @@ export async function getBillingStatus(): Promise<BillingStatus> {
   return body;
 }
 
-export async function subscribe(callbackUrl: string): Promise<{ authorization_url: string; reference: string }> {
+export type Plan = {
+  key: string;
+  label: string;
+  amount: number; // smallest currency unit (kobo for NGN)
+  seat_limit: number | null;
+  connection_limit: number | null;
+  features: string[];
+  tagline: string;
+  configured: boolean;
+};
+
+export async function listPlans(): Promise<Plan[]> {
+  const res = await fetch(`${API_BASE}/billing/plans`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load plans.");
+  return body;
+}
+
+export async function subscribe(plan: string, callbackUrl: string): Promise<{ authorization_url: string; reference: string }> {
   const res = await fetch(`${API_BASE}/billing/subscribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ callback_url: callbackUrl }),
+    body: JSON.stringify({ plan, callback_url: callbackUrl }),
   });
   await handleAuthFailure(res);
   const body = await res.json();

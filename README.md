@@ -118,6 +118,52 @@ verified called out in the module docstring. Confirm the first real
 transaction in Paystack's own dashboard before trusting this in
 production.
 
+**Three real pricing tiers** (`app/billing/plans.py`) — Basic (₦5,000/mo),
+Pro (₦9,999/mo), Premium (₦25,000/mo), each a genuinely separate Paystack
+Plan object (`PAYSTACK_PLAN_CODE_BASIC`/`_PRO`/`_PREMIUM`, since Paystack's
+own model is one price per plan — there's no single plan reused at three
+prices). `GET /billing/plans` is the single source of truth the pricing
+cards on `/billing` render from directly (price, feature bullets, seat/
+connection limits) — not a second, hand-maintained copy of the same
+numbers that could quietly drift from what's actually enforced. A plan
+whose Paystack code isn't set yet reports `configured: false` and the
+card shows "Not yet available" instead of a Subscribe button that would
+fail confusingly deep into a real checkout attempt.
+
+Deliberately honest about what differentiates the tiers: every paid plan
+unlocks the identical product (Ask, Risk scan, document intelligence, row/
+column access control, the full audit trail) — nothing here fakes a
+feature gate just to make three cards look different. What genuinely
+differs, and is actually enforced, is **seats** and **connected data
+sources**: Basic 3/3, Pro 10/10, Premium unlimited/unlimited (free,
+unchanged, stays at 1 seat and zero connections — it never reaches the
+connection check at all, blocked earlier by `require_active_subscription`).
+`Tenant.plan` (new column) tracks which specific plan a tenant is on,
+deliberately kept a separate axis from the existing `Tenant.tier` property
+(`tier` answers "are they paying at all" — still just "free"/"pro", used
+everywhere the binary paywall gate already was; `plan` answers "which of
+the three" and is what the seat/connection limits actually key off) so
+changing one could never silently break the other.
+
+A platform-staff comp override (`PATCH /platform/tenants/{id}`,
+`subscription_status: "active"`) now also accepts an optional `plan` -
+defaults to Premium if omitted, specifically so a comped tenant never
+falls into the *free* tier's 1-seat cap by accident (an unset plan on an
+otherwise-active tenant would otherwise resolve to `seat_limit_for(None)
+== 1`, the opposite of what a comp override is for). Staff can also
+change an already-active tenant's plan directly from the Tenants page.
+
+Verified end-to-end against the real app + real SQLite DB, including two
+real bugs caught before they shipped: (1) the connection-cap check driven
+against the real local seeded Postgres — 3 genuinely separate connections
+created successfully on Basic, a 4th correctly blocked by the cap, not a
+connectivity error, proving the check runs before any connector is even
+constructed; (2) a comp override with no explicit plan correctly defaults
+to Premium rather than silently capping the tenant at 1 seat. Also
+verified: `GET /billing/plans`' pricing/limits are exactly right, subscribe
+rejects both an unknown plan key and a valid-but-unconfigured one with
+distinct, clear messages, and cancelling clears the plan.
+
 **Free/Pro tiers & sub-accounts** — `Tenant.tier` (`app/db/models.py`) is
 deliberately *derived*, not a stored column: `"pro"` means "currently has
 an active subscription" and nothing else, so it can never drift out of

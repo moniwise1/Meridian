@@ -48,6 +48,16 @@ class Tenant(Base):
     # (setting subscription_status="active" by hand, no real payment) sets
     # this the same way - see update_tenant in routes_platform.py.
     subscription_expires_at = Column(DateTime, nullable=True)
+    # Which of the three plans (see app/billing/plans.py) this tenant
+    # picked - "basic" | "pro" | "premium" | None. Set at
+    # /billing/subscribe time (before checkout even completes, same as
+    # last_transaction_reference already is) so it's known regardless of
+    # which of the two activation paths (client redirect vs. webhook)
+    # lands first. Distinct from paystack_plan_code above, which is
+    # Paystack's OWN plan code string from their API response - this is
+    # this app's own plan key, the one everything here (seat/connection
+    # limits, the pricing cards) actually keys off.
+    plan = Column(String, nullable=True)
 
     connections = relationship("DataSourceConnection", back_populates="tenant")
 
@@ -56,11 +66,14 @@ class Tenant(Base):
         """Derived, not stored - "pro" is defined as "currently has an
         active subscription", nothing more, so it can never drift out of
         sync with subscription_status the way a duplicated column could.
-        Everything that gates a paid feature (app/security/auth.py's
-        require_active_subscription, the free-tier 1-account cap in
-        routes_auth.py's add_user) checks subscription_status directly for
-        the same reason - this property exists for display and for callers
-        that want the tier vocabulary rather than the status vocabulary."""
+        Everything that gates a paid feature at all
+        (app/security/auth.py's require_active_subscription) checks
+        subscription_status directly for the same reason - this property
+        exists for display and for callers that want the paying/not-paying
+        vocabulary rather than the status vocabulary. NOT the same axis as
+        `plan` above: this answers "are they paying at all", `plan`
+        answers "which of the three paid plans" - seat/connection limits
+        key off `plan` (app/billing/plans.py), not off this."""
         return "pro" if self.subscription_status == "active" else "free"
 
 

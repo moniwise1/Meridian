@@ -25,15 +25,44 @@ from app.db.models import Tenant, User
 from app.security.auth import get_current_user, require_role, AuthContext
 from app.billing import paystack
 from app.billing.paystack import PaystackError
+from app.billing.plans import PLANS, get_plan
 from app.audit import logger as audit
 from app.config import settings
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 
+class PlanOut(BaseModel):
+    key: str
+    label: str
+    amount: int
+    seat_limit: int | None
+    connection_limit: int | None
+    features: list[str]
+    tagline: str
+    configured: bool  # False if this plan's Paystack plan code isn't set yet - lets the frontend disable "Subscribe" with a clear reason instead of a confusing checkout failure
+
+
+@router.get("/plans", response_model=list[PlanOut])
+def list_plans(ctx: AuthContext = Depends(get_current_user)):
+    """Single source of truth for pricing-card content - see
+    app/billing/plans.py. Requires auth (same as /billing/status) purely
+    because there's nowhere in this app for an unauthenticated visitor to
+    land yet, not because the pricing itself is sensitive."""
+    return [
+        PlanOut(
+            key=p.key, label=p.label, amount=p.amount, seat_limit=p.seat_limit,
+            connection_limit=p.connection_limit, features=p.features, tagline=p.tagline,
+            configured=bool(p.paystack_plan_code),
+        )
+        for p in PLANS.values()
+    ]
+
+
 class BillingStatus(BaseModel):
     subscription_status: str
     tier: str
+    plan: str | None
     paid_at: str | None
     refund_eligible_until: str | None
     subscription_expires_at: str | None
@@ -49,6 +78,7 @@ def _status_for(tenant: Tenant) -> BillingStatus:
     return BillingStatus(
         subscription_status=tenant.subscription_status,
         tier=tenant.tier,
+        plan=tenant.plan,
         paid_at=tenant.paid_at.isoformat() if tenant.paid_at else None,
         refund_eligible_until=refund_eligible_until,
         subscription_expires_at=(
@@ -67,6 +97,7 @@ def get_status(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_cur
 
 
 class SubscribeRequest(BaseModel):
+    plan: str  # "basic" | "pro" | "premium" - see app/billing/plans.py
     callback_url: str
 
 
@@ -79,25 +110,36 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
         raise HTTPException(404, "Tenant or user not found.")
     if tenant.subscription_status == "active":
         raise HTTPException(400, "This organization already has an active subscription.")
-    if not settings.paystack_plan_code:
-        raise HTTPException(500, "Billing is not configured (PAYSTACK_PLAN_CODE missing).")
+
+    plan = get_plan(body.plan)
+    if not plan:
+        raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}.")
+    if not plan.paystack_plan_code:
+        raise HTTPException(500, f"The {plan.label} plan is not configured yet (missing its Paystack plan code).")
 
     try:
         result = paystack.initialize_subscription_transaction(
-            email=user.email, plan_code=settings.paystack_plan_code,
-            amount=settings.paystack_plan_amount, callback_url=body.callback_url,
+            email=user.email, plan_code=plan.paystack_plan_code,
+            amount=plan.amount, callback_url=body.callback_url,
             metadata={"tenant_id": tenant.id},
         )
     except PaystackError as e:
         audit.log(db, ctx.tenant_id, "subscription_initialize_failed", ctx.user_id,
-                   status="error", detail={"reason": str(e)})
+                   status="error", detail={"reason": str(e), "plan": body.plan})
         raise HTTPException(502, f"Could not start checkout: {e}")
 
     tenant.subscription_status = "pending"
+    # Set now, before checkout even completes - same reasoning as
+    # last_transaction_reference below: known regardless of which of the
+    # two activation paths (client redirect vs. webhook) lands first, and
+    # regardless of whether Paystack's own transaction/subscription data
+    # happens to echo a plan code back in a form this app could otherwise
+    # parse.
+    tenant.plan = body.plan
     tenant.last_transaction_reference = result["reference"]
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_checkout_started", ctx.user_id,
-               detail={"reference": result["reference"]})
+               detail={"reference": result["reference"], "plan": body.plan})
     return {"authorization_url": result["authorization_url"], "reference": result["reference"]}
 
 
@@ -203,6 +245,7 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
     elif event == "subscription.disable":
         tenant.subscription_status = "cancelled"
         tenant.subscription_expires_at = None
+        tenant.plan = None
         db.commit()
         audit.log(db, tenant.id, "subscription_disabled_by_paystack", detail={"event": event})
     elif event == "invoice.payment_failed":
@@ -256,6 +299,7 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
 
     tenant.subscription_status = "refunded" if refunded else "cancelled"
     tenant.subscription_expires_at = None
+    tenant.plan = None
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_cancelled", ctx.user_id,
                detail={"refunded": refunded, "within_refund_window": within_refund_window})

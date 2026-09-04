@@ -10,13 +10,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import DataSourceConnection
+from app.db.models import DataSourceConnection, Tenant
 from app.security.secrets import encrypt, RedactedSecret
 from app.security.auth import get_current_user, require_role, require_active_subscription, AuthContext
 from app.connectors.postgres import PostgresConnector
 from app.connectors.mysql import MySQLConnector
 from app.connectors.mssql import MSSQLConnector
 from app.connectors.snowflake import SnowflakeConnector
+from app.billing.plans import connection_limit_for, get_plan
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/connections", tags=["connections"])
@@ -66,6 +67,26 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
     if connector_cls is None:
         raise HTTPException(400, f"Unsupported connector kind '{body.kind}'. "
                                   f"Supported: {', '.join(_CONNECTOR_CLASSES)}.")
+
+    # Connection cap: each plan (see app/billing/plans.py) allows a
+    # different number of connected data sources - Basic 3, Pro 10,
+    # Premium unlimited. Checked before ever touching the actual
+    # candidate credential (no point verifying read-only access to a
+    # connection this tenant isn't allowed to add anyway).
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found.")
+    connection_limit = connection_limit_for(tenant.plan)
+    if connection_limit is not None:
+        existing_count = db.query(DataSourceConnection).filter_by(tenant_id=ctx.tenant_id).count()
+        if existing_count >= connection_limit:
+            plan = get_plan(tenant.plan) if tenant.plan else None
+            plan_label = plan.label if plan else "current"
+            raise HTTPException(
+                402,
+                f"The {plan_label} plan is limited to {connection_limit} connected data sources. "
+                f"Upgrade on the Billing page to connect more.",
+            )
 
     try:
         connector = connector_cls(
