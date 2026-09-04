@@ -19,7 +19,7 @@ export default function MfaEnroll({
   title = "Set up two-factor authentication",
   description = "Scan this QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.), then enter the 6-digit code it shows.",
 }: {
-  onStart: () => Promise<MfaEnrollment>;
+  onStart: (signal: AbortSignal) => Promise<MfaEnrollment>;
   onConfirm: (code: string) => Promise<void>;
   title?: string;
   description?: string;
@@ -35,29 +35,30 @@ export default function MfaEnroll({
     // and invalidates whatever was pending before (see /auth/mfa/setup's
     // docstring: "calling this again before confirming just replaces the
     // pending secret"). React's Strict Mode deliberately double-invokes
-    // effects in dev to surface exactly this kind of bug: without the
-    // `ignore` guard below, the FIRST call's now-stale secret could still
-    // win the setEnrollment race and end up displayed on screen — a QR
-    // code the server has already discarded, which would make every code
-    // typed against it fail with a confusing "Incorrect code" (caught live
-    // against a real dev server before shipping, not merely reasoned
-    // about). The guard doesn't stop onStart from firing twice; it just
-    // makes sure only the call whose effect instance is still mounted is
-    // allowed to update what's shown, so the screen always matches
-    // whatever secret is actually live server-side.
-    let ignore = false;
-    onStart()
-      .then((result) => {
-        if (!ignore) setEnrollment(result);
-      })
+    // effects in dev to surface exactly this kind of bug, and it's not
+    // just a display-state problem: an earlier version of this effect only
+    // ignored the stale call's RESULT client-side, which stops the wrong
+    // secret from being displayed, but NOT the wrong secret from being the
+    // one that's actually live server-side — if the stale (first) request
+    // happens to complete AFTER the real (second) one, its response still
+    // reaches the server last and overwrites the DB, so the screen shows
+    // one secret while the server holds a different one and every code
+    // the user types fails. Caught live against a real dev server, not
+    // merely reasoned about. A real AbortController fixes the actual race
+    // rather than just papering over its symptom: the stale call's
+    // in-flight request is genuinely cancelled on cleanup, so it can never
+    // land at the server at all, let alone last.
+    const controller = new AbortController();
+    onStart(controller.signal)
+      .then((result) => setEnrollment(result))
       .catch((e) => {
-        if (!ignore) setError((e as Error).message);
+        if (!controller.signal.aborted) setError((e as Error).message);
       })
       .finally(() => {
-        if (!ignore) setLoadingQr(false);
+        if (!controller.signal.aborted) setLoadingQr(false);
       });
     return () => {
-      ignore = true;
+      controller.abort();
     };
     // Intentionally run once per mount — onStart is expected to be a
     // stable-enough reference from the caller for this component's

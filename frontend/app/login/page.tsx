@@ -24,7 +24,13 @@ function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const inactivityReason = searchParams.get("reason") === "inactivity";
-  const [mode, setMode] = useState<"login" | "register">("login");
+  // The public landing page's "Get started" CTA deep-links here with
+  // ?mode=register so a visitor lands directly on the account-creation
+  // form instead of sign-in — everything past this point (register(),
+  // the mandatory MFA setup step, etc.) is completely unchanged.
+  const [mode, setMode] = useState<"login" | "register">(
+    searchParams.get("mode") === "register" ? "register" : "login",
+  );
   const [step, setStep] = useState<Step>("credentials");
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
@@ -144,7 +150,7 @@ function LoginPageInner() {
         <MfaEnroll
           title="Set up two-factor authentication"
           description="Your organization now requires two-factor authentication. Scan this QR code with an authenticator app, then enter the code it shows to finish signing in."
-          onStart={() => setupMfaLogin(preAuthToken)}
+          onStart={(signal) => setupMfaLogin(preAuthToken, signal)}
           onConfirm={async (code) => {
             const auth = await confirmMfaLogin(preAuthToken, code);
             finishLogin(auth);
