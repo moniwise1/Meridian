@@ -269,6 +269,35 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   own separate session entirely). Deliberately no fixed absolute session
   cap — activity alone keeps a session usable, only inactivity ever ends
   one early.
+- **Per-tenant subdomains** (`app/tenant_slug.py`, `wamco.
+  getmeridiananalytics.com`) — auto-assigned from the company name at
+  registration (`generate_unique_subdomain`, collision-resolved: a second
+  "Wamco Inc" gets `wamco-inc2`, not a silent clash), and a genuine login
+  boundary, not decoration: `POST /auth/login` accepts an optional
+  `subdomain`, and when the caller sends one, the account must belong to
+  the tenant that subdomain actually resolves to — a fully correct
+  password for the wrong tenant's subdomain is refused with the same
+  generic message a nonexistent subdomain gets, so neither response leaks
+  which case actually happened. The generic domain's login is completely
+  unaffected — unrestricted, exactly as before this existed — since the
+  boundary only ever activates when a subdomain is actually sent. One
+  wildcard Railway custom domain (`*.getmeridiananalytics.com`) covers
+  every tenant's subdomain at once — see `docs/RAILWAY_DEPLOY.md` §9 — so
+  this doesn't consume a custom-domain slot per tenant. Existing tenants
+  from before this feature shipped are backfilled automatically on boot
+  (`_backfill_tenant_subdomains()` in `app/db/session.py`), and
+  `/platform/tenants` lets staff view or rename any tenant's subdomain by
+  hand. Verified end-to-end against the real app (24 checks): the login
+  boundary in both directions (tenant A's correct password refused on
+  tenant B's subdomain, and vice versa), the generic domain staying fully
+  unrestricted, collision-resolved auto-generation, staff rename/reject-
+  invalid/reject-reserved/reject-clash, and the backfill path for a
+  pre-existing tenant — which caught a real bug before it shipped: the
+  backfill loop's uniqueness check queried the database without flushing
+  first, so two same-named tenants in the same batch (a real case:
+  leftover same-named local test tenants) could both compute the
+  identical "unique" subdomain and collide for real at commit. Fixed with
+  a flush after each assignment.
 - Session-signing and credential-encryption now use independently
   rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
   a shared key if unset, for backward compatibility) — rotating one no

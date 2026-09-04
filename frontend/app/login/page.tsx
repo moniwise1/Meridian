@@ -1,13 +1,22 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   login, register, verifyMfaLogin, setupMfaLogin, confirmMfaLogin,
-  startMfaSetup, confirmMfaSetup, type AuthResponse,
+  startMfaSetup, confirmMfaSetup, getTenantBySubdomain, type AuthResponse, type TenantBySubdomain,
 } from "@/lib/api";
 import { saveSession } from "@/lib/auth";
+import { getTenantSubdomain } from "@/lib/subdomain";
 import MfaEnroll from "@/components/MfaEnroll";
+
+// "none" = the generic domain (no tenant subdomain in the URL at all) -
+// login stays fully unrestricted, register stays available, exactly as
+// before this feature existed. "not_found" = ON a tenant-shaped subdomain
+// but no tenant actually owns it (typo, or one that was never assigned).
+// Resolved via a real lookup (getTenantBySubdomain) rather than trusting
+// the URL alone, since the subdomain string itself proves nothing.
+type TenantContext = TenantBySubdomain | "none" | "not_found" | undefined;
 
 // A plain step (credentials in, session out) covers every tenant that has
 // never touched MFA — unchanged from before. Once MFA is involved, login
@@ -39,6 +48,23 @@ function LoginPageInner() {
   const [submitting, setSubmitting] = useState(false);
   const [preAuthToken, setPreAuthToken] = useState("");
   const [mfaCode, setMfaCode] = useState("");
+  const [assignedSubdomain, setAssignedSubdomain] = useState("");
+
+  // undefined until resolved client-side (window isn't available during
+  // SSR) - rendered as a blank Shell until then, same "avoid a flash of
+  // the wrong screen" pattern AuthGate already uses elsewhere.
+  const [tenantContext, setTenantContext] = useState<TenantContext>(undefined);
+  useEffect(() => {
+    const sub = getTenantSubdomain();
+    if (!sub) {
+      setTenantContext("none");
+      return;
+    }
+    getTenantBySubdomain(sub)
+      .then(setTenantContext)
+      .catch(() => setTenantContext("not_found"));
+  }, []);
+  const tenant = tenantContext && tenantContext !== "none" && tenantContext !== "not_found" ? tenantContext : null;
 
   function finishLogin(auth: AuthResponse) {
     saveSession({
@@ -51,24 +77,34 @@ function LoginPageInner() {
     router.push("/");
   }
 
+  // Registration always creates a brand-new tenant with its OWN
+  // auto-generated subdomain (see routes_auth.py's register()) - doing
+  // that from inside an EXISTING company's subdomain would be
+  // nonsensical (which company are you even registering?), so it's only
+  // ever offered on the generic domain; effectiveMode forces "login"
+  // whenever a real tenant subdomain is resolved, regardless of the
+  // ?mode= query param or anything the user clicked before this resolved.
+  const effectiveMode = tenant ? "login" : mode;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setSubmitting(true);
     try {
-      if (mode === "register") {
+      if (effectiveMode === "register") {
         const auth = await register(companyName, email, password);
         saveSession({
           token: auth.access_token, tenantId: auth.tenant_id, userId: auth.user_id,
           role: auth.role, email,
         });
+        if (auth.subdomain) setAssignedSubdomain(auth.subdomain);
         // Mandatory: the new admin sets up their own authenticator before
         // reaching the dashboard for the first time — no skip.
         setStep("mfa_setup_mandatory");
         return;
       }
 
-      const result = await login(email, password);
+      const result = await login(email, password, tenant?.subdomain);
       if (!result.mfa_required) {
         finishLogin(result as AuthResponse);
         return;
@@ -160,9 +196,43 @@ function LoginPageInner() {
     );
   }
 
+  // Resolving which tenant (if any) this subdomain belongs to - blank
+  // rather than flashing the wrong screen first, same pattern AuthGate
+  // uses elsewhere for the same reason.
+  if (tenantContext === undefined) return null;
+
+  if (tenantContext === "not_found") {
+    return (
+      <Shell>
+        <div className="bg-panel border border-line rounded-[4px] p-6 text-center">
+          <div className="text-[15px] font-medium text-ink mb-1.5">Workspace not found</div>
+          <p className="text-[12.5px] text-ink-soft leading-relaxed mb-4">
+            There&apos;s no organization at this address. Double-check the link, or head to the main
+            site to sign in or create a new workspace.
+          </p>
+          <a
+            href={`https://${process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com"}/login`}
+            className="text-[12.5px] text-teal hover:text-teal-deep transition-colors"
+          >
+            Go to the main site →
+          </a>
+        </div>
+      </Shell>
+    );
+  }
+
   if (step === "mfa_setup_mandatory") {
     return (
       <Shell>
+        {assignedSubdomain && (
+          <div className="mb-4 text-[12.5px] text-ink-soft bg-panel border border-line rounded-[3px] px-3 py-2 text-center">
+            Your team&apos;s workspace is live at{" "}
+            <span className="text-ink font-[family-name:var(--font-mono)]">
+              {assignedSubdomain}.{process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com"}
+            </span>{" "}
+            — worth bookmarking.
+          </div>
+        )}
         <MfaEnroll
           title="Secure your new account"
           description="Set up two-factor authentication before continuing — scan this QR code with an authenticator app, then enter the code it shows."
@@ -184,29 +254,33 @@ function LoginPageInner() {
         </div>
       )}
       <div className="bg-panel border border-line rounded-[4px] p-6">
-        <div className="flex gap-1 mb-5 text-[13px]">
-          <button
-            type="button"
-            onClick={() => setMode("login")}
-            className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
-              mode === "login" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
-            }`}
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("register")}
-            className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
-              mode === "register" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
-            }`}
-          >
-            Create account
-          </button>
-        </div>
+        {tenant ? (
+          <div className="text-[15px] font-medium text-ink text-center mb-5">Sign in to {tenant.name}</div>
+        ) : (
+          <div className="flex gap-1 mb-5 text-[13px]">
+            <button
+              type="button"
+              onClick={() => setMode("login")}
+              className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
+                effectiveMode === "login" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
+              }`}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("register")}
+              className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
+                effectiveMode === "register" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
+              }`}
+            >
+              Create account
+            </button>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-          {mode === "register" && (
+          {effectiveMode === "register" && (
             <Field label="Company name" value={companyName} onChange={setCompanyName} placeholder="Acme Inc." />
           )}
           <Field label="Email" value={email} onChange={setEmail} placeholder="you@company.com" type="email" />
@@ -219,15 +293,28 @@ function LoginPageInner() {
             disabled={submitting}
             className="mt-1 text-[13px] py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
           >
-            {submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+            {submitting ? "Please wait…" : effectiveMode === "login" ? "Sign in" : "Create account"}
           </button>
         </form>
       </div>
 
-      {mode === "register" && (
+      {effectiveMode === "register" && (
         <p className="text-[11.5px] text-ink-soft text-center mt-4 leading-relaxed">
           Creating an account makes you the admin for a new company workspace. You&apos;ll set up
           two-factor authentication right after.
+        </p>
+      )}
+
+      {tenant && (
+        <p className="text-[11.5px] text-ink-soft text-center mt-4 leading-relaxed">
+          Not part of {tenant.name}?{" "}
+          <a
+            href={`https://${process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com"}/login?mode=register`}
+            className="text-teal hover:text-teal-deep transition-colors"
+          >
+            Create your own workspace
+          </a>
+          .
         </p>
       )}
     </Shell>

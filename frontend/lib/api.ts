@@ -48,6 +48,7 @@ export type AuthResponse = {
   tenant_id: string;
   user_id: string;
   role: string;
+  subdomain: string | null;
 };
 
 export async function register(companyName: string, email: string, password: string): Promise<AuthResponse> {
@@ -59,6 +60,16 @@ export async function register(companyName: string, email: string, password: str
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not create your account.");
   return body;
+}
+
+// ---------- Per-tenant subdomains (wamco.getmeridiananalytics.com) ----------
+
+export type TenantBySubdomain = { name: string; subdomain: string };
+
+export async function getTenantBySubdomain(subdomain: string): Promise<TenantBySubdomain> {
+  const res = await fetch(`${API_BASE}/auth/tenant-by-subdomain/${encodeURIComponent(subdomain)}`);
+  if (!res.ok) throw new Error("No workspace found at this address.");
+  return res.json();
 }
 
 // Login is a two-step handshake once MFA is involved (see
@@ -79,13 +90,18 @@ export type LoginResult = {
   tenant_id: string;
   user_id: string;
   role: string;
+  subdomain: string | null;
 };
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(email: string, password: string, subdomain?: string | null): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    // subdomain omitted (undefined) on the generic domain - login stays
+    // fully unrestricted there. Sent explicitly when the caller is on a
+    // tenant's own subdomain, where it becomes a real boundary - see
+    // login()'s docstring on the backend.
+    body: JSON.stringify(subdomain ? { email, password, subdomain } : { email, password }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Incorrect email or password.");
