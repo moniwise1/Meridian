@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { loadSession, type Session } from "@/lib/auth";
+import InactivityWatcher from "@/components/InactivityWatcher";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -31,5 +32,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   if (session === undefined) return null; // avoid a flash before session check resolves
   if (!session) return null; // redirecting
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <InactivityWatcher />
+    </>
+  );
 }

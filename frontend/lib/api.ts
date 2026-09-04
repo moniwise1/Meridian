@@ -61,7 +61,27 @@ export async function register(companyName: string, email: string, password: str
   return body;
 }
 
-export async function login(email: string, password: string): Promise<AuthResponse> {
+// Login is a two-step handshake once MFA is involved (see
+// app/api/routes_mfa.py's module docstring on the backend for why). Exactly
+// one of two shapes comes back — mirrors backend's LoginResponse exactly:
+// - mfa_required false: access_token is set, same as a plain login always
+//   was — the common case, unchanged for any tenant that hasn't turned MFA on.
+// - mfa_required true: access_token is null, pre_auth_token is set instead.
+//   mfa_setup_required tells the caller which of the two next screens to
+//   show — a code prompt (already enrolled) or a QR setup screen (the
+//   org's policy requires MFA but this user hasn't enrolled yet).
+export type LoginResult = {
+  mfa_required: boolean;
+  mfa_setup_required: boolean;
+  pre_auth_token: string | null;
+  access_token: string | null;
+  token_type: string;
+  tenant_id: string;
+  user_id: string;
+  role: string;
+};
+
+export async function login(email: string, password: string): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -69,6 +89,95 @@ export async function login(email: string, password: string): Promise<AuthRespon
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Incorrect email or password.");
+  return body;
+}
+
+// ---------- MFA (TOTP authenticator apps) ----------
+
+export type MfaEnrollment = { secret: string; qr_code: string };
+export type MfaStatus = { enabled: boolean; tenant_requires_mfa: boolean };
+
+// Self-service — the caller already has a real session (authHeaders()).
+
+export async function getMfaStatus(): Promise<MfaStatus> {
+  const res = await fetch(`${API_BASE}/auth/mfa/status`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load two-factor status.");
+  return res.json();
+}
+
+export async function startMfaSetup(): Promise<MfaEnrollment> {
+  const res = await fetch(`${API_BASE}/auth/mfa/setup`, { method: "POST", headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not start two-factor setup.");
+  return res.json();
+}
+
+export async function confirmMfaSetup(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect code.");
+}
+
+export async function disableMfa(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/disable`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ code }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not disable two-factor authentication.");
+}
+
+export async function setMfaPolicy(requireMfa: boolean): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/mfa/policy`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ require_mfa: requireMfa }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update this setting.");
+}
+
+// Login-time — no real session yet, redeems the pre_auth_token from login().
+
+export async function verifyMfaLogin(preAuthToken: string, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/mfa/verify-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken, code }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect code.");
+  return body;
+}
+
+export async function setupMfaLogin(preAuthToken: string): Promise<MfaEnrollment> {
+  const res = await fetch(`${API_BASE}/auth/mfa/setup-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not start two-factor setup.");
+  return body;
+}
+
+export async function confirmMfaLogin(preAuthToken: string, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/mfa/confirm-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pre_auth_token: preAuthToken, code }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Incorrect code.");
   return body;
 }
 

@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import Tenant, User
-from app.security.auth import hash_password, verify_password, create_access_token, get_current_user, require_role, AuthContext
+from app.security.auth import (
+    hash_password, verify_password, create_access_token, create_pre_auth_token,
+    get_current_user, require_role, AuthContext,
+)
 from app.security.login_cooldown import (
     check_tenant_login_cooldown, record_tenant_login_failure, record_tenant_login_success,
     LoginCooldownActive,
@@ -37,6 +40,29 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    token_type: str = "bearer"
+    tenant_id: str
+    user_id: str
+    role: str
+
+
+class LoginResponse(BaseModel):
+    """Login is a two-step handshake once MFA is involved (see
+    app/api/routes_mfa.py's module docstring for why an access_token can't
+    just be handed out immediately once a tenant/user requires a code).
+    Exactly one of two shapes comes back:
+    - mfa_required=False: access_token is set, exactly like the old
+      TokenResponse-only login - the common case, unchanged for every
+      tenant that hasn't turned MFA on.
+    - mfa_required=True: access_token is null; pre_auth_token is set
+      instead, redeemable at POST /auth/mfa/verify-login (mfa_setup_
+      required=False - the user already has a code-producing app set up)
+      or POST /auth/mfa/setup-login + /confirm-login (mfa_setup_
+      required=True - first time this user has hit the org's policy)."""
+    mfa_required: bool = False
+    mfa_setup_required: bool = False
+    pre_auth_token: str | None = None
+    access_token: str | None = None
     token_type: str = "bearer"
     tenant_id: str
     user_id: str
@@ -71,7 +97,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     return TokenResponse(access_token=token, tenant_id=tenant.id, user_id=user.id, role=user.role)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=LoginResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     try:
         check_tenant_login_cooldown(body.email)
@@ -83,10 +109,39 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         record_tenant_login_failure(body.email)
         raise HTTPException(401, "Incorrect email or password.")
 
+    # Password is correct — this clears the password-guessing cooldown
+    # regardless of what happens with MFA below, since that guard exists
+    # specifically to blunt password guessing, a fully separate concern
+    # from the code check (see app/security/login_cooldown.py's mfa guard).
     record_tenant_login_success(body.email)
-    audit.log(db, user.tenant_id, "user_logged_in", user.id)
-    token = create_access_token(user.id, user.tenant_id, user.role)
-    return TokenResponse(access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role)
+
+    tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
+    mfa_required = bool(user.totp_enabled) or bool(tenant and tenant.require_mfa)
+    if not mfa_required:
+        audit.log(db, user.tenant_id, "user_logged_in", user.id)
+        token = create_access_token(user.id, user.tenant_id, user.role)
+        return LoginResponse(
+            access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+        )
+
+    # MFA needed. Withhold a real session until a second endpoint
+    # (app/api/routes_mfa.py) redeems this pre-auth token with a code -
+    # see that module's docstring for why this can't just issue the
+    # access_token now and check the code as an afterthought.
+    if user.totp_enabled:
+        pre_auth_token = create_pre_auth_token(user.id, user.tenant_id, purpose="mfa_verify")
+        return LoginResponse(
+            mfa_required=True, mfa_setup_required=False, pre_auth_token=pre_auth_token,
+            tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+        )
+    # Tenant policy requires MFA but this user hasn't enrolled yet (e.g.
+    # added before the policy existed, or before their first login since
+    # it changed) - route them through setup instead of a code prompt.
+    pre_auth_token = create_pre_auth_token(user.id, user.tenant_id, purpose="mfa_setup")
+    return LoginResponse(
+        mfa_required=True, mfa_setup_required=True, pre_auth_token=pre_auth_token,
+        tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+    )
 
 
 @router.post("/users", response_model=TokenResponse)

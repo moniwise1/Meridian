@@ -228,6 +228,47 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
 - Role-based access (`admin` can connect data sources and edit policy;
   other roles can't) and per-user capabilities (querying, report
   generation, email delivery, etc. can each be individually enabled).
+- **Two-factor authentication** (TOTP, `app/api/routes_mfa.py`, `/security`)
+  — scan a QR code with an authenticator app, then a 6-digit code joins
+  the password at every login. Personal (any user can opt in) and
+  org-wide (an admin can require it for everyone, present and future —
+  anyone not yet enrolled is walked through setup the next time they log
+  in, rather than being locked out). Secrets are encrypted at rest with
+  the same backend that protects connected-database credentials
+  (`app/security/secrets.py`). The real reason this needed backend
+  changes, not just a frontend screen: `POST /auth/login` can't hand back
+  a real session token before a required code is checked — a correct
+  password alone would otherwise already be enough to reach every
+  authenticated route — so it instead returns a short-lived "pre-auth"
+  token, redeemable only at the two dedicated MFA endpoints, that
+  `get_current_user` explicitly refuses to accept anywhere else. Code
+  guessing at login is rate-limited the same way password guessing
+  already is (a third `login_cooldown.py` guard, keyed by user id).
+  Verified end-to-end against the real app (28 checks: enroll → confirm →
+  disable, wrong-code rejection, the login-time code prompt AND the
+  login-time enrollment path for a teammate who joined before the org
+  policy existed, the pre-auth token's rejection by every normal
+  endpoint, and the code-guessing cooldown) — and, live in a real browser
+  against a real dev server, a genuine bug: React Strict Mode's
+  deliberate double-invocation of effects called `/auth/mfa/setup` twice,
+  and the QR code actually displayed on screen ended up for a secret the
+  second call had already silently overwritten, so the confirm step it
+  belonged to could never succeed — every code the user tried against the
+  screen in front of them would fail. Fixed by ignoring the stale call's
+  result rather than letting either response win the race arbitrarily,
+  and reproduced fixed against the same live server before shipping. NOT
+  built: self-service recovery for a lost authenticator device — an admin
+  removing and re-adding the account is currently the only way back in,
+  same "no email-sending identity to build a real recovery flow on top
+  of" gap as the rest of this app's account recovery.
+- **Idle sign-out**: independent of the session token's own (much longer)
+  expiry, 10 minutes with no mouse/keyboard/scroll activity shows an "Are
+  you still here?" prompt; one more minute unanswered signs out and
+  requires signing back in (`components/InactivityWatcher.tsx`, mounted
+  in `AuthGate` for the tenant app only — not `/platform`, which has its
+  own separate session entirely). Deliberately no fixed absolute session
+  cap — activity alone keeps a session usable, only inactivity ever ends
+  one early.
 - Session-signing and credential-encryption now use independently
   rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
   a shared key if unset, for backward compatibility) — rotating one no
@@ -613,7 +654,8 @@ scope (admin only), Billing screen (subscribe/cancel, refund-window
 status), a Support screen for filing/viewing tickets, Analyses history
 (reopen any past question, star one to keep it in a Saved filter) and a Library of generated reports/
 presentations/exports, Audit log screen with a one-click hash-chain
-verification check. Separately, `/platform/*` is Meridian's own internal
+verification check, a Security screen for two-factor setup/disable and
+(admin only) the org-wide MFA policy. Separately, `/platform/*` is Meridian's own internal
 admin panel — its own login, own nav, own session storage key — for
 managing tenants, answering support tickets across every organization, and
 maintaining the status page; see "Internal admin panel" above.

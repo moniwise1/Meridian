@@ -64,6 +64,47 @@ def create_access_token(user_id: str, tenant_id: str, role: str, ttl_seconds: in
     return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
 
 
+# MFA login-time "pre-auth" token (app/api/routes_mfa.py): issued once a
+# password has checked out but before a real session exists yet - the
+# whole point of MFA is that a correct password alone must NOT be enough
+# to get a usable session, so /auth/login hands back one of these instead
+# of an access_token when the account needs a code. Deliberately a
+# DIFFERENT claim shape (pre_auth=True, purpose=..., no "role") so it can
+# never be mistaken for - or accepted as - a real session token; see the
+# explicit rejection in get_current_user below. Short TTL (5 min default)
+# since its only job is to survive the few seconds between "password
+# accepted" and "code entered", not to be a usable credential on its own.
+PRE_AUTH_TTL_SECONDS = 5 * 60
+
+
+def create_pre_auth_token(user_id: str, tenant_id: str, purpose: str) -> str:
+    payload = {
+        "pre_auth": True,
+        "purpose": purpose,  # "mfa_verify" | "mfa_setup"
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + PRE_AUTH_TTL_SECONDS,
+    }
+    return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+
+
+def decode_pre_auth_token(token: str, expected_purpose: str) -> dict:
+    """Returns {"sub": user_id, "tenant_id": tenant_id} or raises
+    HTTPException(401) - used only by the two login-time MFA endpoints,
+    never by get_current_user (a pre-auth token is explicitly rejected
+    there, see below)."""
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "This login attempt has expired. Please sign in again.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid login attempt.")
+    if not payload.get("pre_auth") or payload.get("purpose") != expected_purpose:
+        raise HTTPException(401, "Invalid login attempt.")
+    return {"sub": payload["sub"], "tenant_id": payload["tenant_id"]}
+
+
 class AuthContext:
     def __init__(self, user_id: str, tenant_id: str, role: str):
         self.user_id = user_id
@@ -93,6 +134,15 @@ def get_current_user(
     # intended failure path, not an accident.
     if "sub" not in payload or "tenant_id" not in payload:
         raise HTTPException(401, "Not a tenant session token.")
+
+    # A pre-auth token (see create_pre_auth_token above) carries the same
+    # "sub"/"tenant_id" claims a real session token does - MUST be
+    # explicitly rejected here, or the whole point of withholding a real
+    # session until MFA passes would be defeated by just using the
+    # pre-auth token as if it were one. It's only ever redeemable at the
+    # two dedicated login-time endpoints in app/api/routes_mfa.py.
+    if payload.get("pre_auth"):
+        raise HTTPException(401, "This login is not yet complete.")
 
     user = db.query(User).filter_by(id=payload["sub"], tenant_id=payload["tenant_id"]).first()
     if not user:

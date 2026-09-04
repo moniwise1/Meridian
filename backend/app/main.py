@@ -8,7 +8,7 @@ from app.db.session import init_db
 from app.api import (
     routes_connections, routes_ask, routes_audit, routes_auth, routes_artifacts,
     routes_history, routes_scan, routes_documents, routes_billing,
-    routes_platform, routes_support, routes_status,
+    routes_platform, routes_support, routes_status, routes_mfa,
 )
 
 app = FastAPI(title="Secure AI Enterprise Analytics Agent", version="0.1.0")
@@ -36,6 +36,7 @@ def health():
 
 
 app.include_router(routes_auth.router)
+app.include_router(routes_mfa.router)
 app.include_router(routes_connections.router)
 app.include_router(routes_ask.router)
 app.include_router(routes_audit.router)
