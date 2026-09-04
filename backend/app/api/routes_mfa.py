@@ -64,6 +64,7 @@ from app.security.login_cooldown import (
 )
 from app.security.secrets import decrypt, encrypt
 from app.audit import logger as audit
+from app.agents.notifications import notify_owners
 
 router = APIRouter(prefix="/auth/mfa", tags=["mfa"])
 
@@ -213,6 +214,11 @@ def verify_login(body: LoginCodeRequest, db: Session = Depends(get_db)):
 
     record_mfa_login_success(user.id)
     audit.log(db, user.tenant_id, "user_logged_in", user.id, detail={"mfa": True})
+    notify_owners(
+        tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
+        "Sign-in to your Meridian workspace",
+        f"{user.email} ({user.role}) just signed in to your Meridian workspace.",
+    )
     token = create_access_token(user.id, user.tenant_id, user.role)
     return {
         "access_token": token, "token_type": "bearer",
@@ -259,6 +265,11 @@ def confirm_login(body: LoginCodeRequest, db: Session = Depends(get_db)):
     audit.log(db, user.tenant_id, "mfa_enabled", user.id, detail={"via": "login_enforced"})
     audit.log(db, user.tenant_id, "user_logged_in", user.id, detail={"mfa": True})
     db.commit()
+    notify_owners(
+        tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
+        "Sign-in to your Meridian workspace",
+        f"{user.email} ({user.role}) just signed in to your Meridian workspace.",
+    )
     token = create_access_token(user.id, user.tenant_id, user.role)
     return {
         "access_token": token, "token_type": "bearer",

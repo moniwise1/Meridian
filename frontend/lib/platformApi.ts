@@ -60,15 +60,69 @@ export async function listStaff(): Promise<Staff[]> {
   return res.json();
 }
 
-export async function addStaff(email: string, password: string, role: string): Promise<Staff> {
-  const res = await fetch(`${API_BASE}/platform/staff`, {
+// ---------- Staff invites ----------
+// Real invite-by-email (backend/app/invites.py), same shape as the
+// tenant-side team invites in lib/api.ts - an owner names an email +
+// role, the recipient accepts within 24 hours by proving control of
+// their inbox and picking their own password.
+
+export type StaffInvite = {
+  id: string;
+  email: string;
+  role: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  invited_by_email: string;
+  created_at: string;
+  expires_at: string;
+};
+
+export async function inviteStaff(email: string, role: string): Promise<StaffInvite> {
+  const res = await fetch(`${API_BASE}/platform/staff/invite`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ email, password, role }),
+    body: JSON.stringify({ email, role }),
   });
   await handleAuthFailure(res);
   const body = await res.json();
-  if (!res.ok) throw new Error(body.detail ?? "Could not add this staff member.");
+  if (!res.ok) throw new Error(body.detail ?? "Could not invite this staff member.");
+  return body;
+}
+
+export async function listStaffInvites(): Promise<StaffInvite[]> {
+  const res = await fetch(`${API_BASE}/platform/staff/invites`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load pending invites.");
+  return res.json();
+}
+
+export async function revokeStaffInvite(inviteId: string): Promise<StaffInvite> {
+  const res = await fetch(`${API_BASE}/platform/staff/invite/${inviteId}/revoke`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not revoke this invite.");
+  return body;
+}
+
+export type StaffInviteLookup = { role: string; invited_by_email: string; email: string };
+
+export async function lookupStaffInvite(token: string): Promise<StaffInviteLookup> {
+  const res = await fetch(`${API_BASE}/platform/staff/invite/lookup?token=${encodeURIComponent(token)}`);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "This invite is invalid or has expired.");
+  return body;
+}
+
+export async function acceptStaffInvite(token: string, password: string): Promise<StaffAuthResponse> {
+  const res = await fetch(`${API_BASE}/platform/staff/invite/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, password }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not accept this invite.");
   return body;
 }
 

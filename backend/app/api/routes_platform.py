@@ -11,11 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.session import get_db
 from app.db.models import (
     Tenant, User, DataSourceConnection, QueryRecord, Conversation,
     GeneratedArtifact, UploadedDocument, EmailDeliveryLog, AuditLog,
-    PlatformStaff, SupportTicket, TicketMessage, SystemIncident, IncidentUpdate,
+    PlatformStaff, SupportTicket, TicketMessage, SystemIncident, IncidentUpdate, Invite,
 )
 from app.security.auth import hash_password, verify_password
 from app.security.platform_auth import (
@@ -30,8 +31,14 @@ from app.audit import logger as audit
 from app.audit.logger import verify_chain
 from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
 from app.billing.plans import PLANS
+from app.invites import create_invite, get_invite_by_token, list_invites, revoke_invite, mark_accepted
+from app.agents.notifications import send_invite_email, notify_owners, platform_owner_emails
 
 router = APIRouter(prefix="/platform", tags=["platform"])
+
+
+def _staff_accept_url(token: str) -> str:
+    return f"{settings.frontend_origins[0].rstrip('/')}/platform/accept-invite?token={token}"
 
 
 # ---------- Staff auth ----------
@@ -62,6 +69,15 @@ def staff_login(body: StaffLoginRequest, db: Session = Depends(get_db)):
 
     record_platform_login_success(body.email)
     audit.log(db, "platform", "platform_staff_logged_in", staff.id, detail={"email": staff.email})
+    # Owner-activity notification, not just the audit log above - so a
+    # platform owner learns about support staff sign-ins (or a co-owner's)
+    # somewhere other than the internal admin panel. Excludes the signer
+    # themselves, so a solo owner logging in doesn't email themselves.
+    notify_owners(
+        platform_owner_emails(db, exclude_staff_id=staff.id),
+        "Sign-in to the Meridian admin panel",
+        f"{staff.email} ({staff.role}) just signed in to the Meridian internal admin panel.",
+    )
     token = create_platform_access_token(staff.id, staff.role)
     return StaffTokenResponse(access_token=token, staff_id=staff.id, role=staff.role)
 
@@ -111,29 +127,136 @@ def list_staff(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends
     return [StaffOut.from_staff(s) for s in rows]
 
 
-class StaffCreateRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8)
-    role: str = "support"
-
-
 VALID_STAFF_ROLES = {"owner", "support"}
 
 
-@router.post("/staff", response_model=StaffOut)
-def add_staff(body: StaffCreateRequest, db: Session = Depends(get_db),
-              ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+# ---------- Staff invites ----------
+# Real invite-by-email (app/invites.py), same reasoning and shape as the
+# tenant-side team invites in app/api/routes_auth.py - an owner names an
+# email + role, the recipient accepts within 24 hours by proving control
+# of their inbox and picking their own password, rather than an owner
+# choosing a temporary password for them.
+
+class StaffInviteRequest(BaseModel):
+    email: EmailStr
+    role: str = "support"
+
+
+class StaffInviteOut(BaseModel):
+    id: str
+    email: str
+    role: str
+    status: str
+    invited_by_email: str
+    created_at: str
+    expires_at: str
+
+    @classmethod
+    def from_invite(cls, inv: Invite) -> "StaffInviteOut":
+        return cls(
+            id=inv.id, email=inv.email, role=inv.role, status=inv.status,
+            invited_by_email=inv.invited_by_email,
+            created_at=inv.created_at.isoformat() if inv.created_at else "",
+            expires_at=inv.expires_at.isoformat() if inv.expires_at else "",
+        )
+
+
+@router.post("/staff/invite", response_model=StaffInviteOut)
+def invite_staff(body: StaffInviteRequest, db: Session = Depends(get_db),
+                  ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
     if body.role not in VALID_STAFF_ROLES:
         raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_STAFF_ROLES))}.")
-    if db.query(PlatformStaff).filter_by(email=body.email).first():
+    email = body.email.strip().lower()
+    if db.query(PlatformStaff).filter_by(email=email).first():
         raise HTTPException(400, "An account with this email already exists.")
-    staff = PlatformStaff(email=body.email, password_hash=hash_password(body.password), role=body.role)
+
+    # Re-inviting the same address replaces any still-pending invite for
+    # it, rather than piling up duplicates the owner would have to
+    # individually revoke first.
+    for existing in list_invites(db, "staff"):
+        if existing.status == "pending" and existing.email == email:
+            revoke_invite(db, existing)
+
+    inviter = db.query(PlatformStaff).filter_by(id=ctx.staff_id).first()
+    invite, token = create_invite(db, "staff", email, body.role, ctx.staff_id, inviter.email)
+
+    send_invite_email(email, "Meridian's internal team", invite.invited_by_email, body.role, _staff_accept_url(token))
+    notify_owners(
+        platform_owner_emails(db, exclude_staff_id=ctx.staff_id),
+        f"{invite.invited_by_email} invited a new staff member",
+        f"{invite.invited_by_email} invited {email} to join Meridian's internal team as a {body.role}. "
+        f"The invite expires in 24 hours if not accepted.",
+    )
+    audit.log(db, "platform", "platform_staff_invite_sent", ctx.staff_id, detail={"email": email, "role": body.role})
+    return StaffInviteOut.from_invite(invite)
+
+
+@router.get("/staff/invites", response_model=list[StaffInviteOut])
+def list_staff_invites(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    return [StaffInviteOut.from_invite(inv) for inv in list_invites(db, "staff")]
+
+
+@router.post("/staff/invite/{invite_id}/revoke", response_model=StaffInviteOut)
+def revoke_staff_invite(invite_id: str, db: Session = Depends(get_db),
+                         ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    invite = db.query(Invite).filter_by(id=invite_id, kind="staff").first()
+    if not invite:
+        raise HTTPException(404, "Invite not found.")
+    if invite.status != "pending":
+        raise HTTPException(400, f"This invite is already {invite.status}.")
+    revoke_invite(db, invite)
+    audit.log(db, "platform", "platform_staff_invite_revoked", ctx.staff_id, detail={"email": invite.email})
+    return StaffInviteOut.from_invite(invite)
+
+
+class StaffInviteLookupOut(BaseModel):
+    role: str
+    invited_by_email: str
+    email: str
+
+
+@router.get("/staff/invite/lookup", response_model=StaffInviteLookupOut)
+def lookup_staff_invite(token: str, db: Session = Depends(get_db)):
+    """Public - the accept page needs to show "join as {role}" before the
+    visitor has any credentials of their own."""
+    invite = get_invite_by_token(db, "staff", token)
+    if not invite or invite.status != "pending":
+        raise HTTPException(404, "This invite is invalid or has expired.")
+    return StaffInviteLookupOut(role=invite.role, invited_by_email=invite.invited_by_email, email=invite.email)
+
+
+class StaffAcceptInviteRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8)
+
+
+@router.post("/staff/invite/accept", response_model=StaffTokenResponse)
+def accept_staff_invite(body: StaffAcceptInviteRequest, db: Session = Depends(get_db)):
+    """Public - same reasoning as /platform/login: the caller has no
+    session yet. Creates the real PlatformStaff account only here, at
+    acceptance, never at invite time."""
+    invite = get_invite_by_token(db, "staff", body.token)
+    if not invite or invite.status != "pending":
+        raise HTTPException(400, "This invite is invalid or has expired. Ask an owner to send a new one.")
+    if db.query(PlatformStaff).filter_by(email=invite.email).first():
+        raise HTTPException(400, "An account with this email already exists.")
+
+    staff = PlatformStaff(email=invite.email, password_hash=hash_password(body.password), role=invite.role)
     db.add(staff)
+    mark_accepted(db, invite)
     db.commit()
     db.refresh(staff)
-    audit.log(db, "platform", "platform_staff_added", ctx.staff_id,
-               detail={"target_staff_id": staff.id, "email": staff.email, "role": staff.role})
-    return StaffOut.from_staff(staff)
+
+    notify_owners(
+        platform_owner_emails(db, exclude_staff_id=staff.id),
+        f"{staff.email} joined Meridian's internal team",
+        f"{staff.email} accepted their invite and joined as a {staff.role}.",
+    )
+    audit.log(db, "platform", "platform_staff_invite_accepted", staff.id,
+               detail={"email": staff.email, "role": staff.role})
+
+    token = create_platform_access_token(staff.id, staff.role)
+    return StaffTokenResponse(access_token=token, staff_id=staff.id, role=staff.role)
 
 
 def _count_owners(db: Session, excluding_id: str | None = None) -> int:

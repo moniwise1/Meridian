@@ -23,7 +23,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // design, since establishing one is the whole point of being there;
   // gating it here would bounce the visitor to /login before the handoff
   // token in the URL fragment ever gets a chance to be redeemed.
-  const isPublicRoute = pathname === "/status" || pathname === "/auth/handoff";
+  // /accept-invite is the team-invite acceptance page (see lib/api.ts's
+  // acceptTeamInvite) - same reasoning, visited by someone with no
+  // account yet at all.
+  const isPublicRoute = pathname === "/status" || pathname === "/auth/handoff" || pathname === "/accept-invite";
   const skipGate = isPlatformRoute || isPublicRoute;
 
   // "/" is the one route this gate does NOT force-redirect when logged

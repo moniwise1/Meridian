@@ -348,3 +348,35 @@ class IncidentUpdate(Base):
     status = Column(String, nullable=False)
     body = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Invite(Base):
+    """A pending invitation to join either a tenant's team (kind="team") or
+    Meridian's own internal platform staff (kind="staff") - unified into
+    one table since both flows are structurally identical: an admin/owner
+    names an email + role, a real email goes out with a link, the
+    recipient proves control of that inbox and picks their OWN password to
+    accept, and an un-accepted invite is worthless after its expiry - see
+    app/invites.py. Replaces the old pattern of an admin choosing a
+    temporary password for someone else, which never actually proved the
+    recipient controlled that email address at all."""
+    __tablename__ = "invites"
+    id = Column(String, primary_key=True, default=_uuid)
+    kind = Column(String, nullable=False)  # "team" | "staff"
+    # NULL for kind="staff" - platform staff aren't scoped to a tenant.
+    tenant_id = Column(String, nullable=True)
+    email = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    # A random high-entropy token is emailed to the recipient; only its
+    # hash lives here, same reasoning as password hashing - a metadata-DB
+    # leak alone shouldn't hand out usable invite links.
+    token_hash = Column(String, nullable=False, unique=True)
+    invited_by = Column(String, nullable=False)  # the inviting user_id or staff_id
+    # Denormalized on purpose: the invite email needs to say who sent it,
+    # and that must keep reading correctly even if the inviter is later
+    # removed - a live join back to users/platform_staff could go stale.
+    invited_by_email = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default="pending")  # pending | accepted | revoked | expired
+    accepted_at = Column(DateTime, nullable=True)

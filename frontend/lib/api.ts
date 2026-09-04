@@ -381,15 +381,69 @@ export async function listUsers(): Promise<TeamUser[]> {
   return body;
 }
 
-export async function addTeammate(email: string, password: string, role: string): Promise<AuthResponse> {
-  const res = await fetch(`${API_BASE}/auth/users`, {
+// ---------- Team invites ----------
+// Real invite-by-email (backend/app/invites.py) - the admin names an
+// email + role, the recipient gets an email and accepts it themselves
+// within 24 hours (backend/app/api/routes_auth.py's /auth/team/invite/*),
+// rather than the admin picking a temporary password for them.
+
+export type TeamInvite = {
+  id: string;
+  email: string;
+  role: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  invited_by_email: string;
+  created_at: string;
+  expires_at: string;
+};
+
+export async function inviteTeammate(email: string, role: string): Promise<TeamInvite> {
+  const res = await fetch(`${API_BASE}/auth/team/invite`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ email, password, role }),
+    body: JSON.stringify({ email, role }),
   });
   await handleAuthFailure(res);
   const body = await res.json();
-  if (!res.ok) throw new Error(body.detail ?? "Could not add teammate.");
+  if (!res.ok) throw new Error(body.detail ?? "Could not invite this teammate.");
+  return body;
+}
+
+export async function listTeamInvites(): Promise<TeamInvite[]> {
+  const res = await fetch(`${API_BASE}/auth/team/invites`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load pending invites.");
+  return res.json();
+}
+
+export async function revokeTeamInvite(inviteId: string): Promise<TeamInvite> {
+  const res = await fetch(`${API_BASE}/auth/team/invite/${inviteId}/revoke`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not revoke this invite.");
+  return body;
+}
+
+export type TeamInviteLookup = { org_label: string; role: string; invited_by_email: string; email: string };
+
+export async function lookupTeamInvite(token: string): Promise<TeamInviteLookup> {
+  const res = await fetch(`${API_BASE}/auth/team/invite/lookup?token=${encodeURIComponent(token)}`);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "This invite is invalid or has expired.");
+  return body;
+}
+
+export async function acceptTeamInvite(token: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/team/invite/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, password }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not accept this invite.");
   return body;
 }
 

@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  listUsers, addTeammate, updateUserRowScope, updateUserRole, deleteUser, getBillingStatus, listPlans,
-  type TeamUser, type BillingStatus, type Plan,
+  listUsers, inviteTeammate, listTeamInvites, revokeTeamInvite, updateUserRowScope, updateUserRole,
+  deleteUser, getBillingStatus, listPlans,
+  type TeamUser, type TeamInvite, type BillingStatus, type Plan,
 } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 
@@ -30,18 +31,25 @@ function parseRowScopeText(text: string): Record<string, string[]> {
 
 export default function TeamPage() {
   const [users, setUsers] = useState<TeamUser[]>([]);
+  const [invites, setInvites] = useState<TeamInvite[]>([]);
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [error, setError] = useState("");
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [addingOpen, setAddingOpen] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const isAdmin = loadSession()?.role === "admin";
 
   function refresh() {
     listUsers()
       .then(setUsers)
       .catch((e) => setError(e.message));
+    listTeamInvites()
+      .then(setInvites)
+      .catch(() => {
+        /* Team page still works without this - it only adds the pending-invites list. */
+      });
     getBillingStatus()
       .then(setBilling)
       .catch(() => {
@@ -51,6 +59,19 @@ export default function TeamPage() {
   }
 
   useEffect(refresh, []);
+
+  const pendingInvites = invites.filter((i) => i.status === "pending");
+
+  async function handleRevoke(inviteId: string) {
+    setError("");
+    try {
+      await revokeTeamInvite(inviteId);
+      setRevokingId(null);
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   async function handleRoleChange(userId: string, newRole: string) {
     setError("");
@@ -82,15 +103,19 @@ export default function TeamPage() {
   }
 
   // Source of truth for the limit is always the backend
-  // (app/api/routes_auth.py's add_user, 402 once a plan's seat cap is
-  // hit) - this is just so the UI doesn't invite someone to fill out a
+  // (app/api/routes_auth.py's invite_teammate, 402 once a plan's seat cap
+  // is hit) - this is just so the UI doesn't invite someone to fill out a
   // form that's guaranteed to fail. Free (no plan) is a hardcoded 1-seat
   // cap on the backend (see seat_limit_for(None) in
   // app/billing/plans.py); a paid plan's real limit comes from
-  // GET /billing/plans, keyed by billing.plan.
+  // GET /billing/plans, keyed by billing.plan. Counts pending invites
+  // alongside real accounts, matching the backend - otherwise this banner
+  // would understate usage right up until every pending invite is
+  // accepted at once.
   const currentPlan = billing?.plan ? plans.find((p) => p.key === billing.plan) : null;
   const seatLimit = billing?.tier === "free" ? 1 : currentPlan?.seat_limit ?? null;
-  const atSeatLimit = seatLimit !== null && users.length >= seatLimit;
+  const seatsUsed = users.length + pendingInvites.length;
+  const atSeatLimit = seatLimit !== null && seatsUsed >= seatLimit;
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-12">
@@ -109,7 +134,7 @@ export default function TeamPage() {
         >
           {billing.tier === "free" ? (
             <>
-              Free plan — limited to 1 account ({users.length} of 1 used).{" "}
+              Free plan — limited to 1 account ({seatsUsed} of 1 used).{" "}
               <Link href="/billing" className="underline hover:no-underline">
                 Subscribe
               </Link>{" "}
@@ -119,7 +144,7 @@ export default function TeamPage() {
             <>{currentPlan?.label ?? "Your plan"} — no limit on the number of teammate accounts.</>
           ) : (
             <>
-              {currentPlan?.label ?? "Your plan"} — up to {seatLimit} accounts ({users.length} of {seatLimit} used).
+              {currentPlan?.label ?? "Your plan"} — up to {seatLimit} accounts ({seatsUsed} of {seatLimit} used).
               {atSeatLimit && (
                 <>
                   {" "}
@@ -143,18 +168,65 @@ export default function TeamPage() {
             disabled={atSeatLimit}
             className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
           >
-            Add teammate
+            Invite teammate
           </button>
         ) : (
-          <AddTeammateForm
+          <InviteTeammateForm
             onClose={() => setAddingOpen(false)}
-            onAdded={() => {
+            onInvited={() => {
               setAddingOpen(false);
               refresh();
             }}
           />
         )}
       </div>
+
+      {pendingInvites.length > 0 && (
+        <div className="mb-6">
+          <div className="text-[12.5px] text-ink-soft mb-2">
+            Pending invites — accept within 24 hours or they&apos;re automatically revoked.
+          </div>
+          <div className="flex flex-col gap-2">
+            {pendingInvites.map((inv) => (
+              <div
+                key={inv.id}
+                className="flex items-center justify-between gap-3 bg-panel border border-line rounded-[4px] px-4 py-2.5"
+              >
+                <div className="min-w-0">
+                  <div className="text-[13px] text-ink truncate">{inv.email}</div>
+                  <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
+                    {inv.role} · invited by {inv.invited_by_email} · expires{" "}
+                    {new Date(inv.expires_at).toLocaleString()}
+                  </div>
+                </div>
+                {revokingId === inv.id ? (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => handleRevoke(inv.id)}
+                      className="text-[11.5px] px-2.5 py-1 rounded-[3px] bg-red text-white hover:opacity-90 transition-opacity"
+                    >
+                      Confirm revoke
+                    </button>
+                    <button
+                      onClick={() => setRevokingId(null)}
+                      className="text-[11.5px] text-ink-soft hover:text-ink transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setRevokingId(inv.id)}
+                    className="shrink-0 text-[11.5px] text-red hover:opacity-70 transition-opacity"
+                  >
+                    Revoke
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3">
         {users.map((u) => (
@@ -223,9 +295,8 @@ export default function TeamPage() {
   );
 }
 
-function AddTeammateForm({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+function InviteTeammateForm({ onClose, onInvited }: { onClose: () => void; onInvited: () => void }) {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [role, setRole] = useState("analyst");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -235,8 +306,8 @@ function AddTeammateForm({ onClose, onAdded }: { onClose: () => void; onAdded: (
     setSaving(true);
     setError("");
     try {
-      await addTeammate(email, password, role);
-      onAdded();
+      await inviteTeammate(email, role);
+      onInvited();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -246,6 +317,9 @@ function AddTeammateForm({ onClose, onAdded }: { onClose: () => void; onAdded: (
 
   return (
     <form onSubmit={handleSubmit} className="bg-panel border border-line rounded-[4px] p-4 flex flex-col gap-3">
+      <p className="text-[12px] text-ink-soft">
+        They&apos;ll get an email with a link to join — it expires in 24 hours if not accepted.
+      </p>
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1">
           <span className="text-[12px] text-ink-soft">Email</span>
@@ -259,32 +333,20 @@ function AddTeammateForm({ onClose, onAdded }: { onClose: () => void; onAdded: (
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-[12px] text-ink-soft">Temporary password</span>
-          <input
-            type="password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50"
-          />
+          <span className="text-[12px] text-ink-soft">Role</span>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink"
+          >
+            {ROLE_OPTIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
-      <label className="flex flex-col gap-1">
-        <span className="text-[12px] text-ink-soft">Role</span>
-        <select
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink w-fit"
-        >
-          {ROLE_OPTIONS.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </label>
       {error && <div className="text-[12.5px] text-red">{error}</div>}
       <div className="flex items-center justify-end gap-2">
         <button
@@ -299,7 +361,7 @@ function AddTeammateForm({ onClose, onAdded }: { onClose: () => void; onAdded: (
           disabled={saving}
           className="text-[12.5px] px-3 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
         >
-          {saving ? "Adding…" : "Add teammate"}
+          {saving ? "Sending…" : "Send invite"}
         </button>
       </div>
     </form>
