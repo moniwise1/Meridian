@@ -18,7 +18,17 @@ class Settings(BaseSettings):
     platform_jwt_secret: str = ""
     metadata_db_url: str = "sqlite:///./metadata.db"
     anthropic_api_key: str = ""
+    # Comma-separated when there's more than one real frontend origin to
+    # allow (e.g. a custom domain plus the platform's own auto-generated
+    # *.up.railway.app URL, kept reachable as a fallback/testing path) -
+    # a single value works exactly as before, unchanged for every existing
+    # deployment. See frontend_origins below for the parsed form
+    # CORSMiddleware actually uses.
     frontend_origin: str = "http://localhost:3000"
+
+    @property
+    def frontend_origins(self) -> list[str]:
+        return [o.strip() for o in self.frontend_origin.split(",") if o.strip()]
 
     # Credential encryption backend - see app/security/secrets.py.
     # "local" (default): a static Fernet key from app_secret_key, fine for

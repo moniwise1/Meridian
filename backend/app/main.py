@@ -15,7 +15,7 @@ app = FastAPI(title="Secure AI Enterprise Analytics Agent", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=settings.frontend_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
