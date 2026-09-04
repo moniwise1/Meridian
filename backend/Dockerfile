@@ -2,10 +2,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps for psycopg2 (Postgres) and pymssql (SQL Server) - both need
-# to compile/link against native libraries.
+# System deps: gcc/libpq-dev/freetds-dev for psycopg2 (Postgres) and
+# pymssql (SQL Server), which need to compile/link against native
+# libraries; tesseract-ocr is the actual OCR engine binary
+# app/agents/document_intelligence.py's OCR fallback shells out to via
+# pytesseract - that's a thin Python wrapper, not the engine itself, so
+# it needs this system package present or every scanned-page OCR attempt
+# fails open to "no text extracted" (see that module's docstring).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev freetds-dev \
+    gcc libpq-dev freetds-dev tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

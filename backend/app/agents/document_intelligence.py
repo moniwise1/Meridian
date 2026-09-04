@@ -19,26 +19,71 @@ instruction text — see how app/agents/insight_agent.py passes it. This
 module's job stops at extraction; it does not decide how the text is used
 downstream.
 
-Deliberately NOT built: OCR for scanned/image-only PDFs (pypdf only reads
-an embedded text layer — a scanned document with no text layer extracts to
-nothing, silently, and that's surfaced to the caller as an empty/near-empty
-result rather than pretending it worked), and real PDF table structure
-(text extraction flattens tables into reading-order text, which reads
-poorly for anything but simple layouts — a known, unfixed limitation, not
-a bug).
+OCR fallback for scanned/image-only PDF pages: pypdf only reads an
+embedded text layer, so a genuinely scanned page (a photo/scan with no
+text layer at all) used to extract to nothing, silently. Now, any page
+whose native extraction comes back empty is rendered to an image
+(PyMuPDF - no external renderer binary needed, unlike poppler) and
+run through Tesseract (pytesseract - a real external OCR engine binary,
+NOT pip-installable on its own; see docs/OCR.md for the one system-level
+install step this needs, already wired into backend/Dockerfile for
+production). Deliberately per-PAGE, not per-document: a mixed PDF (some
+real text pages, some scanned pages - a common real-world shape, e.g. a
+native report with a scanned signature page appended) gets native
+extraction for the pages that have it and OCR only for the pages that
+need it, rather than an all-or-nothing choice. Bounded by
+MAX_OCR_PAGES_PER_DOCUMENT since OCR is genuinely CPU-expensive (roughly
+1-3s/page at the DPI used here) unlike the near-instant native path, and
+this upload endpoint is still synchronous - no background job queue
+exists in this app to hand slow work off to, so an unbounded scanned PDF
+could otherwise stall the request for minutes. Fails open, not closed, if
+Tesseract isn't installed on the machine at all (TesseractNotFoundError):
+falls back to the pre-OCR behavior (empty text for that page, surfaced
+honestly, never pretending it worked) rather than crashing the upload -
+same "a missing optional capability degrades, it doesn't break the app"
+pattern already used for Redis and the Anthropic client elsewhere in this
+app.
+
+Still NOT built: real PDF table structure (text extraction, OCR'd or
+native, flattens tables into reading-order text, which reads poorly for
+anything but simple layouts - a known, unfixed limitation, not a bug).
 """
 import io
+import logging
 from dataclasses import dataclass
 
 import pypdf
 import docx
 import openpyxl
 import pptx
+import pytesseract
+import pymupdf
+
+from app.config import settings
+
+logger = logging.getLogger("meridian.ocr")
+
+if settings.tesseract_cmd:
+    # Only needed where Tesseract isn't already resolvable on PATH - e.g.
+    # local Windows dev, where its installer doesn't always add itself to
+    # PATH for an already-open shell. The Linux/Docker production target
+    # (backend/Dockerfile installs tesseract-ocr via apt) needs no
+    # override at all; PATH resolution just works there.
+    pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
 
 MAX_EXTRACTED_CHARS = 50_000  # bounds LLM context cost the same way row limits bound query cost
 MAX_XLSX_ROWS_PER_SHEET = 200
 MAX_XLSX_SHEETS = 10
 MAX_PPTX_SLIDES = 200
+MAX_OCR_PAGES_PER_DOCUMENT = 15
+OCR_RENDER_DPI = 200  # balance of accuracy vs. render+recognition time
+# A page's native extraction shorter than this is treated as "probably
+# scanned, not just a sparse page" and gets OCR'd - a real PDF page with
+# only a few words of genuine text is rare enough that this heuristic
+# costs little precision while catching the common case (an image-only
+# page returns "" or a handful of stray characters from decorative
+# elements, never a real sentence).
+NATIVE_TEXT_MIN_CHARS = 20
 
 SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx"}
 
@@ -58,6 +103,12 @@ class ExtractionResult:
     # Meaning depends on kind: page count for PDF, paragraph count for
     # DOCX, sheet count for XLSX — informational only, shown in the UI.
     source_unit_count: int
+    # How many pages' text came from OCR rather than a native text layer
+    # (PDF only; always 0 for every other kind). Surfaced to the caller so
+    # the UI can show "(N page(s) OCR'd)" - OCR'd text is real but lower-
+    # confidence than a native text layer (misreads happen), worth
+    # flagging rather than presenting identically to a clean extraction.
+    ocr_pages_used: int = 0
 
 
 def _truncate(text: str) -> tuple[str, bool]:
@@ -67,11 +118,62 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text[:MAX_EXTRACTED_CHARS], True
 
 
+def _ocr_page(pdf_doc, page_index: int) -> str:
+    """Renders one page to an image and runs Tesseract on it. Returns ""
+    (not an exception) on any OCR-specific failure - a page that can't be
+    OCR'd degrades to "no text from this page", the same honest-empty
+    result a scanned page without this fallback at all would have
+    produced, never a crash that takes down the whole upload over one
+    bad page."""
+    try:
+        page = pdf_doc[page_index]
+        pix = page.get_pixmap(dpi=OCR_RENDER_DPI)
+        image_bytes = pix.tobytes("png")
+        from PIL import Image
+        image = Image.open(io.BytesIO(image_bytes))
+        return pytesseract.image_to_string(image).strip()
+    except pytesseract.TesseractNotFoundError:
+        # Not installed on this machine at all - fail open for the WHOLE
+        # document, not just this page (every subsequent OCR attempt
+        # would hit the identical error), by re-raising a marker the
+        # caller checks for once and stops trying further pages.
+        raise
+    except Exception as e:
+        logger.warning("OCR failed for page %d, treating as empty: %s", page_index, e)
+        return ""
+
+
 def extract_pdf(file_bytes: bytes) -> ExtractionResult:
     reader = pypdf.PdfReader(io.BytesIO(file_bytes))
     pages_text = [page.extract_text() or "" for page in reader.pages]
+
+    ocr_pages_used = 0
+    candidates = [i for i, t in enumerate(pages_text) if len(t.strip()) < NATIVE_TEXT_MIN_CHARS]
+    if candidates:
+        tesseract_available = True
+        pdf_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+        try:
+            for i in candidates[:MAX_OCR_PAGES_PER_DOCUMENT]:
+                if not tesseract_available:
+                    break
+                try:
+                    ocr_text = _ocr_page(pdf_doc, i)
+                except pytesseract.TesseractNotFoundError:
+                    logger.warning("Tesseract is not installed on this machine - OCR fallback skipped "
+                                    "for the rest of this document (and every document until it is).")
+                    tesseract_available = False
+                    continue
+                if ocr_text:
+                    pages_text[i] = ocr_text
+                    ocr_pages_used += 1
+        finally:
+            pdf_doc.close()
+
     text, truncated = _truncate("\n\n".join(pages_text))
-    return ExtractionResult(text=text, truncated=truncated, source_unit_count=len(reader.pages))
+    return ExtractionResult(
+        text=text, truncated=truncated, source_unit_count=len(reader.pages),
+        ocr_pages_used=ocr_pages_used,
+    )
 
 
 def extract_docx(file_bytes: bytes) -> ExtractionResult:
