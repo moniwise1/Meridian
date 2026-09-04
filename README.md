@@ -666,9 +666,48 @@ knowledge of this code rewriting a run of rows and recomputing every hash
 after them consistently. It does catch anything short of that — accidental
 edits, an app bug writing to the table directly, a careless tamper attempt,
 corruption. A genuinely tamper-proof trail needs the chain's head hash
-anchored outside this database entirely; not implemented here. Full
-caveats, including a known race on concurrent writers, are in the
-module docstring.
+anchored outside this database entirely — now implemented, see
+**Externally-anchored checkpoints** below. Full caveats, including a
+known race on concurrent writers, are in the module docstring.
+
+**Externally-anchored checkpoints** (`app/audit/anchor.py`,
+`POST /platform/audit/checkpoint`, owner-only) — the specific fix for the
+gap the paragraph above calls out. `verify_chain()` alone can't tell an
+untouched hash chain apart from a *fabricated-but-internally-consistent
+replacement* — someone with DB write access could delete every row and
+insert a brand-new chain from a fresh genesis, and verification would
+report `intact: True`, since a self-consistent-with-itself chain is all
+that check can see. A checkpoint closes that: it computes a single root
+hash over every tenant's current chain head and commits it to a real file
+in an external GitHub repo — a system this app can only append to via an
+explicit token, whose own commit history is nobody's to unilaterally
+rewrite the way a database is. Verifying (`GET
+/platform/audit/checkpoint/latest`, open to any staff role) checks
+whether each anchored hash still literally appears in that tenant's
+current chain — a replacement chain built from different content will
+never happen to reproduce the exact same hash at the exact same point,
+since the hash covers full entry content down to a timestamp.
+
+Writes go to a dedicated branch (not the default branch), created
+automatically from the repo's tip on first publish — deliberately not
+main. A real, live discovery while building this, not a design
+guess: this exact repo has PR-required branch protection on `main` with
+`enforce_admins: true`, and a direct Contents API write there is rejected
+with a 409 regardless of the token's own permissions. Deliberately
+admin-triggered, not an automatic timer — this app has no job scheduler;
+pair it with an external cron (a scheduled GitHub Action, a Railway cron
+service) for genuinely periodic anchoring.
+
+Verified two ways: the fabrication-detection property itself (build a
+tenant's real chain, checkpoint it, then delete every row and replace it
+with a brand-new self-consistent fabricated chain — confirmed
+`verify_chain()` alone reports the fabrication as `intact: True`, exactly
+the gap this closes, and confirmed `verify_checkpoint()` correctly flags
+it as unverified since the anchored hash no longer appears anywhere in
+the replacement chain) against a real local database; and the GitHub
+integration itself — not mocked — with a real publish, real read-back,
+and real verification against this actual repository during development,
+cleaned up afterward via the same API. 17/17 checks passed.
 
 **Frontend** (Next.js/TypeScript/Tailwind) — login/register, Home dashboard
 (connection/analysis/artifact counts and recent activity, pure client-side
@@ -701,7 +740,6 @@ maintaining the status page; see "Internal admin panel" above.
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 | Real invite-by-email | No SMTP identity to build a real invite link on |
-| Externally-anchored (fully tamper-*proof*) audit trail | Audit log is hash-chained and self-verifying now, but the chain's head hash isn't anchored outside this database — see the audit log section above |
 
 ## Running it
 

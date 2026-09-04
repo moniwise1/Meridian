@@ -111,6 +111,33 @@ class Settings(BaseSettings):
     paystack_plan_code_premium: str = ""
     paystack_plan_amount_premium: int = 2_500_000  # NGN 25,000
 
+    # Externally-anchored audit checkpoints (app/audit/anchor.py). The
+    # hash chain in app/audit/logger.py is tamper-EVIDENT, not tamper-
+    # PROOF, precisely because the hashes live in the same DB they protect
+    # - this is the "anchor the chain's head hash somewhere outside this
+    # database entirely" fix that module's own docstring calls out as not
+    # implemented. Anchor target is a GitHub repo (any repo - doesn't have
+    # to be this one), appended to via GitHub's Contents API using a
+    # fine-grained personal access token scoped to just that repo's
+    # Contents: Read and write permission. Unset (default) disables the
+    # feature entirely - checkpoint publishing is admin-triggered
+    # (POST /platform/audit/checkpoint), not automatic, since this app has
+    # no background job scheduler; pair it with an external cron (a
+    # scheduled GitHub Action, a Railway cron service, anything that can
+    # hit an HTTP endpoint on a schedule) for genuinely periodic anchoring.
+    audit_anchor_github_token: str = ""
+    audit_anchor_github_repo: str = ""  # "owner/repo"
+    audit_anchor_github_path: str = "audit_checkpoints.jsonl"
+    # A dedicated branch, deliberately NOT main - checkpoint commits are
+    # unrelated to code history, and a repo with PR-required branch
+    # protection on main (enforce_admins included) will flatly reject a
+    # direct Contents API write there regardless of token permissions -
+    # caught for real against this exact repo during development, not
+    # theorized about (see app/audit/anchor.py's module docstring).
+    # Created automatically from main's current tip on first publish if
+    # it doesn't exist yet.
+    audit_anchor_github_branch: str = "audit-checkpoints"
+
     class Config:
         env_file = ".env"
 

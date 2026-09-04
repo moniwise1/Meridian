@@ -25,8 +25,10 @@ from app.security.login_cooldown import (
     check_platform_login_cooldown, record_platform_login_failure, record_platform_login_success,
     LoginCooldownActive,
 )
+import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
+from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
 from app.billing.plans import PLANS
 
 router = APIRouter(prefix="/platform", tags=["platform"])
@@ -588,6 +590,37 @@ def list_platform_audit(limit: int = 200, db: Session = Depends(get_db),
 @router.get("/audit/verify")
 def verify_platform_audit(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
     return verify_chain(db, "platform")
+
+
+# ---------- Externally-anchored checkpoints (app/audit/anchor.py) ----------
+# Owner-only to PUBLISH (a real write to an external system, using a real
+# credential - same gating tier as staff/tenant management, not the
+# read-only audit views above). Any staff role can VERIFY, matching this
+# section's own "seeing isn't as sensitive as changing" convention.
+
+@router.post("/audit/checkpoint")
+def publish_audit_checkpoint(db: Session = Depends(get_db),
+                              ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    try:
+        result = publish_checkpoint(db)
+    except AnchorNotConfigured as e:
+        raise HTTPException(400, str(e))
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(502, f"GitHub rejected the checkpoint write ({e.response.status_code}).")
+    audit.log(db, "platform", "audit_checkpoint_published", ctx.staff_id,
+              detail={"root_hash": result["checkpoint"]["root_hash"], "commit_url": result["commit_url"]})
+    return result
+
+
+@router.get("/audit/checkpoint/latest")
+def get_latest_audit_checkpoint(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
+    try:
+        checkpoint = fetch_latest_checkpoint()
+    except AnchorNotConfigured as e:
+        raise HTTPException(400, str(e))
+    if not checkpoint:
+        raise HTTPException(404, "No checkpoint has been published yet.")
+    return verify_checkpoint(db, checkpoint)
 
 
 # ---------- Health snapshot ----------
