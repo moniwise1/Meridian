@@ -19,13 +19,19 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   const router = useRouter();
   const [session, setSession] = useState<PlatformSession | null | undefined>(undefined);
 
+  // /platform/accept-invite is the staff-invite acceptance page (see
+  // lib/platformApi.ts's acceptStaffInvite) - visited by someone with no
+  // platform session at all, same reasoning as /platform/login itself.
+  const isPublicRoute = pathname === "/platform/login" || pathname === "/platform/accept-invite";
+
   useEffect(() => {
+    if (isPublicRoute) return;
     const s = loadPlatformSession();
     setSession(s);
-    if (!s && pathname !== "/platform/login") router.replace("/platform/login");
-  }, [pathname, router]);
+    if (!s) router.replace("/platform/login");
+  }, [pathname, router, isPublicRoute]);
 
-  if (pathname === "/platform/login") return <>{children}</>;
+  if (isPublicRoute) return <>{children}</>;
   if (session === undefined || !session) return null; // avoid a flash / mid-redirect
 
   function handleLogout() {

@@ -16,6 +16,7 @@ const PRIORITY_OPTIONS = ["low", "normal", "high", "urgent"];
 export default function PlatformTicketsPage() {
   const [tickets, setTickets] = useState<PlatformTicket[]>([]);
   const [filter, setFilter] = useState<string>("");
+  const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [reply, setReply] = useState("");
@@ -61,6 +62,11 @@ export default function PlatformTicketsPage() {
     }
   }
 
+  const q = search.trim().toLowerCase();
+  const filteredTickets = q
+    ? tickets.filter((t) => t.subject.toLowerCase().includes(q) || t.tenant_name.toLowerCase().includes(q))
+    : tickets;
+
   return (
     <div className="max-w-4xl mx-auto px-8 py-12">
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Tickets</h1>
@@ -80,10 +86,18 @@ export default function PlatformTicketsPage() {
         ))}
       </div>
 
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search by subject or organization…"
+        className="w-full mb-6 text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
+      />
+
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
 
       <div className="flex flex-col gap-3">
-        {tickets.map((t) => (
+        {filteredTickets.map((t) => (
           <div key={t.id} className="bg-panel border border-line rounded-[4px] px-4 py-3">
             <button
               onClick={() => setOpenId(openId === t.id ? null : t.id)}
@@ -156,7 +170,11 @@ export default function PlatformTicketsPage() {
             )}
           </div>
         ))}
-        {tickets.length === 0 && !error && <div className="text-[13px] text-ink-soft">No tickets.</div>}
+        {filteredTickets.length === 0 && !error && (
+          <div className="text-[13px] text-ink-soft">
+            {tickets.length === 0 ? "No tickets." : "No tickets match your search."}
+          </div>
+        )}
       </div>
     </div>
   );

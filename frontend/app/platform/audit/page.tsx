@@ -10,6 +10,7 @@ import { loadPlatformSession } from "@/lib/platformAuth";
 
 export default function PlatformAuditPage() {
   const [entries, setEntries] = useState<PlatformAuditEntry[]>([]);
+  const [search, setSearch] = useState("");
   const [verification, setVerification] = useState<PlatformAuditVerification | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState("");
@@ -27,6 +28,13 @@ export default function PlatformAuditPage() {
   useEffect(() => {
     listPlatformAudit().then(setEntries).catch(() => {});
   }, []);
+
+  const q = search.trim().toLowerCase();
+  const filteredEntries = q
+    ? entries.filter(
+        (e) => e.action.toLowerCase().includes(q) || JSON.stringify(e.detail).toLowerCase().includes(q),
+      )
+    : entries;
 
   async function handleVerify() {
     setVerifying(true);
@@ -160,8 +168,16 @@ export default function PlatformAuditPage() {
         )}
       </div>
 
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search by action or detail…"
+        className="w-full mb-4 text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
+      />
+
       <div className="flex flex-col">
-        {entries.map((e) => (
+        {filteredEntries.map((e) => (
           <div key={e.id} className="border-b border-line py-3 flex items-start gap-4">
             <div className="w-40 shrink-0 text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] pt-0.5">
               {new Date(e.timestamp).toLocaleString()}
@@ -185,8 +201,10 @@ export default function PlatformAuditPage() {
             </div>
           </div>
         ))}
-        {entries.length === 0 && (
-          <div className="text-[13px] text-ink-soft">No activity recorded yet.</div>
+        {filteredEntries.length === 0 && (
+          <div className="text-[13px] text-ink-soft">
+            {entries.length === 0 ? "No activity recorded yet." : "No activity matches your search."}
+          </div>
         )}
       </div>
     </div>

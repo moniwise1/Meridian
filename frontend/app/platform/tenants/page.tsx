@@ -10,6 +10,7 @@ const PLAN_LABEL: Record<string, string> = { basic: "Basic", pro: "Pro", premium
 
 export default function PlatformTenantsPage() {
   const [tenants, setTenants] = useState<PlatformTenant[]>([]);
+  const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -69,6 +70,16 @@ export default function PlatformTenantsPage() {
     }
   }
 
+  const q = search.trim().toLowerCase();
+  const filteredTenants = q
+    ? tenants.filter(
+        (t) =>
+          t.name.toLowerCase().includes(q) ||
+          (t.subdomain ?? "").toLowerCase().includes(q) ||
+          t.users.some((u) => u.email.toLowerCase().includes(q)),
+      )
+    : tenants;
+
   return (
     <div className="max-w-4xl mx-auto px-8 py-12">
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Tenants</h1>
@@ -79,8 +90,16 @@ export default function PlatformTenantsPage() {
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
 
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search by name, subdomain, or user email…"
+        className="w-full mb-4 text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
+      />
+
       <div className="flex flex-col gap-3">
-        {tenants.map((t) => (
+        {filteredTenants.map((t) => (
           <div key={t.id} className="bg-panel border border-line rounded-[4px] px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -240,7 +259,11 @@ export default function PlatformTenantsPage() {
             )}
           </div>
         ))}
-        {tenants.length === 0 && !error && <div className="text-[13px] text-ink-soft">No tenants yet.</div>}
+        {filteredTenants.length === 0 && !error && (
+          <div className="text-[13px] text-ink-soft">
+            {tenants.length === 0 ? "No tenants yet." : "No tenants match your search."}
+          </div>
+        )}
       </div>
     </div>
   );

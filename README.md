@@ -332,6 +332,55 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   pre-auth token (`purpose="mfa_login"`) is correctly refused when
   presented as a handoff token, confirming purpose isolation holds in
   both directions.
+- **Real invite-by-email** (`app/invites.py`, a shared `Invite` table and
+  helpers used by both a tenant's team and Meridian's own internal
+  platform staff) — replaces the old pattern of an admin picking a
+  temporary password for someone else. An admin/owner names an email +
+  role; the recipient gets a real email with a link and must accept it
+  themselves within 24 hours (proving control of that inbox, choosing
+  their own password) or the invite is automatically treated as expired
+  — and can be revoked outright before that from the Team page
+  (`POST /auth/team/invite/*`) or the platform Staff page
+  (`POST /platform/staff/invite/*`). No background scheduler exists in
+  this app, so expiry is enforced lazily — checked (and flipped to
+  `status="expired"`) wherever an invite is read, not by a cron sweeping
+  the table. The token itself is never stored in plaintext (only its
+  SHA-256 hash, same reasoning as password hashing) and is carried in a
+  normal query-param link (`/accept-invite?token=...` — a tenant's own
+  link already points at that tenant's subdomain when one exists, see
+  `_team_accept_url`), unlike the session-handoff token above: an invite
+  token is inherently already exposed via the email transport itself, so
+  the extra fragment-vs-query distinction that matters for a real
+  `access_token` doesn't apply here. Seat-limit checks count pending
+  invites alongside real accounts, so a stack of unaccepted invites can't
+  blow past a plan's cap the moment they're all accepted at once.
+  Re-inviting the same address replaces any still-pending invite for it
+  rather than piling up duplicates. Verified end-to-end against a real
+  local SQLite DB and a real local browser flow: invite sent → accept
+  page shows the real org/role/inviter → accepting creates the account
+  and logs the acceptor straight in → re-accepting a consumed token is
+  rejected → a revoked invite is rejected at accept time → a stale
+  pending invite lazily expires the moment anything reads it — for both
+  the tenant-team and platform-staff flows.
+- **Owner-activity email notifications** (`app/agents/notifications.py`)
+  — critical account activity now reaches the relevant "account owner"
+  by email, not just the in-app audit log, which only ever gets checked
+  by someone who thinks to look. A tenant's admin(s) are emailed when
+  anyone else on their team signs in, when a teammate is invited, and
+  when an invite is accepted; Meridian's own platform owner(s) get the
+  same three for platform staff. Always excludes whoever just performed
+  the action from its own notification (an admin isn't emailed about
+  their own sign-in) — the point is visibility into what OTHERS did, not
+  a self-notification loop. Best-effort throughout, same as every other
+  system email here: a failed send is logged and swallowed, never
+  allowed to fail the request that triggered it. Verified end-to-end
+  alongside the invite flow above, including confirming a solo admin's
+  own sign-in produces zero emails.
+- **Welcome email on registration**, from the founder (`Joel Umunnah`) —
+  sent best-effort right after a new tenant's first admin account is
+  created, briefly explaining what Meridian does and nudging them to
+  connect a data source or upload a document. Verified as part of the
+  same end-to-end test above.
 - Session-signing and credential-encryption now use independently
   rotatable secrets (`JWT_SECRET_KEY` vs `APP_SECRET_KEY`, falling back to
   a shared key if unset, for backward compatibility) — rotating one no
@@ -786,7 +835,6 @@ maintaining the status page; see "Internal admin panel" above.
 | Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
-| Real invite-by-email | Real SMTP now exists (see Outputs above) but nothing generates or emails an actual invite link yet — `add_user` still creates a teammate directly with a temp password, a separate feature from having a working mail transport |
 
 ## Running it
 

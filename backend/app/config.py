@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # CORSMiddleware actually uses.
     frontend_origin: str = "http://localhost:3000"
 
+    # The bare domain per-tenant subdomains hang off (wamco.<this>) - used
+    # to build links that must land on a SPECIFIC tenant's subdomain
+    # (invite-accept emails, see app/invites.py) from the backend, which
+    # has no request Origin to read one back from the way the frontend's
+    # own NEXT_PUBLIC_APEX_DOMAIN does. Matches that frontend default -
+    # keep the two in sync if this ever changes.
+    apex_domain: str = "getmeridiananalytics.com"
+
     @property
     def frontend_origins(self) -> list[str]:
         return [o.strip() for o in self.frontend_origin.split(",") if o.strip()]

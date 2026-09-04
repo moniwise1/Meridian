@@ -1,18 +1,19 @@
 """
 Registration and login (BUILD SPEC section 6 - human control starts with
 knowing who the human is). `register` creates a new tenant + its first
-admin user in one step; everyone after that is invited via `invite` by an
-admin and sets their password via `login`-style flow... kept intentionally
-minimal here: `add_user` lets an existing admin create teammates directly
-with a temporary password, since there's no email-sending identity yet to
-build a real invite-link flow on top of (see the email module for why).
+admin user in one step. Everyone after that joins via a real invite (see
+"Team invites" below) - an admin names an email + role, the recipient
+gets an email and accepts it themselves within 24 hours, proving control
+of that inbox and choosing their own password, rather than an admin
+picking a temporary password for them.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.session import get_db
-from app.db.models import Tenant, User
+from app.db.models import Tenant, User, Invite
 from app.security.auth import (
     hash_password, verify_password, create_access_token, create_pre_auth_token,
     decode_pre_auth_token, get_current_user, require_role, AuthContext,
@@ -24,8 +25,16 @@ from app.security.login_cooldown import (
 from app.billing.plans import seat_limit_for, get_plan
 from app.tenant_slug import generate_unique_subdomain
 from app.audit import logger as audit
+from app.invites import create_invite, get_invite_by_token, list_invites, count_pending, revoke_invite, mark_accepted
+from app.agents.notifications import send_welcome_email, send_invite_email, notify_owners, tenant_admin_emails
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _team_accept_url(tenant: Tenant, token: str) -> str:
+    if tenant.subdomain:
+        return f"https://{tenant.subdomain}.{settings.apex_domain}/accept-invite?token={token}"
+    return f"{settings.frontend_origins[0].rstrip('/')}/accept-invite?token={token}"
 
 
 class RegisterRequest(BaseModel):
@@ -82,12 +91,6 @@ class LoginResponse(BaseModel):
     user_id: str
     role: str
     subdomain: str | None = None
-
-
-class AddUserRequest(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8)
-    role: str = "analyst"
 
 
 class TenantBySubdomain(BaseModel):
@@ -187,6 +190,10 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    # Best-effort, never blocks registration itself - see
+    # app/agents/notifications.py's module docstring.
+    send_welcome_email(user.email, tenant.name)
+
     token = create_access_token(user.id, tenant.id, user.role)
     return TokenResponse(
         access_token=token, tenant_id=tenant.id, user_id=user.id, role=user.role,
@@ -229,6 +236,14 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     mfa_required = bool(user.totp_enabled) or bool(tenant and tenant.require_mfa)
     if not mfa_required:
         audit.log(db, user.tenant_id, "user_logged_in", user.id)
+        # Owner-activity notification, not just the audit log above - see
+        # app/agents/notifications.py. Excludes the signer themselves, so
+        # a solo admin logging in doesn't email themselves every time.
+        notify_owners(
+            tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
+            f"Sign-in to {tenant.name if tenant else 'your workspace'} on Meridian",
+            f"{user.email} ({user.role}) just signed in to your Meridian workspace.",
+        )
         token = create_access_token(user.id, user.tenant_id, user.role)
         return LoginResponse(
             access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role,
@@ -257,12 +272,49 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/users", response_model=TokenResponse)
-def add_user(body: AddUserRequest, db: Session = Depends(get_db),
-             ctx: AuthContext = Depends(get_current_user)):
+# ---------- Team invites ----------
+# Real invite-by-email (app/invites.py) rather than an admin picking a
+# temporary password for someone else - the recipient proves control of
+# their own inbox and picks their own password within 24 hours, or the
+# invite is worthless (both auto-expired AND explicitly revocable before
+# that). See app/agents/notifications.py for the email itself.
+
+class TeamInviteRequest(BaseModel):
+    email: EmailStr
+    role: str = "analyst"
+
+
+class TeamInviteOut(BaseModel):
+    id: str
+    email: str
+    role: str
+    status: str
+    invited_by_email: str
+    created_at: str
+    expires_at: str
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_invite(cls, inv) -> "TeamInviteOut":
+        return cls(
+            id=inv.id, email=inv.email, role=inv.role, status=inv.status,
+            invited_by_email=inv.invited_by_email,
+            created_at=inv.created_at.isoformat() if inv.created_at else "",
+            expires_at=inv.expires_at.isoformat() if inv.expires_at else "",
+        )
+
+
+@router.post("/team/invite", response_model=TeamInviteOut)
+def invite_teammate(body: TeamInviteRequest, db: Session = Depends(get_db),
+                     ctx: AuthContext = Depends(get_current_user)):
     if ctx.role != "admin":
-        raise HTTPException(403, "Only an admin can add teammates.")
-    if db.query(User).filter_by(email=body.email).first():
+        raise HTTPException(403, "Only an admin can invite teammates.")
+    if body.role not in VALID_TENANT_ROLES:
+        raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_TENANT_ROLES))}.")
+    email = body.email.strip().lower()
+    if db.query(User).filter_by(email=email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     # Seat cap: each plan (see app/billing/plans.py) allows a different
@@ -271,12 +323,16 @@ def add_user(body: AddUserRequest, db: Session = Depends(get_db),
     # require_active_subscription's convention elsewhere
     # (app/security/auth.py) - this is a plan limit, not a permissions
     # error, and the caller IS allowed to act, just not on this plan.
+    # Counts pending invites alongside real accounts, not just accounts -
+    # otherwise every one of a stack of pending invites accepting at once
+    # could blow straight past the seat cap with no warning beforehand.
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     if not tenant:
         raise HTTPException(404, "Tenant not found.")
     seat_limit = seat_limit_for(tenant.plan if tenant.tier == "pro" else None)
     if seat_limit is not None:
         existing_count = db.query(User).filter_by(tenant_id=ctx.tenant_id).count()
+        existing_count += count_pending(db, "team", ctx.tenant_id)
         if existing_count >= seat_limit:
             if tenant.tier == "free":
                 raise HTTPException(
@@ -291,16 +347,103 @@ def add_user(body: AddUserRequest, db: Session = Depends(get_db),
                 f"Upgrade on the Billing page to add more teammates.",
             )
 
-    user = User(
-        tenant_id=ctx.tenant_id, email=body.email, role=body.role,
-        password_hash=hash_password(body.password),
+    # Re-inviting the same address replaces any still-pending invite for
+    # it, rather than piling up duplicates the admin would otherwise have
+    # to individually revoke first.
+    for existing in list_invites(db, "team", ctx.tenant_id):
+        if existing.status == "pending" and existing.email == email:
+            revoke_invite(db, existing)
+
+    inviter = db.query(User).filter_by(id=ctx.user_id).first()
+    invite, token = create_invite(db, "team", email, body.role, ctx.user_id, inviter.email, tenant_id=ctx.tenant_id)
+
+    send_invite_email(email, tenant.name, invite.invited_by_email, body.role, _team_accept_url(tenant, token))
+    notify_owners(
+        tenant_admin_emails(db, ctx.tenant_id, exclude_user_id=ctx.user_id),
+        f"{invite.invited_by_email} invited a new teammate to {tenant.name}",
+        f"{invite.invited_by_email} invited {email} to join {tenant.name} as a {body.role}. "
+        f"The invite expires in 24 hours if not accepted.",
     )
+    audit.log(db, ctx.tenant_id, "team_invite_sent", ctx.user_id, detail={"email": email, "role": body.role})
+    return TeamInviteOut.from_invite(invite)
+
+
+@router.get("/team/invites", response_model=list[TeamInviteOut])
+def list_team_invites(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_role("admin"))):
+    return [TeamInviteOut.from_invite(inv) for inv in list_invites(db, "team", ctx.tenant_id)]
+
+
+@router.post("/team/invite/{invite_id}/revoke", response_model=TeamInviteOut)
+def revoke_team_invite(invite_id: str, db: Session = Depends(get_db),
+                        ctx: AuthContext = Depends(require_role("admin"))):
+    invite = db.query(Invite).filter_by(id=invite_id, kind="team", tenant_id=ctx.tenant_id).first()
+    if not invite:
+        raise HTTPException(404, "Invite not found.")
+    if invite.status != "pending":
+        raise HTTPException(400, f"This invite is already {invite.status}.")
+    revoke_invite(db, invite)
+    audit.log(db, ctx.tenant_id, "team_invite_revoked", ctx.user_id, detail={"email": invite.email})
+    return TeamInviteOut.from_invite(invite)
+
+
+class InviteLookupOut(BaseModel):
+    org_label: str
+    role: str
+    invited_by_email: str
+    email: str
+
+
+@router.get("/team/invite/lookup", response_model=InviteLookupOut)
+def lookup_team_invite(token: str, db: Session = Depends(get_db)):
+    """Public - the accept page needs to show "join {company} as {role}"
+    BEFORE the visitor has any credentials of their own."""
+    invite = get_invite_by_token(db, "team", token)
+    if not invite or invite.status != "pending":
+        raise HTTPException(404, "This invite is invalid or has expired.")
+    tenant = db.query(Tenant).filter_by(id=invite.tenant_id).first()
+    return InviteLookupOut(
+        org_label=tenant.name if tenant else "your team", role=invite.role,
+        invited_by_email=invite.invited_by_email, email=invite.email,
+    )
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8)
+
+
+@router.post("/team/invite/accept", response_model=TokenResponse)
+def accept_team_invite(body: AcceptInviteRequest, db: Session = Depends(get_db)):
+    """Public, same reasoning as /auth/handoff/redeem - the whole point is
+    the caller has no session yet. Creates the real User account only
+    here, at acceptance, never at invite time - an un-accepted invite
+    leaves no account behind to clean up if it expires or is revoked."""
+    invite = get_invite_by_token(db, "team", body.token)
+    if not invite or invite.status != "pending":
+        raise HTTPException(400, "This invite is invalid or has expired. Ask an admin to send a new one.")
+    if db.query(User).filter_by(email=invite.email).first():
+        raise HTTPException(400, "An account with this email already exists.")
+
+    user = User(tenant_id=invite.tenant_id, email=invite.email, role=invite.role,
+                password_hash=hash_password(body.password))
     db.add(user)
+    mark_accepted(db, invite)
     db.commit()
     db.refresh(user)
 
+    tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
+    notify_owners(
+        tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
+        f"{user.email} joined {tenant.name if tenant else 'your workspace'} on Meridian",
+        f"{user.email} accepted their invite and joined as a {user.role}.",
+    )
+    audit.log(db, user.tenant_id, "team_invite_accepted", user.id, detail={"email": user.email, "role": user.role})
+
     token = create_access_token(user.id, user.tenant_id, user.role)
-    return TokenResponse(access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role)
+    return TokenResponse(
+        access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+        subdomain=tenant.subdomain if tenant else None, email=user.email,
+    )
 
 
 @router.get("/me")

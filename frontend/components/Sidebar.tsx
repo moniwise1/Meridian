@@ -39,6 +39,7 @@ export default function Sidebar() {
     pathname === "/login" ||
     pathname === "/status" ||
     pathname === "/auth/handoff" ||
+    pathname === "/accept-invite" ||
     pathname.startsWith("/platform") ||
     (pathname === "/" && !session)
   ) {
