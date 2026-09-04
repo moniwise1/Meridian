@@ -16,6 +16,16 @@ app = FastAPI(title="Secure AI Enterprise Analytics Agent", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.frontend_origins,
+    # Matches any per-tenant subdomain (settings.frontend_origins alone
+    # can't, since those are created dynamically - see the setting's own
+    # docstring). None when unset rather than "" - Starlette's
+    # CORSMiddleware only skips regex matching entirely when this is
+    # exactly None (checked via `is not None`); an empty string would
+    # still get compiled and checked via fullmatch(), which happens to be
+    # harmless (an empty pattern only fullmatches an empty origin, never
+    # a real one - verified, not assumed) but there's no reason to compile
+    # and check a regex on every request when the feature is simply unused.
+    allow_origin_regex=settings.frontend_origin_regex or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )

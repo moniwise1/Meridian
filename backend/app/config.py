@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     def frontend_origins(self) -> list[str]:
         return [o.strip() for o in self.frontend_origin.split(",") if o.strip()]
 
+    # frontend_origins above is a fixed, enumerable list - fine for "the
+    # marketing domain plus a fallback URL", structurally wrong for
+    # per-tenant subdomains (app/tenant_slug.py), which are created
+    # dynamically and can never all be individually enumerated here. This
+    # is a regex tested against the request's Origin header instead
+    # (FastAPI's CORSMiddleware allow_origin_regex, OR'd together with the
+    # exact-match list above - either one matching is enough). Empty
+    # (default) disables subdomain CORS entirely without touching the
+    # fixed list's own behavior. Example:
+    # FRONTEND_ORIGIN_REGEX=https://([a-z0-9-]+\.)?getmeridiananalytics\.com
+    frontend_origin_regex: str = ""
+
     # Credential encryption backend - see app/security/secrets.py.
     # "local" (default): a static Fernet key from app_secret_key, fine for
     # dev. "aws": envelope encryption via AWS KMS for production - see
