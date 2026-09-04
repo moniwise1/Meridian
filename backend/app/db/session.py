@@ -49,6 +49,7 @@ _ADDED_COLUMNS = [
     ("tenants", "subscription_expires_at", "TIMESTAMP"),
     ("data_source_connections", "extra_config", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),
     ("tenants", "plan", "VARCHAR"),
+    ("uploaded_documents", "ocr_pages_used", "INTEGER"),
 ]
 
 

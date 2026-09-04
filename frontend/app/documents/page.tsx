@@ -78,8 +78,9 @@ export default function DocumentsPage() {
       <p className="text-[13.5px] text-ink-soft mb-8">
         Upload a PDF, Word, PowerPoint, or Excel file to attach its content to a question on the Ask
         screen — the agent will reference it alongside the database analysis. Text and table content
-        only (PowerPoint slide text, tables, and speaker notes; scanned/image-only PDFs have no
-        extractable text), and only the first 50,000 characters of a document are used.
+        only (PowerPoint slide text, tables, and speaker notes). Scanned/image-only PDF pages are read
+        via OCR automatically, up to 15 pages per document. Only the first 50,000 characters of a
+        document are used.
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
@@ -104,7 +105,10 @@ export default function DocumentsPage() {
                 <div className="text-[13.5px] text-ink truncate">{d.filename}</div>
                 <div className="text-[11.5px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
                   {KIND_LABEL[d.kind] ?? d.kind} · {d.char_count.toLocaleString()} chars extracted
-                  {d.truncated ? " (truncated)" : ""} · {new Date(d.created_at).toLocaleString()}
+                  {d.truncated ? " (truncated)" : ""}
+                  {d.ocr_pages_used > 0
+                    ? ` (${d.ocr_pages_used} scanned page${d.ocr_pages_used === 1 ? "" : "s"} read via OCR)`
+                    : ""} · {new Date(d.created_at).toLocaleString()}
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">

@@ -384,10 +384,23 @@ instruction text, and the model is explicitly told not to comply with
 anything inside it that looks like an instruction. Attaching a document
 also opts a question out of the result cache (see Query result cache above)
 and out of follow-up chaining, rather than trying to fold document identity
-into either of those correctly. NOT built: OCR (a scanned PDF's text
-extracts to nothing, silently — surfaced honestly as an empty result, not
-pretended to work) or real PDF table structure (flattened to reading-order
-text). Bounded to 20MB per upload and 50,000 extracted characters.
+into either of those correctly. Scanned/image-only PDF pages are read via
+OCR (Tesseract, via PyMuPDF for rendering + pytesseract — see
+[docs/OCR.md](docs/OCR.md)): per-page, not per-document, so a mixed PDF
+(some real-text pages, some scanned, e.g. a native report with a scanned
+signature page appended) gets native extraction for the pages that have it
+and OCR only for the pages that need it. Bounded to 15 OCR'd pages per
+document (OCR is genuinely CPU-expensive, unlike the near-instant native
+path, and uploads are still synchronous). Fails open, not closed, if
+Tesseract isn't installed at all — falls back to the pre-OCR empty-page
+behavior rather than crashing the upload, same pattern as Redis and the
+Anthropic client elsewhere in this app. `ocr_pages_used` is surfaced on
+every document (upload/list/get responses, and as a "(N scanned page(s)
+read via OCR)" note on the Documents page) so OCR'd text — real but
+lower-confidence than a native text layer — is never presented identically
+to a clean extraction. NOT built: real PDF table structure (flattened to
+reading-order text, OCR'd or native). Bounded to 20MB per upload and
+50,000 extracted characters.
 Extraction verified against real generated PDF/DOCX/PPTX/XLSX files (not
 reimplemented logic) — actual page text, paragraphs, tables, multi-sheet/
 multi-slide content, PPTX speaker notes, truncation at the character cap,
@@ -398,6 +411,15 @@ delete by a non-uploader → admin delete), and separately, cross-tenant
 document access was confirmed blocked both at the API layer (404) and at
 the exact DB query `planner.py` uses to resolve `document_ids` — the one
 place a wrong tenant filter here would have mattered.
+
+OCR verified with a real local Tesseract install (direct-download installer,
+same pattern used for Postgres earlier in this project — not mocked): a
+genuinely image-only PDF page (confirmed empty under `pypdf.extract_text()`
+*before* testing OCR, to prove the fallback path was actually exercised
+rather than trivially passing) correctly OCR'd; a mixed document (one real-
+text page, one scanned page) correctly used native extraction for one and
+OCR for exactly the other; and the full upload → get → list round trip
+correctly surfaced `ocr_pages_used` throughout.
 
 Document-as-data-source verified end-to-end with a real generated PDF
 through the real app: rejected with neither a connection nor a document
@@ -578,7 +600,6 @@ maintaining the status page; see "Internal admin panel" above.
 |---|---|
 | Oracle/BigQuery/Databricks connectors | No test infrastructure for them in this environment; interface is ready (Snowflake is now built — see the Connectors section above) |
 | Real OAuth/SSO (Google/Microsoft/Salesforce/SAP/etc.) | Needs a registered app with each provider — can't create that here |
-| Document OCR / scanned-PDF text extraction | pypdf only reads an embedded text layer; a scanned document extracts to nothing, honestly, rather than pretending to work — see the Document intelligence section above |
 | Real SMTP/email provider | Console backend stands in; swap-in point is documented above |
 | Automatic re-encryption when switching KMS backends | Existing credentials stay encrypted with whichever backend wrote them; migrating a live database needs a one-off script that runs both backends at once — see `docs/CLOUD_KMS.md` §4 |
 | Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |

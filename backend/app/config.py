@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     artifacts_dir: str = "./artifacts"
     documents_dir: str = "./documents"
     max_document_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+    # Override for pytesseract's path to the Tesseract binary - needed
+    # only where it isn't already resolvable on PATH (e.g. local Windows
+    # dev, if its installer didn't add itself to PATH for an already-open
+    # shell). Leave unset in Docker/Linux production - apt-installed
+    # tesseract-ocr is already on PATH there, no override needed. See
+    # app/agents/document_intelligence.py's OCR fallback.
+    tesseract_cmd: str = ""
 
     # Shared backing store for rate_limit.py / login_cooldown.py /
     # query_cache.py. Empty (default): each falls back to in-process

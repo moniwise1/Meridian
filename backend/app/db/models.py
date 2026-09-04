@@ -206,6 +206,11 @@ class UploadedDocument(Base):
     extracted_text = Column(Text, nullable=False, default="")
     extraction_truncated = Column(Boolean, default=False)
     char_count = Column(Integer, default=0)
+    # How many pages needed the OCR fallback (PDF only, always 0
+    # otherwise) - see app/agents/document_intelligence.py. Surfaced in
+    # the UI so OCR'd text (real, but lower-confidence than a native text
+    # layer) is never presented identically to a clean extraction.
+    ocr_pages_used = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

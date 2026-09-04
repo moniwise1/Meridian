@@ -143,6 +143,7 @@ export type DocumentSummary = {
   kind: string;
   char_count: number;
   truncated: boolean;
+  ocr_pages_used: number;
   created_at: string;
 };
 
