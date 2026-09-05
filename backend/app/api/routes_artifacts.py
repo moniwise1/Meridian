@@ -28,16 +28,27 @@ router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 def _short_title(question: str, limit: int = 100) -> str:
     """A document-only question can be a long, multi-part prompt (a real
-    example: a 6-section extraction request with numbered instructions) -
-    used verbatim as a report/deck's title, that alone can run the entire
-    first page/slide, then get repeated again immediately below as the
-    full "Question: ..." line, wasting a whole page on pure duplication.
-    The full question is never lost - it's always shown in full right
-    below the title in both report_generator.py and
-    presentation_generator.py - this only shortens the oversized headline
-    sitting on top of it. Already-short questions (the common case) are
-    returned untouched, byte for byte."""
-    q = question.strip()
+    example: a 6-section extraction request with numbered instructions,
+    each on its own line) - used verbatim as a report/deck's title, that
+    alone can run the entire first page/slide, then get repeated again
+    immediately below as the full "Question: ..." line, wasting a whole
+    page on pure duplication. The full question is never lost - it's
+    always shown in full right below the title in both
+    report_generator.py and presentation_generator.py - this only
+    shortens the oversized headline sitting on top of it.
+
+    " ".join(question.split()) collapses ALL whitespace runs (spaces,
+    tabs, and - critically - the embedded newlines a multi-line/numbered
+    question is full of) down to single spaces before truncating. A plain
+    .strip() only trims the two ends and leaves internal newlines alone,
+    which, cut off mid-question, produced a real, reported bug: a stray
+    blank line landing inside the truncated title rendered as if it were
+    a second, unrelated bold heading directly under the real one, on both
+    the PDF (fpdf2's multi_cell treats an embedded blank line as a
+    paragraph break) and the deck (a title placeholder that wraps however
+    its own newlines say to). Already-short, single-line questions (the
+    common case) come back byte-for-byte unchanged either way."""
+    q = " ".join(question.split())
     return q if len(q) <= limit else q[:limit].rstrip() + "…"
 
 
