@@ -37,6 +37,27 @@ from app.config import settings
 
 _client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
 
+# settings.llm_model_reasoning (claude-sonnet-5) has extended thinking ON
+# BY DEFAULT with no parameter needed to turn it on - confirmed against
+# Anthropic's own docs after a real production failure: a document-only
+# question came back with a completely empty response because the model
+# spent its entire max_tokens budget on an internal `thinking` content
+# block and never reached the actual answer (stop_reason="max_tokens",
+# content_block_types=["thinking"], zero "text" blocks - see
+# _extract_text below, which is what caught and reported this live).
+# That reasoning is also never shown to a user anyway (`display` defaults
+# to "omitted" on this model - the thinking block comes back with empty
+# text even when thinking succeeds), and this module's own SYSTEM_PROMPT
+# already tells the model to "do that thinking privately" and output only
+# the finished JSON - so there is nothing this exposed reasoning channel
+# was ever going to buy here, only budget it could silently exhaust.
+# Explicitly disabling it guarantees every token goes toward the actual
+# answer. settings.llm_model_fast (Haiku 4.5, used by query_generator.py
+# and context_resolver.py) is NOT on Anthropic's thinking-on-by-default
+# model list, so those two call sites don't share this exposure and don't
+# need this parameter.
+_THINKING_DISABLED = {"type": "disabled"}
+
 SYSTEM_PROMPT = """You are the insight-explanation component of a secure analytics system.
 You will be given: the user's original question, computed metrics (already
 calculated deterministically — you must not invent or recompute numbers),
@@ -173,11 +194,8 @@ def explain(question: str, metrics: dict, quality_notes: list[str],
         payload["reference_documents"] = documents
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
-        # Raised from the original 800 - billed by tokens actually used,
-        # not by this ceiling, so raising it only helps (see
-        # _extract_text's docstring for the failure this heads off: a
-        # response cut short before any real text existed).
-        max_tokens=2048,
+        max_tokens=2048,  # raised from 800 - billed by tokens actually used, not this ceiling
+        thinking=_THINKING_DISABLED,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
@@ -279,17 +297,14 @@ def explain_document_only(question: str, documents: list[dict]) -> Insight:
     payload = {"question": question, "reference_documents": documents}
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
-        # Raised from an original 800, then 1200, to 4096 - caught live
-        # against production: a real user's question here ("give me a
-        # proper breakdown of the worst account, debts... degrowth
-        # percentage in a table") came back with a genuinely EMPTY
-        # response (see _extract_text's docstring) rather than malformed
-        # JSON. A populated "by_group" plus all eight text fields for a
-        # multi-account document is real output on top of a request with
-        # no computed_metrics/quality_notes already summarizing the data
-        # the way explain()'s input does - this path has to do more work
-        # to get there, and 1200 was very plausibly not enough headroom.
-        max_tokens=4096,
+        max_tokens=4096,  # raised from an original 800, then 1200 - see _THINKING_DISABLED above
+        # for the actual, confirmed root cause a real production failure traced back to: this
+        # model spent the entire max_tokens budget on a hidden "thinking" block and never
+        # reached any text at all. Kept generous regardless - a populated "by_group" plus all
+        # eight text fields for a multi-account document is genuinely more output than
+        # explain()'s input (which already comes with computed_metrics/quality_notes doing some
+        # of the summarizing work) needs to produce.
+        thinking=_THINKING_DISABLED,
         system=SYSTEM_PROMPT_DOCUMENT_ONLY,
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
