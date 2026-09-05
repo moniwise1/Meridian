@@ -16,7 +16,16 @@ of which touch a single cell of the actual data.
 import os
 import uuid
 import pandas as pd
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 from app.config import settings
+
+# Same palette as every other Meridian surface (frontend/app/globals.css,
+# the branded HTML emails, the PDF report, the PPTX deck) - openpyxl wants
+# a 6-digit hex string with no leading '#', same shape RGBColor.from_string
+# takes in presentation_generator.py.
+_TEAL_DEEP = "123F3D"
+_PAPER = "F5F6F4"
 
 
 def export_csv(rows: list[dict], base_name: str) -> str:
@@ -29,8 +38,9 @@ def export_csv(rows: list[dict], base_name: str) -> str:
 def export_xlsx(rows: list[dict], base_name: str) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
     path = os.path.join(settings.artifacts_dir, f"meridian-{base_name}-{uuid.uuid4().hex[:8]}.xlsx")
+    df = pd.DataFrame(rows)
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        pd.DataFrame(rows).to_excel(writer, index=False, sheet_name="Data")
+        df.to_excel(writer, index=False, sheet_name="Data")
         wb = writer.book
         wb.properties.creator = "Meridian"
         wb.properties.last_modified_by = "Meridian"
@@ -42,4 +52,25 @@ def export_xlsx(rows: list[dict], base_name: str) -> str:
         # exact same data either way.
         ws.oddFooter.center.text = "Made by Meridian"
         ws.oddFooter.right.text = "Page &P of &N"
+
+        # Header row styling, frozen panes, and column widths - all pure
+        # cell FORMATTING (font/fill/width), never a cell VALUE, so a
+        # script reading this back with pandas/openpyxl sees byte-for-byte
+        # the same data as an unstyled file would - same invariant the
+        # print footer above and the CSV export's filename-only branding
+        # both already rely on.
+        header_font = Font(name="Calibri", bold=True, color=_PAPER)
+        header_fill = PatternFill(fill_type="solid", fgColor=_TEAL_DEEP)
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(vertical="center")
+            # Width from the longer of the header text or its widest cell
+            # value, capped so one long outlier (a long free-text field)
+            # can't blow out the whole sheet's readability.
+            col_values = df[col_name].astype(str)
+            widest = max([len(str(col_name))] + [len(v) for v in col_values])
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max(widest + 2, 10), 60)
+        ws.freeze_panes = "A2"
     return path

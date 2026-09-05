@@ -672,6 +672,71 @@ every one of 5 slides, CSV confirmed byte-identical to its unbranded data
 (only the filename differs), and XLSX confirmed to carry the metadata
 and print footer while its actual cell values remain untouched.
 
+**A real visual design, not just a footer line** (`app/agents/
+report_generator.py`, `presentation_generator.py`, `export.py`,
+`app/assets/meridian_mark.png`) — the branding above was a name on the
+page; the PDF and PPTX underneath it were still fpdf2/python-pptx's plain
+defaults (the deck in particular used PowerPoint's stock "Office" theme
+with no Meridian color anywhere on it at all). Now both use the exact same
+palette as the web app (`frontend/app/globals.css`) and the branded
+emails:
+- **PDF report**: every page gets a teal-deep header band with the logo
+  mark and "MERIDIAN" wordmark (fpdf2's `header()` hook, the same
+  automatic-on-every-page guarantee `footer()` already relied on for its
+  own branding). Section headings are teal-deep with a short colored rule
+  underneath instead of relying on bold weight alone to separate them —
+  the same visual role `ResultView.tsx`'s `border-t border-line` dividers
+  play on screen. The Confidence line is color-coded by level (teal-deep/
+  amber/ink-soft), matching the web app's own `ConfidenceBadge`. The
+  Breakdown table gets a teal-deep header row and alternating light-row
+  banding instead of a plain bordered grid.
+- **PPTX presentation**: the title slide gets the full treatment — a
+  solid teal-deep background, the logo mark, white/paper title text — a
+  real cover slide. Every other slide stays on a white background (a
+  table or several paragraphs of analysis needs the readability a light
+  background gives it far more than it needs to look like the cover) but
+  gets a teal-deep title with a teal accent bar underneath, matching the
+  PDF's section-heading treatment. The table slide's header row is
+  teal-deep with bold white text and alternating row banding, same as the
+  PDF's. Every run explicitly sets `font.name = "Arial"` — the closest
+  cross-platform equivalent to the web app's Helvetica/system-ui stack —
+  rather than inheriting whatever font PowerPoint's default theme
+  supplies, which was never a Meridian brand choice at all.
+- **XLSX export**: the header row is now bold white-on-teal-deep, the
+  header row is frozen (`ws.freeze_panes`), and column widths are sized
+  to their content (capped, so one long free-text outlier can't blow out
+  the whole sheet) — on top of the document properties and print footer
+  already there. All formatting-only: no cell VALUE is touched, the same
+  invariant the print footer and CSV's filename-only branding already
+  relied on.
+- **CSV stays exactly as it was** — deliberately: it has no metadata or
+  styling capability at all, and the existing filename-only branding
+  decision (never touching a byte of the actual data, since a downstream
+  script's `pd.read_csv()` expects exactly the columns it asked for)
+  already covers it correctly.
+
+The logo mark (`app/assets/meridian_mark.png`) is a small, genuinely
+generated asset — the same simple design as the browser favicon
+(`frontend/app/icon.svg`): a teal-deep rounded square with a bold white
+"M", rendered once via Pillow and checked into the repo, not regenerated
+per-report.
+
+Verified two ways, since this environment has no way to open a PDF/PPTX
+visually itself: (1) structurally, reading the actual saved files back —
+a real PDF parsed with `pypdf` and a real PPTX read back with
+`python-pptx`, confirming exact colors, fonts, fills, and shapes landed
+where intended (teal-deep backgrounds, paper-colored bold title runs,
+alternating table row fills, the logo image present) rather than just
+trusting the generation code; and (2) genuinely visually, using this
+Windows environment's actual installed PowerPoint via COM automation
+(`Presentation.SaveAs(..., ppSaveAsPNG)`) to render every slide of a
+realistic sample deck to a real PNG and look at it directly — caught and
+fixed one real cosmetic bug this way (an invalid `run.font.alignment`
+assignment on the title slide's footer run, which doesn't exist as a
+`Font` property in python-pptx) before it ever reached a user. The
+document-only `body` path (see above) was re-verified through both new
+templates afterward to confirm the visual overhaul didn't disturb it.
+
 Document-as-data-source verified end-to-end with a real generated PDF
 through the real app: rejected with neither a connection nor a document
 selected; a document-only question produces the correct step sequence,
