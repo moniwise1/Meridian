@@ -39,6 +39,55 @@ function GroupBars({ data }: { data: { group: string; total: number }[] }) {
   );
 }
 
+// Cycles through the app's existing brand tokens rather than introducing
+// new colors - fine up to 8 slices (GroupBars' own display cap, so the
+// two always describe the same groups) before a color repeats.
+const PIE_COLORS = ["var(--teal)", "var(--teal-deep)", "var(--slate)", "var(--amber)", "var(--red)", "var(--ink-soft)"];
+
+// A dependency-free pie chart (a CSS conic-gradient circle plus a legend)
+// - no charting library exists anywhere in this codebase, consistent with
+// GroupBars above and the platform analytics dashboard's own bar charts.
+// Negative totals (a "loss" figure some questions produce) can't be
+// represented as a pie slice, so they're clamped to zero here rather than
+// producing a nonsensical negative-angle slice; the bar chart above still
+// shows the true signed value.
+function PieChart({ data }: { data: { group: string; total: number }[] }) {
+  const slices = data.slice(0, 8);
+  const total = slices.reduce((sum, d) => sum + Math.max(0, d.total), 0);
+  if (total <= 0) return null;
+
+  let cursor = 0;
+  const stops = slices.map((d, i) => {
+    const start = (cursor / total) * 360;
+    cursor += Math.max(0, d.total);
+    const end = (cursor / total) * 360;
+    return `${PIE_COLORS[i % PIE_COLORS.length]} ${start}deg ${end}deg`;
+  });
+
+  return (
+    <div className="flex items-center gap-6">
+      <div
+        className="w-28 h-28 rounded-full shrink-0"
+        style={{ background: `conic-gradient(${stops.join(", ")})` }}
+      />
+      <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+        {slices.map((d, i) => (
+          <div key={d.group} className="flex items-center gap-2 text-[12px]">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
+            />
+            <span className="text-ink truncate">{d.group}</span>
+            <span className="text-ink-soft shrink-0 ml-auto tabular-nums">
+              {((Math.max(0, d.total) / total) * 100).toFixed(1)}%
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const TREND_ARROW: Record<string, string> = { up: "↑", down: "↓", flat: "→" };
 const TREND_COLOR: Record<string, string> = { up: "text-teal", down: "text-red", flat: "text-ink-soft" };
 
@@ -138,6 +187,11 @@ function AnomalyList({ result }: { result: ResultEvent }) {
 export default function ResultView({ result }: { result: ResultEvent }) {
   const [showSql, setShowSql] = useState(false);
   const insight = "error" in result.insight ? null : result.insight;
+  // A pie slice can't represent a negative value (a "loss" figure some
+  // questions produce) - PieChart itself clamps those to zero, but if
+  // EVERY group is <= 0 there's nothing left to divide a circle by, so
+  // skip the panel entirely rather than showing an empty one.
+  const canShowPie = (result.by_group ?? []).some((d) => d.total > 0);
 
   return (
     <div className="flex flex-col gap-5">
@@ -180,6 +234,13 @@ export default function ResultView({ result }: { result: ResultEvent }) {
         <div className="bg-panel border border-line rounded-[4px] p-5">
           <div className="text-[13px] text-ink-soft mb-3">By group</div>
           <GroupBars data={result.by_group} />
+        </div>
+      )}
+
+      {result.by_group && canShowPie && (
+        <div className="bg-panel border border-line rounded-[4px] p-5">
+          <div className="text-[13px] text-ink-soft mb-3">Share of total</div>
+          <PieChart data={result.by_group} />
         </div>
       )}
 
