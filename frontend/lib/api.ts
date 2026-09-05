@@ -668,6 +668,13 @@ export type ResultEvent = {
   insight:
     | {
         what: string;
+        // Only ever present for a document-only question (see
+        // Insight.body's docstring in app/agents/insight_agent.py) - the
+        // real, organized answer, following whatever structure the
+        // question itself asked for. Absent (undefined) for a
+        // database-backed analysis, which still uses where/when/
+        // contributors below instead.
+        body?: string;
         where: string;
         when: string;
         contributors: string;

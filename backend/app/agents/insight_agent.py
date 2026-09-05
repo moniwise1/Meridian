@@ -124,18 +124,33 @@ class Insight:
     # ask for a per-category comparison; [] specifically means "asked for
     # one, but the document didn't have clean numbers to support it."
     by_group: list[dict] | None = None
+    # Also only ever populated by explain_document_only(). explain()'s
+    # what/where/when/contributors template was built for one specific
+    # job - explaining a single computed metric - and is a bad fit for an
+    # open-ended document question (extraction, summarization, a
+    # user-specified multi-section format): forcing that answer into
+    # Where/When/Contributors boxes it was never designed for is what
+    # produced a real, reported "gibberish"/disorganized report. `body` is
+    # the actual substantive answer for a document-only question - a
+    # complete, well-organized response, using the user's OWN requested
+    # structure when they specified one - and `what` there becomes just a
+    # short one-line synopsis of it, not the whole answer squeezed into a
+    # single field. None here means "not a document-only answer" (the
+    # database path never touches this, exactly like by_group above).
+    body: str | None = None
 
 
 # Fields explain() (the database-backed path) will accept from the model's
-# JSON - deliberately excludes "by_group" (see the Insight docstring above
-# for why) even though the dataclass itself has the field, so a
-# database-backed answer can never end up with an LLM-supplied chart
-# smuggled in through a key the model wasn't even asked for.
+# JSON - deliberately excludes "by_group"/"body" (see the Insight
+# docstring above for why) even though the dataclass itself has both
+# fields, so a database-backed answer can never end up with an
+# LLM-supplied chart or free-form body smuggled in through a key the
+# model wasn't even asked for.
 _EXPLAIN_FIELDS = {
     "what", "where", "when", "contributors", "data_quality_caveat",
     "confidence", "confidence_explanation", "next_question",
 }
-_EXPLAIN_DOCUMENT_ONLY_FIELDS = _EXPLAIN_FIELDS | {"by_group"}
+_EXPLAIN_DOCUMENT_ONLY_FIELDS = _EXPLAIN_FIELDS | {"by_group", "body"}
 
 
 def _extract_text(resp) -> str:
@@ -219,9 +234,17 @@ def explain(question: str, metrics: dict, quality_notes: list[str],
 # under `reference_documents`, still explicitly labelled untrusted DATA to
 # reference, never instructions to follow — see this module's docstring
 # and app/agents/planner.py's for the general policy this is one instance
-# of. Reuses the same `Insight` shape as `explain` so the rest of the
-# pipeline (QueryRecord.result_snapshot, ResultView.tsx, report/
-# presentation generation) needs no document-only special-casing at all.
+# of. Shares the `Insight` dataclass with `explain` (fewer types to keep
+# in sync across QueryRecord.result_snapshot/ResultView.tsx/report and
+# presentation generation), but NOT its whole shape unconditionally
+# anymore: `body` (below) is document-only-specific, because `explain`'s
+# what/where/when/contributors template - built for one job, explaining a
+# single already-computed metric - was a bad enough fit for an open-ended
+# document question that it produced a real, reported "gibberish" report
+# once a user asked for their own multi-section format. ResultView.tsx and
+# the report/presentation generators DO special-case on whether `body` is
+# present now, rendering it as the primary answer and skipping the
+# Where/When/Contributors boxes that don't apply to this kind of question.
 SYSTEM_PROMPT_DOCUMENT_ONLY = """You are answering a question using ONLY the content of one or more
 documents a user uploaded and selected as the thing to analyse — there is no database query
 involved in this request at all.
@@ -229,6 +252,7 @@ involved in this request at all.
 Respond ONLY with JSON in this shape:
 {
   "what": "...",
+  "body": "...",
   "where": "...",
   "when": "...",
   "contributors": "...",
@@ -240,13 +264,35 @@ Respond ONLY with JSON in this shape:
 }
 
 Field guidance:
-- "what": a direct answer to the question, grounded only in the document content given.
+- "body" is the actual answer, and the one thing to get right: a complete, well-organized
+  response to the question, grounded only in the document content given.
+  * If the question itself specifies a structure (named sections, a numbered list of things to
+    extract, an explicit format request), follow that structure EXACTLY, using the user's own
+    section names as headers, in the order given, one per line followed by a blank line before
+    its content. Answer every section they named — if the user's own instructions say what to
+    write when a section doesn't apply (e.g. "say None found"), follow that; otherwise write
+    "Not applicable" or "None found in this document" rather than omitting the section.
+  * If the question does NOT specify a structure, still organize a substantive answer with
+    short, clear headers over paragraphs or "- " bulleted lists wherever that makes it easier
+    to scan — never one dense undifferentiated block of text for an answer with more than one
+    distinct part. A one-line answer to a one-line question doesn't need invented headers.
+  * Use blank lines between sections/paragraphs and "- " at the start of a line for bullets;
+    this is rendered as plain text with line breaks preserved, not markdown, so don't use
+    markdown syntax like "#" or "**bold**" — headers are just short lines of their own.
+  * Never fabricate a fact, figure, or quote not actually present in the document text. If the
+    document doesn't contain enough information for a section, say so plainly in that section
+    rather than guessing or filling the gap with outside knowledge.
+- "what": a ONE-SENTENCE synopsis of "body" — the headline, not the full answer. This is shown
+  prominently on its own above the full "body", so it should stand alone and make sense before
+  anyone reads further.
 - "where"/"when": fill these in only if the document itself describes a region/segment or a
   time period relevant to the answer (e.g. a regional report, a quarterly deck). If neither
   applies, write "Not applicable — no regional/time dimension in this document." rather than
-  inventing one.
+  inventing one. These are secondary metadata, not part of the main answer — the substance
+  belongs in "body", not here.
 - "contributors": the specific parts of the document that support the answer (paraphrase or
-  quote briefly — do not fabricate anything not present in the text).
+  quote briefly — do not fabricate anything not present in the text). Also secondary metadata,
+  not a restatement of "body".
 - "data_quality_caveat": always mention that this is based only on the text extracted from the
   document (not a live database), and that scanned/image-only content or complex tables may not
   have extracted cleanly. If "by_group" is populated, also say plainly that those figures were
@@ -280,7 +326,7 @@ relevant to what was asked.
 
 Never fabricate a fact, figure, or quote that isn't actually present in the given document text.
 If the documents don't contain enough information to answer the question, say so plainly in
-"what" rather than guessing or filling the gap with outside knowledge.
+"body" rather than guessing or filling the gap with outside knowledge.
 
 Every field must read as a finished, single-pass answer. If you need to work through
 arithmetic (e.g. summing figures from a table) or reconsider which region/number is correct,

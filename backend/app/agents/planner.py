@@ -413,7 +413,9 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     try:
         insight = explain(resolved_question, insight_metrics, quality.notes, document_payload)
         insight_dict = asdict(insight)
-        insight_dict.pop("by_group", None)  # always None here - see Insight.by_group's docstring
+        # Both always None here - see Insight.by_group's and Insight.body's docstrings
+        insight_dict.pop("by_group", None)
+        insight_dict.pop("body", None)
     except Exception as e:
         logger.exception("Insight generation failed for query %s", query_id)
         audit.log(db, tenant_id, "insight_generation_failed", user_id, connection_id=connection_id,

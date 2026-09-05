@@ -54,6 +54,27 @@ def _add_bullets_slide(prs, title, bullets):
     return slide
 
 
+def _add_text_slide(prs, title, text):
+    """Like _add_bullets_slide, but for one long free-form answer (a
+    document-only question's "body" - see Insight.body's docstring in
+    insight_agent.py) rather than a handful of short bullet points -
+    splitting it into paragraphs on blank lines keeps its own
+    header/bullet structure readable instead of running it all together
+    as one giant unbroken line the way a single bullet would."""
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = title
+    body = slide.placeholders[1].text_frame
+    body.clear()
+    body.word_wrap = True
+    paragraphs = [p for p in text.split("\n\n") if p.strip()] or [text]
+    for i, para in enumerate(paragraphs):
+        p = body.paragraphs[0] if i == 0 else body.add_paragraph()
+        p.text = para.strip()
+        p.font.size = Pt(14)
+    _add_branding(prs, slide)
+    return slide
+
+
 def _add_table_slide(prs, title, headers, rows):
     slide = prs.slides.add_slide(prs.slide_layouts[5])
     slide.shapes.title.text = title
@@ -81,16 +102,31 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
     _add_title_slide(prs, title, f"{question}\nQuery ID: {query_id}")
 
     if "error" not in insight:
-        _add_bullets_slide(prs, "Executive summary", [
-            insight.get("what", ""),
-            f"Where: {insight.get('where', '')}",
-            f"When: {insight.get('when', '')}",
-        ])
-        _add_bullets_slide(prs, "Key findings", [
-            insight.get("contributors", ""),
-            f"Confidence: {insight.get('confidence', '')} — {insight.get('confidence_explanation', '')}",
-            f"Next question: {insight.get('next_question', '')}",
-        ])
+        # See report_generator.py's identical branch for why: "body"
+        # (document-only questions only) is the real answer, already
+        # organized however the question called for - the Where/When/
+        # Contributors slide below is a template built for explaining a
+        # single computed database metric and is skipped here in favor of
+        # the real answer when there is one.
+        body = insight.get("body")
+        if body:
+            _add_bullets_slide(prs, "Executive summary", [insight.get("what", "")])
+            _add_text_slide(prs, "Analysis", body)
+            _add_bullets_slide(prs, "Confidence", [
+                f"Confidence: {insight.get('confidence', '')} — {insight.get('confidence_explanation', '')}",
+                f"Next question: {insight.get('next_question', '')}",
+            ])
+        else:
+            _add_bullets_slide(prs, "Executive summary", [
+                insight.get("what", ""),
+                f"Where: {insight.get('where', '')}",
+                f"When: {insight.get('when', '')}",
+            ])
+            _add_bullets_slide(prs, "Key findings", [
+                insight.get("contributors", ""),
+                f"Confidence: {insight.get('confidence', '')} — {insight.get('confidence_explanation', '')}",
+                f"Next question: {insight.get('next_question', '')}",
+            ])
 
     if by_group:
         _add_table_slide(
