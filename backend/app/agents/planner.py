@@ -46,6 +46,7 @@ from app.agents.forecasting import forecast_by_group
 from app.agents.context_resolver import resolve as resolve_followup, build_context_snapshot
 from app.agents import query_cache
 from app.agents.column_heuristics import guess_columns
+from app.agents import tabular_analysis
 from app.audit import logger as audit
 from app.config import settings
 
@@ -137,10 +138,16 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     that) applies even more directly when the document IS the source.
 
     Emits the same StepEvent step names as the database path so the
-    frontend's progress trace needs no document-only special-casing, just
-    with "not applicable" content for the DB-specific steps (data
-    quality/anomaly detection/forecasting all operate on a query result
-    that doesn't exist here)."""
+    frontend's progress trace needs no document-only special-casing.
+    When exactly one selected document contains a real, cleanly-parseable
+    table (app/agents/tabular_analysis.py - a spreadsheet, or a table
+    inside a DOCX/PPTX), those steps report genuine work: a real parsed
+    table, real data_quality.py/anomaly_detection.py checks, a real
+    computed breakdown - instead of the "Not applicable" placeholders
+    this path always used before, which were honest but not useful.
+    Multiple documents, an unparseable/oversized table, or a PDF (see
+    tabular_analysis.py's docstring for why PDF tables aren't attempted)
+    all fall back to the original text-based behavior unchanged."""
     yield StepEvent("understanding", "done", question)
 
     if not documents:
@@ -151,18 +158,70 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "finding_data", "done",
         f"{len(documents)} document(s) available: {', '.join(d.filename for d in documents)}.",
     )
-    yield StepEvent("running_analysis", "done", "No database query — analysing document content directly.")
-    yield StepEvent("checking_quality", "done", "Not applicable — no database result to assess for a document-only analysis.")
-    yield StepEvent("investigating_drivers", "done", "Not applicable for a document-only analysis.")
+
+    profile = None
+    quality_report = None
+    detected_anomalies = []
+    if len(documents) == 1:
+        doc = documents[0]
+        tables = tabular_analysis.extract_tables(doc.file_path, doc.kind)
+        table = tabular_analysis.pick_best_table(tables)
+        if table is not None:
+            profile = tabular_analysis.build_profile(table, question)
+            quality_report, detected_anomalies = tabular_analysis.compute_data_quality_and_anomalies(table, profile)
+            yield StepEvent(
+                "running_analysis", "done",
+                f"Parsed a real table from {doc.filename}: {profile.row_count} rows, "
+                f"{len(profile.columns)} columns. Computed breakdowns by "
+                f"{', '.join(profile.breakdowns) or 'no categorical column found'}.",
+            )
+        elif doc.kind in ("xlsx", "docx", "pptx"):
+            yield StepEvent(
+                "running_analysis", "done",
+                f"{doc.filename} didn't contain a table this app could parse as clean structured data "
+                "(too wide, no clean header row, or no table found) — analysing its extracted text instead.",
+            )
+        else:
+            yield StepEvent("running_analysis", "done", "No database query — analysing document content directly.")
+    else:
+        yield StepEvent("running_analysis", "done",
+                         "No database query — analysing document content directly "
+                         "(structured-table parsing only applies to a single selected document).")
+
+    if quality_report:
+        yield StepEvent("checking_quality", "done", "; ".join(quality_report.notes) or
+                         f"Completeness {quality_report.completeness_pct}%, "
+                         f"{quality_report.duplicate_pct}% duplicate rows.")
+    else:
+        yield StepEvent("checking_quality", "done", "Not applicable — no database result to assess for a document-only analysis.")
+
+    if detected_anomalies:
+        yield StepEvent("investigating_drivers", "done",
+                         "; ".join(a.what for a in detected_anomalies[:3]))
+    else:
+        yield StepEvent("investigating_drivers", "done", "Not applicable for a document-only analysis.")
     yield StepEvent("forecasting", "done", "Not applicable for a document-only analysis.")
 
     yield StepEvent("preparing_insights", "running")
     document_payload = [{"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents]
     by_group: list[dict] = []
+    profile_dict = tabular_analysis.profile_to_dict(profile) if profile else None
     try:
-        insight = explain_document_only(question, document_payload)
+        insight = explain_document_only(question, document_payload, computed_profile=profile_dict)
         insight_dict = asdict(insight)
-        by_group = _sanitize_by_group(insight_dict.pop("by_group", None))
+        if profile_dict and profile.primary_group_column:
+            # The real, deterministically-computed breakdown (see
+            # tabular_analysis.build_profile) is used directly for the
+            # chart, bypassing the model entirely for this number - safer
+            # than the text-only path below, which has no choice but to
+            # trust the model to transcribe a figure off raw text.
+            by_group = [
+                {"group": row["group"], "total": row["value"]}
+                for row in profile.breakdowns[profile.primary_group_column]
+            ]
+            insight_dict.pop("by_group", None)
+        else:
+            by_group = _sanitize_by_group(insight_dict.pop("by_group", None))
     except Exception as e:
         logger.exception("Document-only insight generation failed for query %s", query_id)
         audit.log(db, tenant_id, "insight_generation_failed", user_id,
@@ -171,29 +230,39 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         insight_dict = {"error": f"Insight generation unavailable: {e}"}
     yield StepEvent("preparing_insights", "done")
 
-    data_quality_notes = ["Document-only analysis — no database query was run; this reflects the "
-                          "selected document(s)' content only."]
-    if by_group:
-        data_quality_notes.append(
-            "The breakdown below was extracted from the document's text by the AI, not computed "
-            "deterministically from a database — verify important figures against the source document."
-        )
-    data_quality = {
-        "row_count": 0, "completeness_pct": 100.0, "duplicate_pct": 0.0,
-        "missing_by_column": {}, "outlier_notes": [], "excluded_row_count": 0,
-        "notes": data_quality_notes,
-    }
+    if quality_report:
+        data_quality = asdict(quality_report)
+        data_quality["notes"] = data_quality["notes"] + [
+            "Computed from a real table this app parsed directly out of the document "
+            "(not a live database, but genuinely computed, not text the AI eyeballed)."
+        ]
+        row_count = quality_report.row_count
+    else:
+        data_quality_notes = ["Document-only analysis — no database query was run; this reflects the "
+                              "selected document(s)' content only."]
+        if by_group:
+            data_quality_notes.append(
+                "The breakdown below was extracted from the document's text by the AI, not computed "
+                "deterministically from a database — verify important figures against the source document."
+            )
+        data_quality = {
+            "row_count": 0, "completeness_pct": 100.0, "duplicate_pct": 0.0,
+            "missing_by_column": {}, "outlier_notes": [], "excluded_row_count": 0,
+            "notes": data_quality_notes,
+        }
+        row_count = 0
+
     snapshot = {
         "sql": "-- No SQL executed; this analysis used document content only.",
         "sql_rationale": "Document-only analysis — the data source was a document, not a database.",
-        "row_count": 0,
+        "row_count": row_count,
         "duration_ms": 0,
         "truncated": False,
-        "metrics": {},
+        "metrics": profile.overall if profile else {},
         "by_group": by_group,
         "insight": insight_dict,
         "data_quality": data_quality,
-        "anomalies": [],
+        "anomalies": [asdict(a) for a in detected_anomalies],
         "investigation": [],
         "forecast": [],
         "documents_used": [d.filename for d in documents],
