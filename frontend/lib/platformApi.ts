@@ -401,3 +401,37 @@ export async function getHealthSnapshot(): Promise<HealthSnapshot> {
   if (!res.ok) throw new Error("Could not load the health snapshot.");
   return res.json();
 }
+
+// ---------- Product analytics ----------
+
+export type DailyCount = { date: string; count: number };
+
+export type AnalyticsFunnel = {
+  registered: number;
+  connected_or_uploaded: number;
+  asked_a_question: number;
+  subscribed: number;
+};
+
+export type RecentSignup = { tenant_name: string; created_at: string; subdomain: string };
+
+export type Analytics = {
+  total_tenants: number;
+  active_tenants_7d: number;
+  active_tenants_30d: number;
+  total_questions: number;
+  signups_by_day: DailyCount[];
+  questions_by_day: DailyCount[];
+  tenants_by_tier: Record<string, number>;
+  tenants_by_plan: Record<string, number>;
+  artifacts_by_kind: Record<string, number>;
+  funnel: AnalyticsFunnel;
+  recent_signups: RecentSignup[];
+};
+
+export async function getAnalytics(): Promise<Analytics> {
+  const res = await fetch(`${API_BASE}/platform/analytics`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load analytics.");
+  return res.json();
+}

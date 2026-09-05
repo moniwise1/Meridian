@@ -7,6 +7,7 @@ import { loadPlatformSession, clearPlatformSession, type PlatformSession } from 
 
 const NAV = [
   { href: "/platform", label: "Dashboard" },
+  { href: "/platform/analytics", label: "Analytics" },
   { href: "/platform/tenants", label: "Tenants" },
   { href: "/platform/tickets", label: "Tickets" },
   { href: "/platform/status", label: "Status" },
