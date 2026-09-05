@@ -117,6 +117,29 @@ _EXPLAIN_FIELDS = {
 _EXPLAIN_DOCUMENT_ONLY_FIELDS = _EXPLAIN_FIELDS | {"by_group"}
 
 
+def _extract_text(resp) -> str:
+    """Concatenates every text block in the response - and, critically,
+    raises a SPECIFIC, diagnosable error the moment there's no usable text
+    at all, rather than letting that empty string reach json.loads() and
+    fail with Python's generic, useless-for-debugging "Expecting value:
+    line 1 column 1 (char 0)". A genuinely empty response is not a JSON
+    formatting problem - it means the model stopped (hit its token limit
+    mid-thought, refused, or something else at the API level) before
+    writing anything at all, and stop_reason/usage says which. Caught live
+    against production: this was the actual, otherwise-invisible cause of
+    a real user's document-only question returning "explanation step
+    unavailable" with zero information about why."""
+    text_out = "".join(b.text for b in resp.content if b.type == "text")
+    if not text_out.strip():
+        block_types = [b.type for b in resp.content]
+        raise RuntimeError(
+            f"Model returned no text content (stop_reason={resp.stop_reason!r}, "
+            f"output_tokens={resp.usage.output_tokens if resp.usage else '?'}, "
+            f"content_block_types={block_types!r})"
+        )
+    return text_out
+
+
 def _parse_json_response(text_out: str) -> dict:
     """Strips a markdown code fence if present, then parses. Models
     generally follow a "respond ONLY with JSON" instruction, but not
@@ -150,12 +173,15 @@ def explain(question: str, metrics: dict, quality_notes: list[str],
         payload["reference_documents"] = documents
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
-        max_tokens=800,
+        # Raised from the original 800 - billed by tokens actually used,
+        # not by this ceiling, so raising it only helps (see
+        # _extract_text's docstring for the failure this heads off: a
+        # response cut short before any real text existed).
+        max_tokens=2048,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
-    text_out = "".join(b.text for b in resp.content if b.type == "text")
-    parsed = _parse_json_response(text_out)
+    parsed = _parse_json_response(_extract_text(resp))
     # Drop any key the model added beyond what was asked for (e.g. a
     # stray "by_group" or "chart" it invented unprompted) rather than
     # letting an unexpected keyword argument crash Insight(**parsed).
@@ -253,15 +279,19 @@ def explain_document_only(question: str, documents: list[dict]) -> Insight:
     payload = {"question": question, "reference_documents": documents}
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
-        # Higher than explain()'s 800 - a populated "by_group" (see the
-        # system prompt above) adds real output on top of the same eight
-        # text fields, and this path has no computed_metrics/quality_notes
-        # already summarizing the data for the model the way explain()'s
-        # input does, so it tends to write a bit more to get there.
-        max_tokens=1200,
+        # Raised from an original 800, then 1200, to 4096 - caught live
+        # against production: a real user's question here ("give me a
+        # proper breakdown of the worst account, debts... degrowth
+        # percentage in a table") came back with a genuinely EMPTY
+        # response (see _extract_text's docstring) rather than malformed
+        # JSON. A populated "by_group" plus all eight text fields for a
+        # multi-account document is real output on top of a request with
+        # no computed_metrics/quality_notes already summarizing the data
+        # the way explain()'s input does - this path has to do more work
+        # to get there, and 1200 was very plausibly not enough headroom.
+        max_tokens=4096,
         system=SYSTEM_PROMPT_DOCUMENT_ONLY,
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
-    text_out = "".join(b.text for b in resp.content if b.type == "text")
-    parsed = _parse_json_response(text_out)
+    parsed = _parse_json_response(_extract_text(resp))
     return Insight(**{k: v for k, v in parsed.items() if k in _EXPLAIN_DOCUMENT_ONLY_FIELDS})

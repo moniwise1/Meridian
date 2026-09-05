@@ -760,6 +760,31 @@ sibling entries dropped; the returned `insight` dict carries no stray
 `AuditLog` row with the actual exception text in `detail.reason` — the exact
 piece of information the original failure gave no way to recover.
 
+That `AuditLog` row earned its keep almost immediately: the same real user
+hit the fix above, still got "explanation step unavailable" on a fresh
+question, and this time the audit log's `detail.reason` said exactly why —
+`Expecting value: line 1 column 1 (char 0)`, Python's generic message for
+`json.loads("")`. Not malformed JSON this time — the model's response
+genuinely had NO text content at all, and the original code gave no way to
+tell whether that meant a refusal, an empty response, or a token-budget
+cutoff mid-thought. `_extract_text()` now fails LOUD and SPECIFIC the
+moment that happens: `Model returned no text content (stop_reason=...,
+output_tokens=..., content_block_types=...)`, straight from the response
+object's own `stop_reason`/`usage`/block-type fields, before the empty
+string ever reaches a JSON parser to produce a confusing error about
+syntax that was never the real problem. `max_tokens` was also raised
+(`explain()`: 800 → 2048, `explain_document_only()`: 1200 → 4096, both
+billed by tokens actually generated, never by this ceiling) on the working
+theory — consistent with the specific document-only question involved
+("worst account, debts... degrowth percentage in a table", a request that
+now also has to produce a `by_group` on top of all eight text fields — see
+above) — that the original ceiling cut generation off before any output
+text existed. Verified against mocked response objects shaped exactly like
+the real Anthropic SDK's (`content`/`stop_reason`/`usage.output_tokens`):
+zero content blocks and a present-but-whitespace-only text block both now
+raise the specific diagnostic instead of an opaque JSON error, and a
+healthy response is unaffected.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question
