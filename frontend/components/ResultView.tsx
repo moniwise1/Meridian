@@ -201,24 +201,38 @@ export default function ResultView({ result }: { result: ResultEvent }) {
             <div className="text-[15px] font-medium text-ink leading-snug">{insight.what}</div>
             <ConfidenceBadge level={insight.confidence} />
           </div>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 text-[13px]">
-            <div>
-              <dt className="text-ink-soft">Where</dt>
-              <dd className="text-ink mt-0.5">{insight.where}</dd>
-            </div>
-            <div>
-              <dt className="text-ink-soft">When</dt>
-              <dd className="text-ink mt-0.5">{insight.when}</dd>
-            </div>
-            <div className="col-span-2">
-              <dt className="text-ink-soft">What contributed</dt>
-              <dd className="text-ink mt-0.5">{insight.contributors}</dd>
-            </div>
-            <div className="col-span-2">
-              <dt className="text-ink-soft">Data quality</dt>
-              <dd className="text-ink mt-0.5">{insight.data_quality_caveat}</dd>
-            </div>
-          </dl>
+
+          {insight.body ? (
+            // A document-only question's real, organized answer (see
+            // Insight.body's docstring in insight_agent.py) - the
+            // Where/When/Contributors template below is built for
+            // explaining a single computed database metric and is a bad
+            // fit for an open-ended document question, which is what
+            // produced a genuinely disorganized report before this.
+            // pre-wrap preserves the model's own blank-line/"- " bullet
+            // structure without needing a markdown renderer.
+            <div className="text-[13.5px] text-ink whitespace-pre-wrap leading-relaxed">{insight.body}</div>
+          ) : (
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 text-[13px]">
+              <div>
+                <dt className="text-ink-soft">Where</dt>
+                <dd className="text-ink mt-0.5">{insight.where}</dd>
+              </div>
+              <div>
+                <dt className="text-ink-soft">When</dt>
+                <dd className="text-ink mt-0.5">{insight.when}</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-ink-soft">What contributed</dt>
+                <dd className="text-ink mt-0.5">{insight.contributors}</dd>
+              </div>
+            </dl>
+          )}
+
+          <div className="mt-4 pt-4 border-t border-line text-[13px]">
+            <div className="text-ink-soft">Data quality</div>
+            <div className="text-ink mt-0.5">{insight.data_quality_caveat}</div>
+          </div>
           <div className="mt-4 pt-4 border-t border-line text-[13px]">
             <span className="text-ink-soft">Next: </span>
             <span className="text-ink">{insight.next_question}</span>

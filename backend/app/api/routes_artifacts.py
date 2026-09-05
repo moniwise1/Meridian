@@ -26,6 +26,21 @@ from app.billing.usage import count_documents_this_month
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 
+def _short_title(question: str, limit: int = 100) -> str:
+    """A document-only question can be a long, multi-part prompt (a real
+    example: a 6-section extraction request with numbered instructions) -
+    used verbatim as a report/deck's title, that alone can run the entire
+    first page/slide, then get repeated again immediately below as the
+    full "Question: ..." line, wasting a whole page on pure duplication.
+    The full question is never lost - it's always shown in full right
+    below the title in both report_generator.py and
+    presentation_generator.py - this only shortens the oversized headline
+    sitting on top of it. Already-short questions (the common case) are
+    returned untouched, byte for byte."""
+    q = question.strip()
+    return q if len(q) <= limit else q[:limit].rstrip() + "…"
+
+
 def _get_query_record(db: Session, tenant_id: str, query_id: str) -> QueryRecord:
     row = db.query(QueryRecord).filter_by(id=query_id, tenant_id=tenant_id).first()
     if not row:
@@ -89,7 +104,7 @@ def create_report(query_id: str, db: Session = Depends(get_db),
     record = _get_query_record(db, ctx.tenant_id, query_id)
     snap = record.result_snapshot
     path = generate_report_pdf(
-        title=f"Analysis: {record.question}", question=record.question,
+        title=f"Analysis: {_short_title(record.question)}", question=record.question,
         insight=snap.get("insight", {}), metrics=snap.get("metrics", {}),
         by_group=snap.get("by_group"), data_quality=snap.get("data_quality", {}),
         anomalies=snap.get("anomalies", []), sql=snap.get("sql", record.generated_sql),
@@ -107,7 +122,7 @@ def create_presentation(query_id: str, db: Session = Depends(get_db),
     record = _get_query_record(db, ctx.tenant_id, query_id)
     snap = record.result_snapshot
     path = generate_presentation_pptx(
-        title=f"Analysis: {record.question}", question=record.question,
+        title=f"Analysis: {_short_title(record.question)}", question=record.question,
         insight=snap.get("insight", {}), metrics=snap.get("metrics", {}),
         by_group=snap.get("by_group"), data_quality=snap.get("data_quality", {}),
         anomalies=snap.get("anomalies", []), query_id=record.id,

@@ -811,6 +811,50 @@ needed this change. Verified against a mocked client, reading back the
 actual `thinking` keyword argument on both real call sites and confirming
 it's set.
 
+With the crash actually fixed, the real user tried it again and got a
+genuine answer back — and reported it as "gibberish" anyway. Reading the
+actual PDF this time (not just the symptom) turned up two real, separate
+problems, both now fixed:
+- **A whole wasted page.** The question itself was long (a 6-section
+  extraction prompt), and the PDF printed it twice in full — once as a
+  giant bold title, again immediately below as a small "Question: ..."
+  line. `routes_artifacts.py`'s new `_short_title()` truncates only the
+  oversized headline (100 chars + "…"); the full question is still always
+  shown in full right below it in both the PDF and the deck, nothing is
+  lost.
+- **The real answer, forced into the wrong boxes.** The user asked for
+  6 specific named sections (SUMMARY, KEY FACTS, MAIN POINTS, ACTION
+  ITEMS, KEY ENTITIES, OPEN QUESTIONS/GAPS). `explain_document_only()`'s
+  answer was accurate, but the report's fixed template —
+  What/Where/When/Contributors, built for explaining a single computed
+  database metric — has no section that fits an open-ended, user-
+  structured extraction request, so the real content ended up crammed
+  into "Where" and "What contributed" boxes it didn't belong in. That
+  mismatch, not the underlying answer, is what read as disorganized
+  nonsense. Fixed with a new `Insight.body` field (document-only
+  questions only, exactly like `by_group` — `explain()`'s database path
+  never sets it): the actual, complete, well-organized answer, explicitly
+  instructed to follow the user's OWN requested structure verbatim when
+  they gave one (their section names, in their order, "None found" where
+  they said so), or sensible headers/bullets when they didn't. `what`
+  becomes just a one-line synopsis of it rather than the whole answer
+  squeezed into one field. `ResultView.tsx`, `report_generator.py`, and
+  `presentation_generator.py` all now render `body` as the primary answer
+  (a new "Analysis" section/slide) and skip the Where/When/Contributors
+  template entirely when it's present — that template is untouched and
+  still used exactly as before for every database-backed question, which
+  never sets `body` at all.
+
+Verified end-to-end reproducing the real reported scenario (a 6-section
+extraction question against a mocked document-only response shaped
+exactly like the new prompt asks for): the final snapshot's `body` matches
+what the mock returned; the generated PDF, read back with a real PDF
+parser (not just checked for size), contains "Analysis", "SUMMARY", and
+"KEY FACTS" from the body while `"Where / When"` and `"What contributed"`
+are confirmed absent; the generated deck contains the same section
+headers across its slides; and `_short_title()` truncates a long question
+while leaving an already-short one byte-for-byte untouched.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question

@@ -77,12 +77,25 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
         _mc(pdf, 6, _safe(insight.get("what", "")))
         pdf.ln(1)
 
-        section("Where / When")
-        _mc(pdf, 6, _safe(f"Where: {insight.get('where', '')}"))
-        _mc(pdf, 6, _safe(f"When: {insight.get('when', '')}"))
+        # "body" (document-only questions only - see Insight.body's
+        # docstring in insight_agent.py) is the actual answer, already
+        # organized however the question itself called for. The
+        # Where/When/Contributors boxes below are a template built for
+        # explaining a single computed database metric - forcing an
+        # open-ended document answer into them is what produced a real,
+        # reported "gibberish" report, so they're skipped here in favor
+        # of just printing the real answer.
+        body = insight.get("body")
+        if body:
+            section("Analysis")
+            _mc(pdf, 6, _safe(body))
+        else:
+            section("Where / When")
+            _mc(pdf, 6, _safe(f"Where: {insight.get('where', '')}"))
+            _mc(pdf, 6, _safe(f"When: {insight.get('when', '')}"))
 
-        section("What contributed")
-        _mc(pdf, 6, _safe(insight.get("contributors", "")))
+            section("What contributed")
+            _mc(pdf, 6, _safe(insight.get("contributors", "")))
 
         section("Confidence")
         _mc(pdf, 6, _safe(f"{insight.get('confidence', '')} — {insight.get('confidence_explanation', '')}"))
