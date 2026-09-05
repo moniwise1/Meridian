@@ -249,6 +249,17 @@ SYSTEM_PROMPT_DOCUMENT_ONLY = """You are answering a question using ONLY the con
 documents a user uploaded and selected as the thing to analyse — there is no database query
 involved in this request at all.
 
+If a `computed_profile` key is present in the input, the document contained a real, genuine data
+table (a spreadsheet, or a table inside the document), and everything in `computed_profile` was
+already computed deterministically by real code reading that table directly — row counts, column
+breakdowns, trends, threshold counts. Treat these as verified facts, exactly the way you'd treat a
+database's own computed metrics: use ONLY these numbers for anything quantitative in your answer.
+Never recompute, re-derive, round differently, or "sanity check" a number from `computed_profile`
+against anything you read in `reference_documents` — if the two ever seem to disagree, trust
+`computed_profile`, since it was computed by code reading the real cells, not by reading text. Your
+job with a `computed_profile` present is to narrate what these real numbers mean for the question
+asked, referencing the specific breakdowns/trend/threshold data it contains by name.
+
 Respond ONLY with JSON in this shape:
 {
   "what": "...",
@@ -301,14 +312,18 @@ Field guidance:
 - "confidence": "low" if the document doesn't clearly address the question; say so plainly in
   confidence_explanation rather than guessing.
 - "next_question": a natural follow-up someone might ask about this same document.
-- "by_group": ONLY populate this when the question asks to compare, rank, or break a value down
-  across named categories (accounts, regions, products, months, etc.) AND the document states
-  explicit numeric figures for each one. Every "total" must be a number that actually appears in
-  (or is a straightforward sum/difference of numbers that appear in) the document — never
-  estimated, rounded beyond what's shown, or guessed. List every category the question needs,
-  sorted from highest "total" to lowest. If the question doesn't ask for a category comparison,
-  or the document doesn't contain clean enough numbers to support one, set this to null (not an
-  empty list pretending there's nothing to compare) and explain the gap in "data_quality_caveat".
+- "by_group": if `computed_profile` is present, always set this to null — the application charts
+  the real breakdown straight from `computed_profile` itself (see its "breakdowns" field), which
+  is more accurate than anything reconstructed from your own answer text, so there is nothing
+  useful for you to add here. Otherwise (no `computed_profile`): ONLY populate this when the
+  question asks to compare, rank, or break a value down across named categories (accounts,
+  regions, products, months, etc.) AND the document states explicit numeric figures for each one.
+  Every "total" must be a number that actually appears in (or is a straightforward sum/difference
+  of numbers that appear in) the document — never estimated, rounded beyond what's shown, or
+  guessed. List every category the question needs, sorted from highest "total" to lowest. If the
+  question doesn't ask for a category comparison, or the document doesn't contain clean enough
+  numbers to support one, set this to null (not an empty list pretending there's nothing to
+  compare) and explain the gap in "data_quality_caveat".
 
 This application draws its own bar and pie charts from "by_group" — you cannot literally render
 an image. If the question asks you to "create a chart", "plot", "graph", or similar, that request
@@ -336,11 +351,13 @@ see your draft, only your conclusion.
 """
 
 
-def explain_document_only(question: str, documents: list[dict]) -> Insight:
+def explain_document_only(question: str, documents: list[dict], computed_profile: dict | None = None) -> Insight:
     if _client is None:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
 
     payload = {"question": question, "reference_documents": documents}
+    if computed_profile:
+        payload["computed_profile"] = computed_profile
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
         max_tokens=4096,  # raised from an original 800, then 1200 - see _THINKING_DISABLED above

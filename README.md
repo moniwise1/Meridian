@@ -940,6 +940,91 @@ already-short single-line question is untouched and a short
 still gets its newlines collapsed - the bug wasn't specific to long
 questions, just more visible on one.
 
+**Structured-table document analysis** (`app/agents/tabular_analysis.py`,
+`app/agents/planner.py`, `app/agents/insight_agent.py`) — a real user
+uploaded a genuinely large retail spreadsheet (5,232 columns across a
+full fiscal year of weekly blocks) and asked for a serious ranking/trend/
+projection analysis. Document-only analysis's existing design —
+`document_intelligence.py` flattens a table to reading-order text, and
+the LLM reasons about that text directly — is explicitly built for
+supplementary context, not this: a table that wide blows through
+`MAX_EXTRACTED_CHARS` within the first couple of flattened rows, and even
+a table small enough to fit is still asking the LLM to mentally group-by
+and average prose, the exact kind of LLM arithmetic this app's database
+path has never trusted (see `analytics_engine.py`'s docstring — "the LLM
+never does arithmetic — it only ever receives numbers that were already
+computed"). Manually parsing that file with real pandas code — not the
+app — is what actually produced a correct, well-organized answer, which
+prompted the obvious question: why doesn't the product do that itself?
+
+Now it does, for the cases where doing it safely is actually possible.
+`tabular_analysis.py` gives an uploaded document's real table(s) the
+exact same treatment a connected database's query result already gets:
+- **XLSX**: each sheet read as real structured data (pandas/openpyxl),
+  not flattened text.
+- **DOCX/PPTX**: python-docx/python-pptx already expose an embedded
+  table's real cells directly (`table.rows` → `row.cells`, or
+  `shape.table`) — no guessing, so pulling one out as a real DataFrame is
+  exactly as safe as reading a spreadsheet.
+- **PDF is deliberately NOT attempted** — `document_intelligence.py`'s
+  own docstring already flags real PDF table structure as a known,
+  accepted limitation (needs actual layout analysis, e.g. a new
+  `pdfplumber`/`camelot` dependency, and is genuinely unreliable on a
+  visually laid-out page). Misreading two visually-adjacent PDF columns
+  as one would silently produce a WRONG computed number — worse than the
+  existing honest "read it as text and say so" fallback. A PDF still
+  gets full document-only analysis; it just doesn't get this upgrade.
+
+A candidate table is only used if it passes real cleanliness checks
+(≤120 columns, <20% "Unnamed"/blank headers, at least one usable numeric
+column) — the exact 5,232-column real-world case that motivated this
+feature is deliberately *rejected*, not guessed at, and falls back to the
+original text-based path with an honest note explaining why, rather than
+risk computing wrong numbers from a structure a simple heuristic can't
+confidently parse. When a table IS usable, `build_profile()` computes —
+with real pandas, zero LLM calls — an overall summary, a real
+mean-per-group breakdown for every plausible categorical column (store,
+agent, region, ..., picked by name-keyword and cardinality heuristics,
+a column named in the question itself takes priority), a "best-selling
+product per group" cross-tab (which OTHER numeric column has the highest
+total within each group), a genuine month-over-month trend when a date-
+like column exists, and a threshold band when the question names a
+percentage (`"minimum at 60%"` → real `>=60`/`<60` counts, not an
+estimate). `data_quality.py`'s `assess()` and `anomaly_detection.py`'s
+`detect()` — the exact same functions the database path already trusts —
+run against the real parsed table too, replacing document-only's usual
+"Not applicable" placeholder for those two steps with genuine findings
+when there's real tabular data to check.
+
+The computed profile is handed to `explain_document_only()` as a new
+`computed_profile` payload key, with the system prompt updated to treat
+it as verified fact on the same trust level as a database's own computed
+metrics — explicitly told to use ONLY these numbers and never
+"double-check" one against anything read in the document's raw text,
+since the profile came from code reading real cells, not from reading
+text. The model's job shifts from doing arithmetic on prose to narrating
+real numbers by name — the same shift `explain()` already represents for
+the database path. The chart (`by_group`) bypasses the model entirely
+when a profile exists: `planner.py` builds it straight from the
+deterministic breakdown, rather than trusting the model to transcribe a
+number into JSON at all, which is strictly safer than the existing
+by-hand-from-text fallback still used when no clean table was found.
+
+Verified end-to-end with real files, not just unit-level function calls:
+a synthetic clean spreadsheet whose real group-by averages, month-over-
+month trend, and threshold count were hand-computed and matched exactly;
+real DOCX and PPTX files built with python-docx/python-pptx containing
+genuine tables, confirming numeric-string cells get correctly coerced to
+real numbers before aggregation; the full `run_analysis` generator run
+with the LLM mocked at the exact API boundary, confirming
+`computed_profile` actually reaches `explain_document_only()` and the
+final snapshot's `row_count`/`metrics`/`by_group`/`data_quality` all
+reflect the real computed values, not placeholders; and, critically, the
+actual real-world 5,232-column workbook that started this whole feature
+re-run through `extract_tables()` directly, confirming it's correctly
+*rejected* by the cleanliness checks (zero usable tables found) rather
+than silently misparsed into wrong numbers.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question
@@ -1318,6 +1403,7 @@ maintaining the status page; see "Internal admin panel" above.
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 | Real lawyer review of `/privacy` and `/terms` | The pages exist and accurately describe what the software actually does (see "Legal pages" below), but they were written by inspecting the codebase, not by a lawyer — both pages say so plainly at the top. Get real legal review before relying on them for actual liability protection or NDPR/GDPR compliance. |
 | Event-level product analytics (PostHog/Mixpanel/similar) | A first-party business-metrics dashboard now exists (see "Product analytics" above) - signups/questions per day, an activation funnel, tenant/plan/artifact breakdowns. What's still missing is per-event, per-screen tracking (which button someone clicked, where they dropped off within a single session, session replay) - that needs a real product-analytics tool, deliberately not wired in yet since it would mean sending user behavioral data to a new third-party sub-processor. |
+| Real PDF table structure detection | XLSX/DOCX/PPTX uploaded as document-only analysis sources now get their real tables parsed as structured data and run through genuine computation (see "Structured-table document analysis" above). PDF deliberately doesn't - reliable table detection there needs actual layout analysis (a new dependency, e.g. `pdfplumber`/`camelot`) and is genuinely unreliable on a visually laid-out page; misreading two adjacent columns as one would silently produce a wrong computed number, worse than the existing honest text-extraction fallback. A PDF still gets full document-only analysis, just not this specific upgrade. |
 
 ## Running it
 
