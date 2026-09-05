@@ -41,6 +41,8 @@ export default function Sidebar() {
     pathname === "/auth/handoff" ||
     pathname === "/accept-invite" ||
     pathname === "/mfa-recovery" ||
+    pathname === "/privacy" ||
+    pathname === "/terms" ||
     pathname.startsWith("/platform") ||
     (pathname === "/" && !session)
   ) {
