@@ -156,7 +156,8 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
 
     yield StepEvent(
         "finding_data", "done",
-        f"{len(documents)} document(s) available: {', '.join(d.filename for d in documents)}.",
+        f"{len(documents)} document(s) available: "
+        + ", ".join(f"{d.filename} ({d.kind.upper()})" for d in documents) + ".",
     )
 
     profile = None
@@ -164,43 +165,79 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     detected_anomalies = []
     if len(documents) == 1:
         doc = documents[0]
-        tables = tabular_analysis.extract_tables(doc.file_path, doc.kind)
+        tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
         table = tabular_analysis.pick_best_table(tables)
         if table is not None:
             profile = tabular_analysis.build_profile(table, question)
             quality_report, detected_anomalies = tabular_analysis.compute_data_quality_and_anomalies(table, profile)
-            yield StepEvent(
-                "running_analysis", "done",
+            # As specific as the manual, by-hand version of this analysis
+            # would narrate out loud: exactly which columns were picked
+            # and why, and the real headline numbers from each breakdown
+            # - not just "computed breakdowns", the actual top group.
+            picks = []
+            if profile.primary_value_column:
+                picks.append(f'value column "{profile.primary_value_column}"')
+            if profile.primary_group_column:
+                picks.append(f'grouped by "{profile.primary_group_column}"')
+            if profile.date_column:
+                picks.append(f'trend over "{profile.date_column}"')
+            headline_bits = []
+            for group_name, rows in profile.breakdowns.items():
+                if rows:
+                    headline_bits.append(f'top "{group_name}": {rows[0]["group"]} ({rows[0]["value"]})')
+            if profile.threshold_band:
+                headline_bits.append(
+                    f'{profile.threshold_band["at_or_above_count"]} at/above '
+                    f'{profile.threshold_band["threshold_pct"]}%, '
+                    f'{profile.threshold_band["below_count"]} below'
+                )
+            detail = (
                 f"Parsed a real table from {doc.filename}: {profile.row_count} rows, "
-                f"{len(profile.columns)} columns. Computed breakdowns by "
-                f"{', '.join(profile.breakdowns) or 'no categorical column found'}.",
+                f"{len(profile.columns)} columns. Picked {', '.join(picks) or 'no usable columns'}. "
             )
-        elif doc.kind in ("xlsx", "docx", "pptx"):
+            if headline_bits:
+                detail += "Computed: " + "; ".join(headline_bits) + "."
+            yield StepEvent("running_analysis", "done", detail)
+        else:
+            reason = " · ".join(diagnostics) if diagnostics else "no usable table found"
             yield StepEvent(
                 "running_analysis", "done",
-                f"{doc.filename} didn't contain a table this app could parse as clean structured data "
-                "(too wide, no clean header row, or no table found) — analysing its extracted text instead.",
+                f"Checked {doc.filename} for a real data table to compute from directly: {reason}. "
+                "Falling back to reading its extracted text instead — see the README's "
+                "\"Structured-table document analysis\" section for exactly what this check requires.",
             )
-        else:
-            yield StepEvent("running_analysis", "done", "No database query — analysing document content directly.")
     else:
         yield StepEvent("running_analysis", "done",
-                         "No database query — analysing document content directly "
-                         "(structured-table parsing only applies to a single selected document).")
+                         f"No database query — analysing {len(documents)} documents' content directly "
+                         "(structured-table parsing only applies when exactly one document is selected).")
 
     if quality_report:
-        yield StepEvent("checking_quality", "done", "; ".join(quality_report.notes) or
-                         f"Completeness {quality_report.completeness_pct}%, "
-                         f"{quality_report.duplicate_pct}% duplicate rows.")
+        detail = (f"Completeness {quality_report.completeness_pct}%, "
+                   f"{quality_report.duplicate_pct}% duplicate rows, "
+                   f"{quality_report.excluded_row_count} row(s) excluded.")
+        if quality_report.notes:
+            detail += " " + "; ".join(quality_report.notes)
+        if quality_report.outlier_notes:
+            detail += " " + "; ".join(quality_report.outlier_notes)
+        yield StepEvent("checking_quality", "done", detail)
     else:
         yield StepEvent("checking_quality", "done", "Not applicable — no database result to assess for a document-only analysis.")
 
     if detected_anomalies:
         yield StepEvent("investigating_drivers", "done",
-                         "; ".join(a.what for a in detected_anomalies[:3]))
+                         "; ".join(f"{a.what} ({a.magnitude})" for a in detected_anomalies[:3]))
+    elif quality_report:
+        yield StepEvent("investigating_drivers", "done", "No significant anomalies detected in the parsed table.")
     else:
         yield StepEvent("investigating_drivers", "done", "Not applicable for a document-only analysis.")
-    yield StepEvent("forecasting", "done", "Not applicable for a document-only analysis.")
+
+    if profile and profile.trend:
+        first, last = profile.trend[0], profile.trend[-1]
+        yield StepEvent("forecasting", "done",
+                         f"{profile.date_column}: {first['period']} avg {first['average']} → "
+                         f"{last['period']} avg {last['average']} ({len(profile.trend)} period(s) of real data).")
+    else:
+        yield StepEvent("forecasting", "done", "Not applicable for a document-only analysis.")
 
     yield StepEvent("preparing_insights", "running")
     document_payload = [{"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents]

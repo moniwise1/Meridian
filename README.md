@@ -1025,6 +1025,107 @@ re-run through `extract_tables()` directly, confirming it's correctly
 *rejected* by the cleanliness checks (zero usable tables found) rather
 than silently misparsed into wrong numbers.
 
+**Structured-table analysis, round two: recovering the file that started
+it all, and making every step genuinely visible** — the same real user
+asked, reasonably, why the feature above still didn't touch their actual
+5,232-column workbook (it was designed to safely refuse it, not handle
+it) and why the Ask screen's step trace still just said generic things
+like "Not applicable" instead of showing real work. Both are now fixed:
+
+*Real visibility, not just real computation.* Every step
+`_run_document_only_analysis` (`app/agents/planner.py`) emits now carries
+specific, real detail instead of a generic sentence: which columns were
+picked as the value/group/date column and why, the actual top group and
+its real number for every breakdown computed, the real threshold-band
+counts, real `data_quality.py` findings (completeness/duplicates/outlier
+columns by name), and real `anomaly_detection.py` findings — all rendered
+automatically in the existing Ask screen step trace (`ProgressTrace.tsx`
+already displayed a step's `detail` field; it just needed a program below
+it worth being detailed). When a table gets rejected, the reason is now
+just as specific — naming the real column count against the real limit,
+or exactly which sheets/tables were tried and why each one didn't
+qualify — instead of one generic sentence, so "why didn't this get the
+structured treatment" is answered in the product itself, not just in a
+chat explanation.
+
+*Recovering a genuinely wide "one block of columns per period" layout.*
+The 5,232-column file was correctly and safely rejected, but "safely
+reject it" turned out to be a weaker bar than actually possible: its
+shape — a normal set of identity columns, then the same set of metric
+columns repeated once per month, laid out side by side instead of
+stacked — is a common, recognizable spreadsheet pattern (the same shape
+`pandas.melt`/`wide_to_long` exist to handle), not an arbitrary mess.
+`tabular_analysis.py` now detects it directly: `_find_header_row()`
+scores the first ~20 rows of a sheet to find the real header even when
+it isn't row 0 (a blank spacer or title row above it, common enough that
+assuming row 0 was itself part of the original bug); `_find_repeating_
+block_markers()` looks for 3+ real `datetime` values sitting in that
+header row (real evidence of a repeating-period layout, not a guess: 1-2
+incidental date columns doesn't count); `_reshape_repeating_blocks()`
+un-pivots the wide sheet into a long, tidy table — one row per (identity,
+period) — the same real values, just reshaped, never estimated. A too-
+wide sheet always goes through this path before being rejected, and is
+only rejected if no such pattern is actually found.
+
+Getting this right took several real, caught-in-testing fixes, not one
+clean pass:
+- A block's own sub-columns can repeat internally (that file's monthly
+  block had "Customers Served, Target, MTD Achievement, 1st, 2nd, ...
+  31st" columns repeated once per product) — `pd.concat` raises on
+  duplicate column labels, caught immediately by actually running this
+  against the real file. Fixed by keeping only the first occurrence of
+  each name per block; the spreadsheet gives no way to tell which
+  product a later repeat belongs to beyond column position, so keeping
+  the first is honest about that limit rather than inventing a
+  distinguishing suffix the data doesn't support.
+- The date-marked column itself is not just a period *label* — its own
+  values were the real metric being tracked for that period (that file's
+  actual composite score). An early version discarded it, keeping only
+  the date; fixed by including it in the reshape under a generic "value"
+  name, and by `pick_value_columns()` explicitly prioritizing a column
+  literally named "value"/"score"/etc. over raw column order.
+- `pick_best_table()` was choosing by raw cell count alone, which
+  confidently handed the whole analysis to a completely unfilled
+  15,738-row KPI-tracking template sheet elsewhere in the same workbook —
+  more raw cells than the real data sheet, but virtually all zeros. Fixed
+  with `_real_data_density()`: non-null, non-zero cells in non-ID
+  columns, so an empty template can no longer look richer than real data
+  just by being long (and a plain sequential "No" row-number column,
+  which is non-zero for nearly every row regardless of whether the row
+  has real data, doesn't get to inflate the score either).
+- Reading a sheet with `header=None` (needed so the header-row detector
+  can inspect row 0 itself as a candidate) meant pandas never got its
+  usual chance to infer real numeric dtype excluding the header text —
+  slicing the header back out afterward left every column typed as
+  `object`, breaking value/threshold detection for the ordinary,
+  already-working case too. Fixed by running the same
+  `_coerce_numeric_columns()` DOCX/PPTX already needed (their cells are
+  always strings) on every XLSX table too.
+- A sparse numeric column (a `Target` figure only set for some agents,
+  a mostly-blank daily breakdown column) can sit right at the edge of
+  that same coercion's 60% threshold and stay text-typed without being a
+  real category — `pick_group_columns()` was treating a few of these as
+  meaningful business dimensions ("top Target: 1250"). Fixed by also
+  requiring a real candidate's non-null values be overwhelmingly *not*
+  numeric-parseable, not just object-dtyped.
+- The threshold-band feature (`"minimum at 60%"`) only fired when the
+  value column's NAME matched a percent-like keyword, which a reshaped
+  sheet's generically-named "value" column never will. Fixed to also
+  accept a column whose actual values are plausibly percentage-scaled
+  (comfortably under 1000), not just a lucky name.
+
+Every one of these was caught by actually running the real 5,232-column
+file through the pipeline and checking the numbers against the same
+by-hand analysis that originally motivated this feature — not by
+reasoning about the code in the abstract. The final, fully-fixed result
+reproduces that by-hand analysis exactly: 804 rows recovered (67 real
+agents × 12 real months, correctly excluding both the ~280 blank roster
+placeholder rows and the 7 future unfilled months), the same top store
+(Trend Setter Mall) and the same real score, and the same real monthly
+trend (72.5 → 76.5 → 34.4 → 72.4 → 76.4) including the same sharp,
+isolated June anomaly the original manual analysis flagged as more likely
+a data issue than a real business collapse.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question
