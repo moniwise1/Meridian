@@ -855,6 +855,26 @@ are confirmed absent; the generated deck contains the same section
 headers across its slides; and `_short_title()` truncates a long question
 while leaving an already-short one byte-for-byte untouched.
 
+`_short_title()` itself had a real bug, caught on the very next report:
+the exact multi-part question above (six numbered instructions, each on
+its own line) has a `.strip()`-only fix truncate mid-question and land
+right after a line break — since `.strip()` only trims the two ends of a
+string and leaves every newline in the middle alone, the truncated title
+still carried one, and fpdf2's `multi_cell` renders an embedded blank
+line as a paragraph break. The result: what should have been one title
+line rendered as two, the second looking exactly like an unrelated
+second heading directly under the real one — a new, self-inflicted
+"gibberish" bug on top of the one this same function was written to fix.
+Corrected to `" ".join(question.split())`, which collapses every run of
+whitespace — including newlines — to a single space before truncating,
+so a multi-line question always produces one clean title line. Verified
+against the actual real-world reported question: the fixed function
+produces no embedded newline anywhere in its output, while an
+already-short single-line question is untouched and a short
+*multi-line* question (under the length limit but still newline-bearing)
+still gets its newlines collapsed - the bug wasn't specific to long
+questions, just more visible on one.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question
