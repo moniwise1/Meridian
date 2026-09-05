@@ -793,6 +793,30 @@ sufficient/NDPR-compliant" gap, which needs an actual lawyer, not more
 code. Public routes (`AuthGate.tsx`), no sidebar chrome (`Sidebar.tsx`),
 same treatment as `/status`.
 
+**Product analytics** (`GET /platform/analytics` in `routes_platform.py`,
+`frontend/app/platform/analytics/page.tsx`) — a business-metrics dashboard
+in the internal admin panel: total/active tenant counts, signups and
+questions asked per day over the last 30 days, an activation funnel
+(registered → connected a data source or uploaded a document → asked a
+question → subscribed), tenant breakdowns by tier and plan, generated-
+artifact counts by kind, and the most recent signups. Deliberately built
+first-party from data this app already collects for other reasons
+(`Tenant`, `QueryRecord`, `DataSourceConnection`, `UploadedDocument`,
+`GeneratedArtifact`) rather than wiring in a third-party analytics SDK
+(PostHog/Mixpanel/etc.) — that would mean real user behavioral data
+leaving the platform to a new sub-processor, which would need disclosing
+in the just-shipped Privacy Policy, plus a new vendor relationship and API
+key to manage, for what this stage actually needs. Charts are plain CSS
+divs sized by percentage, no charting library — consistent with the rest
+of this codebase's habit of reaching for a dependency only when plain
+code genuinely can't do the job (same reasoning as the PDF/PPTX export
+code not pulling in matplotlib). Daily buckets are computed in Python
+rather than a SQL `GROUP BY`, so the same code behaves identically on
+SQLite (dev) and Postgres (prod) without depending on either dialect's
+date-truncation functions. Aggregated counts only — never a single row of
+one tenant's actual business data, the same boundary the rest of this
+staff-only panel already respects.
+
 **Redis (optional, `app/security/redis_client.py`)** — the rate limiter,
 login cooldown, and query cache below were originally in-process-only
 (correct for one instance, silently weaker behind multiple workers/
@@ -1034,7 +1058,7 @@ maintaining the status page; see "Internal admin panel" above.
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 | Real lawyer review of `/privacy` and `/terms` | The pages exist and accurately describe what the software actually does (see "Legal pages" below), but they were written by inspecting the codebase, not by a lawyer — both pages say so plainly at the top. Get real legal review before relying on them for actual liability protection or NDPR/GDPR compliance. |
-| Product analytics (PostHog/Mixpanel/similar) | No visibility into how real users actually use the app - no event tracking, no funnels, no retention data. Not needed to demo or sell the product, but worth adding before optimizing onboarding or answering "why do users churn" with anything more than a guess. |
+| Event-level product analytics (PostHog/Mixpanel/similar) | A first-party business-metrics dashboard now exists (see "Product analytics" above) - signups/questions per day, an activation funnel, tenant/plan/artifact breakdowns. What's still missing is per-event, per-screen tracking (which button someone clicked, where they dropped off within a single session, session replay) - that needs a real product-analytics tool, deliberately not wired in yet since it would mean sending user behavioral data to a new third-party sub-processor. |
 
 ## Running it
 

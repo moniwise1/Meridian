@@ -769,3 +769,132 @@ def health_snapshot(db: Session = Depends(get_db), ctx: PlatformAuthContext = De
         "open_tickets": db.query(SupportTicket).filter(SupportTicket.status.in_(["open", "in_progress"])).count(),
         "open_incidents": db.query(SystemIncident).filter(SystemIncident.status != "resolved").count(),
     }
+
+
+# ---------- Product analytics (aggregated, cross-tenant business metrics) ----------
+#
+# First-party analytics dashboard built entirely from data this app
+# already collects for OTHER reasons (registration, query records,
+# connections, documents, artifacts) - deliberately NOT a third-party
+# analytics SDK (PostHog/Mixpanel/etc). That would mean real user
+# behavioral data leaving this platform to a new sub-processor, which
+# would need disclosing in the Privacy Policy and adds a whole new
+# vendor relationship - for what this stage actually needs (are people
+# signing up, are they doing anything, are they converting), querying
+# data already sitting in this database is enough, and keeps every byte
+# of it exactly where it already lives. Aggregated counts only - never a
+# single row of one tenant's actual business data, matching the same
+# boundary the rest of this staff-only panel already respects.
+
+class DailyCount(BaseModel):
+    date: str
+    count: int
+
+
+class AnalyticsFunnel(BaseModel):
+    registered: int
+    connected_or_uploaded: int
+    asked_a_question: int
+    subscribed: int
+
+
+class AnalyticsOut(BaseModel):
+    total_tenants: int
+    active_tenants_7d: int
+    active_tenants_30d: int
+    total_questions: int
+    signups_by_day: list[DailyCount]
+    questions_by_day: list[DailyCount]
+    tenants_by_tier: dict[str, int]
+    tenants_by_plan: dict[str, int]
+    artifacts_by_kind: dict[str, int]
+    funnel: AnalyticsFunnel
+    recent_signups: list[dict]
+
+
+def _bucket_by_day(timestamps: list, days: int) -> list[DailyCount]:
+    """Buckets a list of datetimes into daily counts over a trailing
+    window, in Python rather than a dialect-specific SQL GROUP BY - at
+    this stage's actual row counts (dozens to low thousands, not
+    millions) that's simpler and fully portable between SQLite (dev) and
+    Postgres (prod) than reasoning about func.date() behaving identically
+    on both. Every day in the window gets an entry (0 if nothing
+    happened), so a chart never has to guess whether a missing day means
+    "no data" or "zero events"."""
+    today = datetime.utcnow().date()
+    cutoff = today - timedelta(days=days - 1)
+    counts: dict[str, int] = {}
+    d = cutoff
+    while d <= today:
+        counts[d.isoformat()] = 0
+        d += timedelta(days=1)
+    for ts in timestamps:
+        if not ts:
+            continue
+        day = ts.date()
+        if day >= cutoff:
+            key = day.isoformat()
+            if key in counts:
+                counts[key] += 1
+    return [DailyCount(date=k, count=v) for k, v in sorted(counts.items())]
+
+
+@router.get("/analytics", response_model=AnalyticsOut)
+def get_analytics(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
+    tenants = db.query(Tenant).all()
+    total_tenants = len(tenants)
+    now = datetime.utcnow()
+
+    query_rows = db.query(QueryRecord.tenant_id, QueryRecord.created_at).all()
+    active_7d = {t for t, ts in query_rows if ts and ts >= now - timedelta(days=7)}
+    active_30d = {t for t, ts in query_rows if ts and ts >= now - timedelta(days=30)}
+
+    signups_by_day = _bucket_by_day([t.created_at for t in tenants], 30)
+    questions_by_day = _bucket_by_day([ts for _, ts in query_rows], 30)
+
+    tenants_by_tier: dict[str, int] = {}
+    tenants_by_plan: dict[str, int] = {}
+    for t in tenants:
+        tenants_by_tier[t.tier] = tenants_by_tier.get(t.tier, 0) + 1
+        plan_key = t.plan or "none"
+        tenants_by_plan[plan_key] = tenants_by_plan.get(plan_key, 0) + 1
+
+    artifacts_by_kind: dict[str, int] = {}
+    for (kind,) in db.query(GeneratedArtifact.kind).all():
+        artifacts_by_kind[kind] = artifacts_by_kind.get(kind, 0) + 1
+
+    connected_ids = {row[0] for row in db.query(DataSourceConnection.tenant_id).all()}
+    uploaded_ids = {row[0] for row in db.query(UploadedDocument.tenant_id).all()}
+    questioned_ids = {t for t, _ in query_rows}
+    subscribed_ids = {t.id for t in tenants if t.paid_at is not None}
+
+    funnel = AnalyticsFunnel(
+        registered=total_tenants,
+        connected_or_uploaded=len(connected_ids | uploaded_ids),
+        asked_a_question=len(questioned_ids),
+        subscribed=len(subscribed_ids),
+    )
+
+    recent = sorted(tenants, key=lambda t: t.created_at or datetime.min, reverse=True)[:10]
+    recent_signups = [
+        {
+            "tenant_name": t.name,
+            "created_at": t.created_at.isoformat() if t.created_at else "",
+            "subdomain": t.subdomain,
+        }
+        for t in recent
+    ]
+
+    return AnalyticsOut(
+        total_tenants=total_tenants,
+        active_tenants_7d=len(active_7d),
+        active_tenants_30d=len(active_30d),
+        total_questions=len(query_rows),
+        signups_by_day=signups_by_day,
+        questions_by_day=questions_by_day,
+        tenants_by_tier=tenants_by_tier,
+        tenants_by_plan=tenants_by_plan,
+        artifacts_by_kind=artifacts_by_kind,
+        funnel=funnel,
+        recent_signups=recent_signups,
+    )
