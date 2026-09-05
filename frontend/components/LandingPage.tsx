@@ -336,9 +336,12 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-6 md:px-8 py-14 grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-10">
           <div className="col-span-2 sm:col-span-1 pr-4">
             <div className="text-[15px] font-semibold tracking-tight text-ink mb-2">Meridian</div>
-            <p className="text-[12.5px] text-ink-soft leading-relaxed max-w-[220px]">
+            <p className="text-[12.5px] text-ink-soft leading-relaxed max-w-[220px] mb-2">
               Enterprise analytics, read-only by design. Ask a real question, get an answer with the
               evidence behind it.
+            </p>
+            <p className="text-[11px] text-ink-soft/70 leading-relaxed max-w-[220px]">
+              Meridian is a product of Meridian Techverse Limited.
             </p>
           </div>
 
@@ -370,7 +373,7 @@ export default function LandingPage() {
         <div className="border-t border-line">
           <div className="max-w-6xl mx-auto px-6 md:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="text-[11.5px] text-ink-soft">
-              © {new Date().getFullYear()} Meridian. All rights reserved.
+              © {new Date().getFullYear()} Meridian Techverse Limited. All rights reserved.
             </div>
             <div className="text-[11.5px] text-ink-soft">Read-only by design — it can query and explain, nothing else.</div>
           </div>

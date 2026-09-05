@@ -904,6 +904,49 @@ integration itself — not mocked — with a real publish, real read-back,
 and real verification against this actual repository during development,
 cleaned up afterward via the same API. 17/17 checks passed.
 
+**Automated uptime monitoring** (`app/api/routes_monitor.py`,
+`scripts/uptime_monitor.py`, [docs/UPTIME_MONITORING.md](docs/UPTIME_MONITORING.md))
+— the actual fix for `SystemIncident`'s own docstring calling out that
+incidents were entirely human-logged. Same "no job scheduler in this app"
+constraint as the audit checkpoint above, so the real fix is the same
+shape: a small standalone script, run on a Railway Cron Job (a separate
+scheduled service, not a thread inside the API process — the API being
+fully down must still get noticed, which an in-process check could never
+manage), checks the live public status page and this API's own `/health`
+from the outside, then reports the result to `POST /monitor/heartbeat`.
+That endpoint opens a real `SystemIncident` the first time a check fails
+(`created_by_staff_id` left null — that's what distinguishes "automated"
+from "a human logged this" in the platform Activity view), does nothing
+on every subsequent failing run while that same outage is still open
+(never spams duplicate incidents), and auto-resolves it the first time a
+check passes again. Authenticated by a shared secret
+(`UPTIME_MONITOR_SECRET`), not a human platform-staff login — a scheduled
+script has no human to log in as, same category of machine credential as
+the Paystack webhook's HMAC signature elsewhere in this app; unset
+(default) makes the endpoint 503 unconditionally rather than accepting a
+stray or guessed request. Honest about what this is NOT: single-region
+(Railway Cron Jobs run from one region), no alerting (email/SMS/Slack) —
+this only ever gets checked by someone looking at the status page or
+Activity view. Pair with a real third-party monitor (UptimeRobot, Better
+Stack) for either of those specifically; this in-house version exists
+because it plugs directly into the incident model this app already has
+and needs no third-party account, not because it's a superset of what a
+dedicated monitoring service gives you.
+
+Verified two ways: a real end-to-end test against a local SQLite DB (9
+checks — wrong/missing secret rejected, a healthy heartbeat with nothing
+open does nothing, the first failing heartbeat opens an incident, a
+second failing heartbeat during the same outage does NOT duplicate it,
+the auto-incident is visible on the public `/status` endpoint exactly
+like a manual one, a healthy heartbeat resolves it, the status page
+reports operational again, a fresh outage after recovery opens a
+genuinely new incident rather than reusing the resolved one, and an
+unconfigured secret correctly 503s); and the standalone script itself run
+for real against a live local server — a genuine simulated outage
+(pointing it at a port nothing was listening on) correctly detected and
+reported, confirmed visible on `/status`, and confirmed auto-resolved on
+the next run once the real URL was restored.
+
 **Frontend** (Next.js/TypeScript/Tailwind) — login/register, Home dashboard
 (connection/analysis/artifact counts and recent activity, pure client-side
 composition of existing endpoints — no new backend surface), Ask screen
@@ -930,7 +973,7 @@ maintaining the status page; see "Internal admin panel" above.
 | Oracle/BigQuery/Databricks connectors | No test infrastructure for them in this environment; interface is ready (Snowflake is now built — see the Connectors section above) |
 | Real OAuth/SSO (Google/Microsoft/Salesforce/SAP/etc.) | Needs a registered app with each provider — can't create that here |
 | Automatic re-encryption when switching KMS backends | Existing credentials stay encrypted with whichever backend wrote them; migrating a live database needs a one-off script that runs both backends at once — see `docs/CLOUD_KMS.md` §4 |
-| Automated multi-region uptime probing / alerting | The internal status page is manually-logged incidents, same convention as most SaaS status pages; pair with a real monitoring tool for actual automated probing |
+| Multi-region uptime probing / alerting | Automated single-region probing now exists (see "Automated uptime monitoring" below) - it opens/resolves real incidents on its own, but doesn't check from multiple regions and doesn't alert anyone (email/SMS/Slack); pair with a real third-party monitor for those specifically |
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
 

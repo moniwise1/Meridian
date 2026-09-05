@@ -324,12 +324,16 @@ class TicketMessage(Base):
 
 
 class SystemIncident(Base):
-    """A manually-logged downtime/degradation entry - the content behind
-    an internal (and optionally public-facing) status view, in the same
-    spirit as how Stripe/GitHub status pages work: a human posts what's
-    happening, this isn't automated multi-region uptime probing. Pair
-    with a real third-party status/monitoring tool for that - see the
-    README's note on this."""
+    """A downtime/degradation entry - the content behind an internal (and
+    optionally public-facing) status view, in the same spirit as how
+    Stripe/GitHub status pages work. Created either by a human (a
+    platform staffer posts what's happening, POST /platform/incidents,
+    `created_by_staff_id` set) or by the automated uptime monitor
+    (`created_by_staff_id` left null - see app/api/routes_monitor.py and
+    docs/UPTIME_MONITORING.md) checking the live site from outside on a
+    schedule. Not multi-region and not alerting - see that doc's "what
+    this does and doesn't give you" for the honest boundary; pair with a
+    real third-party monitor for those specifically."""
     __tablename__ = "system_incidents"
     id = Column(String, primary_key=True, default=_uuid)
     title = Column(String, nullable=False)
