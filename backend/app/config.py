@@ -177,6 +177,20 @@ class Settings(BaseSettings):
     # it doesn't exist yet.
     audit_anchor_github_branch: str = "audit-checkpoints"
 
+    # Automated uptime monitoring (app/api/routes_monitor.py,
+    # scripts/uptime_monitor.py, see docs/UPTIME_MONITORING.md). Same
+    # "no background scheduler in this app" constraint as the audit
+    # anchor above - genuine automated monitoring needs something OUTSIDE
+    # this process, on a timer, checking it from the outside (a Railway
+    # Cron Job running the script). The script authenticates to
+    # POST /monitor/heartbeat with this shared secret, not a human
+    # platform-staff login - the same category of machine credential as
+    # the Paystack webhook's HMAC signature or the GitHub audit-anchor
+    # token above. Unset (default) disables the endpoint entirely (503),
+    # so a deployment that hasn't set this up can't have a stray or
+    # guessed request silently open fake incidents.
+    uptime_monitor_secret: str = ""
+
     class Config:
         env_file = ".env"
 

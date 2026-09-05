@@ -8,7 +8,7 @@ from app.db.session import init_db
 from app.api import (
     routes_connections, routes_ask, routes_audit, routes_auth, routes_artifacts,
     routes_history, routes_scan, routes_documents, routes_billing,
-    routes_platform, routes_support, routes_status, routes_mfa,
+    routes_platform, routes_support, routes_status, routes_mfa, routes_monitor,
 )
 
 app = FastAPI(title="Secure AI Enterprise Analytics Agent", version="0.1.0")
@@ -58,6 +58,7 @@ app.include_router(routes_billing.router)
 app.include_router(routes_platform.router)
 app.include_router(routes_support.router)
 app.include_router(routes_status.router)
+app.include_router(routes_monitor.router)
 
 # Generated reports/presentations/exports. In production these should be
 # short-lived signed URLs from object storage (S3/GCS) behind the same
