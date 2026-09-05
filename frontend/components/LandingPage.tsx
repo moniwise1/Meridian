@@ -41,6 +41,45 @@ const STEPS = [
   { n: "3", title: "Get the evidence", body: "The answer, the query behind it, anomalies flagged, and a confidence-rated explanation." },
 ] as const;
 
+// Small hand-drawn line icons (currentColor, stroke-based) rather than a
+// photo or stock illustration - same reasoning as the chat mock below:
+// built from the app's own design tokens so they never look like a
+// mismatched stock asset bolted onto an otherwise custom-built page, and
+// need no image file to ship or keep in sync.
+function DatabaseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <ellipse cx="12" cy="5.5" rx="7.5" ry="2.5" />
+      <path d="M4.5 5.5v6c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-6" />
+      <path d="M4.5 11.5v6c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-6" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <path d="M4 5.5h16v10.5H9.5L5 20v-4H4z" />
+      <path d="M8 9.5h8M8 12.5h5" />
+    </svg>
+  );
+}
+
+function EvidenceIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+      <path d="M12 3.5l7 3v5c0 4.5-3 7.5-7 8.5-4-1-7-4-7-8.5v-5z" />
+      <path d="M9 12l2 2 4-4.5" />
+    </svg>
+  );
+}
+
+const HERO_FLOW = [
+  { icon: DatabaseIcon, label: "Connect a database or upload a document" },
+  { icon: ChatIcon, label: "Ask a real business question, plain English" },
+  { icon: EvidenceIcon, label: "Get an answer with the evidence behind it" },
+] as const;
+
 export default function LandingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
 
@@ -74,7 +113,14 @@ export default function LandingPage() {
       </header>
 
       {/* ---------- Hero ---------- */}
-      <section className="max-w-6xl mx-auto px-6 md:px-8 pt-20 pb-16 md:pt-28 md:pb-24">
+      <section className="relative overflow-hidden max-w-6xl mx-auto px-6 md:px-8 pt-20 pb-16 md:pt-28 md:pb-24">
+        {/* Purely decorative - sits behind everything (negative z-index,
+            no pointer events) and adds zero layout weight, so it can
+            never push or misalign real content on any screen size. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -z-10 -top-24 -right-40 w-[560px] h-[560px] rounded-full opacity-[0.07] blur-3xl bg-teal-deep"
+        />
         <div className="max-w-2xl">
           <div className="text-[12px] font-[family-name:var(--font-mono)] text-teal-deep tracking-wide uppercase mb-4">
             Enterprise analytics agent
@@ -101,6 +147,21 @@ export default function LandingPage() {
             >
               See what it does
             </a>
+          </div>
+
+          {/* A quick visual read of the flow (connect → ask → evidence) -
+              condensed teaser of the full "How it works" section below,
+              here to give the hero some real visual interest beyond a
+              wall of text before the reader ever scrolls. */}
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-4 mt-10">
+            {HERO_FLOW.map(({ icon: Icon, label }) => (
+              <div key={label} className="flex items-center gap-2.5 max-w-[220px]">
+                <span className="shrink-0 w-8 h-8 rounded-full border border-line bg-panel flex items-center justify-center text-teal-deep">
+                  <Icon />
+                </span>
+                <span className="text-[12px] text-ink-soft leading-snug">{label}</span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -272,21 +333,47 @@ export default function LandingPage() {
 
       {/* ---------- Footer ---------- */}
       <footer className="border-t border-line">
-        <div className="max-w-6xl mx-auto px-6 md:px-8 py-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-          <div>
-            <div className="text-[14px] font-semibold tracking-tight text-ink mb-1">Meridian</div>
-            <div className="text-[12px] text-ink-soft">Enterprise analytics, read-only by design.</div>
+        <div className="max-w-6xl mx-auto px-6 md:px-8 py-14 grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-10">
+          <div className="col-span-2 sm:col-span-1 pr-4">
+            <div className="text-[15px] font-semibold tracking-tight text-ink mb-2">Meridian</div>
+            <p className="text-[12.5px] text-ink-soft leading-relaxed max-w-[220px]">
+              Enterprise analytics, read-only by design. Ask a real question, get an answer with the
+              evidence behind it.
+            </p>
           </div>
-          <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12.5px] text-ink-soft">
-            <a href="#features" className="hover:text-ink transition-colors">Product</a>
-            <a href="#security" className="hover:text-ink transition-colors">Security</a>
-            <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
-            <Link href="/login" className="hover:text-ink transition-colors">Sign in</Link>
-            <Link href="/login?mode=register" className="hover:text-ink transition-colors">Get started</Link>
-          </nav>
+
+          <div>
+            <div className="text-[11.5px] font-medium text-ink uppercase tracking-wide mb-3">Product</div>
+            <nav className="flex flex-col gap-2.5 text-[13px] text-ink-soft">
+              <a href="#features" className="hover:text-ink transition-colors">Product</a>
+              <a href="#security" className="hover:text-ink transition-colors">Security</a>
+              <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
+            </nav>
+          </div>
+
+          <div>
+            <div className="text-[11.5px] font-medium text-ink uppercase tracking-wide mb-3">Account</div>
+            <nav className="flex flex-col gap-2.5 text-[13px] text-ink-soft">
+              <Link href="/login" className="hover:text-ink transition-colors">Sign in</Link>
+              <Link href="/login?mode=register" className="hover:text-ink transition-colors">Create account</Link>
+            </nav>
+          </div>
+
+          <div>
+            <div className="text-[11.5px] font-medium text-ink uppercase tracking-wide mb-3">Resources</div>
+            <nav className="flex flex-col gap-2.5 text-[13px] text-ink-soft">
+              <Link href="/status" className="hover:text-ink transition-colors">System status</Link>
+            </nav>
+          </div>
         </div>
-        <div className="max-w-6xl mx-auto px-6 md:px-8 pb-8 text-[11.5px] text-ink-soft">
-          © {new Date().getFullYear()} Meridian. All rights reserved.
+
+        <div className="border-t border-line">
+          <div className="max-w-6xl mx-auto px-6 md:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="text-[11.5px] text-ink-soft">
+              © {new Date().getFullYear()} Meridian. All rights reserved.
+            </div>
+            <div className="text-[11.5px] text-ink-soft">Read-only by design — it can query and explain, nothing else.</div>
+          </div>
         </div>
       </footer>
     </div>
