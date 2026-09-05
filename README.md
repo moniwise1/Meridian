@@ -785,6 +785,32 @@ zero content blocks and a present-but-whitespace-only text block both now
 raise the specific diagnostic instead of an opaque JSON error, and a
 healthy response is unaffected.
 
+That diagnostic paid off on the very next retry: the raised `max_tokens`
+ceiling wasn't the fix either. The new, specific error was
+`stop_reason='max_tokens', output_tokens=4096, content_block_types=['thinking']`
+— the model was spending its ENTIRE budget on an internal `thinking`
+content block and never reaching any actual answer text, on every single
+retry, regardless of how high `max_tokens` went. Checked against
+Anthropic's own current docs rather than guessed at a third time:
+`settings.llm_model_reasoning` (`claude-sonnet-5`) has extended thinking
+**on by default, with no parameter needed to turn it on** — a genuine
+behavior difference from older models, where thinking has always been
+strictly opt-in. Both `explain()` and `explain_document_only()` now pass
+`thinking={"type": "disabled"}` explicitly, the documented way to turn it
+off on this model. Worth noting why this loses nothing: that reasoning was
+never shown to a user anyway (`display` defaults to `"omitted"` on this
+model — a successful thinking block comes back with empty text even when
+it works), and this module's own system prompts already instruct the
+model to "do that thinking privately" and output only the finished JSON —
+so the exposed reasoning channel was never buying anything here, only
+budget it could silently exhaust. Checked the other two real Anthropic
+call sites in this codebase (`context_resolver.py`, `query_generator.py`)
+for the same exposure — both use `settings.llm_model_fast` (Haiku 4.5),
+which is not on Anthropic's thinking-on-by-default model list, so neither
+needed this change. Verified against a mocked client, reading back the
+actual `thinking` keyword argument on both real call sites and confirming
+it's set.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question
