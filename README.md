@@ -722,19 +722,61 @@ independent of the FastAPI/DB/pandas stack.
   a real, generic SMTP backend (stdlib `smtplib`, no vendor SDK) —
   deliberately provider-agnostic rather than committing to one specific
   API, so it works with Gmail (an app password), any transactional
-  provider's SMTP relay (Postmark/SendGrid/SES all offer one), or a
+  provider's SMTP relay (Postmark/SendGrid/SES/Resend all offer one), or a
   domain's own mail hosting. A failed real send (bad credentials, refused
   recipient, connection timeout) degrades to a clean, logged `"failed"`
   result surfaced back to the user — not an unhandled exception turning
   into a 500 for what's a completely ordinary "delivery didn't work"
   outcome. Verified against a stubbed `smtplib.SMTP` client (exact command
-  sequence — EHLO/STARTTLS/LOGIN/send — and MIME structure, including
-  attachment content-type guessing) since no live SMTP account is
-  available here, same honesty norm as the AWS KMS backend elsewhere in
-  this doc; separately verified the failure-degrades-cleanly path against
-  a *real* connection failure (a port nothing listens on) through the real
-  FastAPI route, confirming a 200 with `status: "failed"` rather than a
-  crash, and a real `EmailDeliveryLog` row written either way.
+  sequence and MIME structure, including attachment content-type
+  guessing) before a live account existed; **now also verified against a
+  real Resend account in production** — a real domain-verified sender, a
+  real registration triggering a real welcome email that actually arrived
+  in a real inbox. One genuine deployment gotcha hit and fixed along the
+  way: Railway blocks outbound traffic on the standard SMTP port (587) to
+  curb platform abuse, which surfaced as `TimeoutError: timed out` in the
+  backend's own logs — not a credentials or DNS problem at all. Fixed by
+  switching to Resend's alternate STARTTLS port (`2587`), which exists
+  specifically because this exact kind of provider-side port blocking is
+  common; no code change needed, purely a `SMTP_PORT` env var fix.
+  Separately verified the failure-degrades-cleanly path against a *real*
+  connection failure (a port nothing listens on) through the real FastAPI
+  route, confirming a 200 with `status: "failed"` rather than a crash,
+  and a real `EmailDeliveryLog` row written either way.
+
+  **Every email now renders as a branded HTML message**
+  (`_render_html_email` in `app/agents/email_delivery.py`), not the bare
+  plain text it used to be — a header badge (the same "MERIDIAN" wordmark
+  treatment as the web app's own nav) and a "Made by Meridian" footer,
+  applied uniformly to every email this backend sends (welcome, invites,
+  owner notifications, MFA recovery, and the AI agent's "email me this
+  report" feature) without any of those callers needing to change at all
+  — purely a presentation layer added at the transport level. Sent as a
+  real `multipart/alternative` (plain text + HTML, the plain-text part
+  completely unchanged) so every client can render it and nothing looks
+  broken to a mail client that doesn't render HTML; the logo specifically
+  is CSS-styled text, not an embedded image — most email clients block
+  remote images until a recipient clicks "show images," so a real `<img>`
+  logo would often render as a blank box on first open, while
+  background-color-styled text always renders immediately. Verified by
+  constructing a real message through the actual `SmtpEmailBackend` (with
+  `smtplib.SMTP` mocked) and confirming the resulting MIME tree is
+  correctly `multipart/mixed` → `multipart/alternative` (plain + html) →
+  attachment, that the plain-text part is byte-for-byte what it always
+  was, and that the HTML part contains the expected branding and dynamic
+  content (founder name, company name) — then confirmed for real against
+  the actual production `send_welcome_email` path.
+
+  **Favicon** (`frontend/app/icon.svg`, `frontend/app/favicon.ico`) — a
+  simple on-brand mark (a rounded square in the app's own `--teal-deep`
+  color with a bold "M"), picked up automatically by Next.js's App Router
+  file-convention (no code/metadata change needed) and shown as the
+  browser tab icon everywhere, replacing the framework's default
+  placeholder. The `.ico` is a genuinely multi-resolution icon (16/32/48/
+  64px, via Pillow, rendered from a single sharp high-resolution source
+  rather than upscaling a tiny one) for crisp rendering across browser
+  tabs, bookmarks, and OS-level icon caches that still request the legacy
+  format directly.
 
 **Redis (optional, `app/security/redis_client.py`)** — the rate limiter,
 login cooldown, and query cache below were originally in-process-only

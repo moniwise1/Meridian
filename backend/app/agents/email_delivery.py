@@ -30,6 +30,7 @@ are available in this environment. Confirm your first real send lands
 (and isn't caught by spam filtering) before relying on it for anything
 time-sensitive.
 """
+import html
 import mimetypes
 import os
 import smtplib
@@ -41,6 +42,66 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import User, EmailDeliveryLog
 from app.audit import logger as audit
+
+# Same brand tokens as frontend/app/globals.css - kept in sync by hand
+# since an email needs its styling INLINE (email clients strip <style>
+# blocks and ignore CSS variables), not shared CSS the way the web app
+# gets it. A CSS-styled text badge, not an embedded image, for the header
+# mark: many email clients block remote images until a recipient clicks
+# "show images", so a real <img> logo would often render as a blank box
+# on first open - text styled with background-color always renders.
+_BRAND_TEAL_DEEP = "#123f3d"
+_BRAND_TEAL = "#1c5d5a"
+_BRAND_PAPER = "#f5f6f4"
+_BRAND_INK = "#171a1c"
+_BRAND_INK_SOFT = "#565f66"
+
+
+def _render_html_email(body: str) -> str:
+    """Wraps a plain-text email body in a branded HTML shell - a header
+    badge (the same wordmark treatment as the web app's own nav) and a
+    "Made by Meridian" footer, matching the branding already added to
+    every downloaded report/presentation/export. Applies uniformly to
+    every email this backend sends (welcome, invites, owner
+    notifications, MFA recovery, and the AI agent's "email me this
+    report" feature) without any of those callers needing to know or
+    care - this is purely a presentation layer over whatever plain-text
+    body they already built."""
+    escaped = html.escape(body)
+    paragraphs = "".join(
+        f'<p style="margin:0 0 14px;">{p.replace(chr(10), "<br>")}</p>'
+        for p in escaped.split("\n\n") if p.strip()
+    )
+    return f"""\
+<!doctype html>
+<html>
+  <body style="margin:0;padding:24px 16px;background:{_BRAND_PAPER};
+               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr><td align="center">
+        <table role="presentation" width="100%" style="max-width:520px;" cellpadding="0" cellspacing="0">
+          <tr><td align="center" style="padding-bottom:24px;">
+            <span style="display:inline-block;background:{_BRAND_TEAL_DEEP};color:{_BRAND_PAPER};
+                         font-weight:700;font-size:14px;letter-spacing:0.03em;
+                         padding:10px 18px;border-radius:5px;">MERIDIAN</span>
+          </td></tr>
+          <tr><td style="background:#ffffff;border:1px solid #e2e4e1;border-radius:6px;
+                         padding:28px 32px;color:{_BRAND_INK};font-size:14px;line-height:1.6;">
+            {paragraphs}
+          </td></tr>
+          <tr><td align="center" style="padding:24px 12px;color:{_BRAND_INK_SOFT};
+                         font-size:12px;line-height:1.6;">
+            Made by Meridian &mdash; Enterprise analytics, read-only by design.<br>
+            <a href="https://www.getmeridiananalytics.com" style="color:{_BRAND_TEAL};text-decoration:none;">
+              getmeridiananalytics.com
+            </a>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>
+"""
 
 
 class EmailBackend(ABC):
@@ -78,7 +139,13 @@ class SmtpEmailBackend(EmailBackend):
         message["Subject"] = subject
         message["From"] = self._from_address
         message["To"] = to
+        # Plain-text part first (the universal fallback every client can
+        # render, and what spam filters expect to find alongside HTML),
+        # then the branded HTML alternative - this exact order is what
+        # produces a correct multipart/alternative structure, per
+        # email.message's own documented pattern.
         message.set_content(body)
+        message.add_alternative(_render_html_email(body), subtype="html")
 
         if attachment_path:
             # Guessed from the file extension (reports/exports are always
