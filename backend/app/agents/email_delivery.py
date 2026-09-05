@@ -37,6 +37,7 @@ import smtplib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import formataddr
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -137,7 +138,13 @@ class SmtpEmailBackend(EmailBackend):
     def send(self, to: str, subject: str, body: str, attachment_path: str | None) -> None:
         message = EmailMessage()
         message["Subject"] = subject
-        message["From"] = self._from_address
+        # A bare address (e.g. "hello@getmeridiananalytics.com") shows up
+        # in most inboxes with the local part ("hello") standing in for a
+        # sender name, since there isn't one. formataddr produces a
+        # correctly quoted/encoded "Meridian <hello@...>" header per RFC
+        # 2822, so every client shows the brand name instead of guessing
+        # one from the address.
+        message["From"] = formataddr(("Meridian", self._from_address))
         message["To"] = to
         # Plain-text part first (the universal fallback every client can
         # render, and what spam filters expect to find alongside HTML),

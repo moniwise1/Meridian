@@ -861,6 +861,16 @@ independent of the FastAPI/DB/pandas stack.
   content (founder name, company name) — then confirmed for real against
   the actual production `send_welcome_email` path.
 
+  **Sender name** — the `From` header was a bare address
+  (`hello@getmeridiananalytics.com`) with no display name, so most inboxes
+  showed the local part, `hello`, standing in for a sender name since
+  there wasn't one. Fixed with `email.utils.formataddr(("Meridian",
+  from_address))`, which produces a correctly quoted/encoded `"Meridian
+  <hello@getmeridiananalytics.com>"` header per RFC 2822 — every client
+  now shows the brand name a recipient actually recognizes. Verified
+  against a stubbed `smtplib.SMTP` client, reading the constructed
+  message's own `From` header back.
+
   **Favicon** (`frontend/app/icon.svg`, `frontend/app/favicon.ico`) — a
   simple on-brand mark (a rounded square in the app's own `--teal-deep`
   color with a bold "M"), picked up automatically by Next.js's App Router
