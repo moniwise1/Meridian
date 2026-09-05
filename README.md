@@ -778,6 +778,21 @@ independent of the FastAPI/DB/pandas stack.
   tabs, bookmarks, and OS-level icon caches that still request the legacy
   format directly.
 
+**Legal pages** (`frontend/app/privacy/page.tsx`, `frontend/app/terms/page.tsx`)
+— a real Privacy Policy and Terms of Service, linked from the marketing
+footer and referenced in the registration form's consent line ("By
+creating an account, you agree to..."). Written by inspecting what the
+codebase actually does rather than generic boilerplate — the third-party
+sub-processor list (Anthropic, Paystack, Resend, Railway), the
+read-only/encryption/audit claims, the 7-day refund window, and the
+per-plan usage caps are all real, current facts about this specific app,
+not filled-in placeholders. Both pages say plainly, at the top, that they
+have not been reviewed by a lawyer — this closes the "the software
+matches what the document claims" gap, not the "is this document legally
+sufficient/NDPR-compliant" gap, which needs an actual lawyer, not more
+code. Public routes (`AuthGate.tsx`), no sidebar chrome (`Sidebar.tsx`),
+same treatment as `/status`.
+
 **Redis (optional, `app/security/redis_client.py`)** — the rate limiter,
 login cooldown, and query cache below were originally in-process-only
 (correct for one instance, silently weaker behind multiple workers/
@@ -1018,6 +1033,8 @@ maintaining the status page; see "Internal admin panel" above.
 | Multi-region uptime probing / alerting | Automated single-region probing now exists (see "Automated uptime monitoring" below) - it opens/resolves real incidents on its own, but doesn't check from multiple regions and doesn't alert anyone (email/SMS/Slack); pair with a real third-party monitor for those specifically |
 | Pre-execution query cost estimation | Per-query cost is bounded by row LIMIT + timeout, not estimated before running. (Shared cross-process rate limiting/caching is no longer a gap — see the Redis section above, opt-in via `REDIS_URL`.) |
 | Prescriptive analytics ("what should we do about it") | Not built — deliberately, see the Forecasting section above for why |
+| Real lawyer review of `/privacy` and `/terms` | The pages exist and accurately describe what the software actually does (see "Legal pages" below), but they were written by inspecting the codebase, not by a lawyer — both pages say so plainly at the top. Get real legal review before relying on them for actual liability protection or NDPR/GDPR compliance. |
+| Product analytics (PostHog/Mixpanel/similar) | No visibility into how real users actually use the app - no event tracking, no funnels, no retention data. Not needed to demo or sell the product, but worth adding before optimizing onboarding or answering "why do users churn" with anything more than a guess. |
 
 ## Running it
 

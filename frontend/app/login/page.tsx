@@ -374,7 +374,14 @@ function LoginPageInner() {
       {effectiveMode === "register" && (
         <p className="text-[11.5px] text-ink-soft text-center mt-4 leading-relaxed">
           Creating an account makes you the admin for a new company workspace. You&apos;ll set up
-          two-factor authentication right after.
+          two-factor authentication right after. By creating an account, you agree to our{" "}
+          <a href="/terms" target="_blank" rel="noreferrer" className="text-teal hover:text-teal-deep transition-colors">
+            Terms of Service
+          </a>{" "}
+          and{" "}
+          <a href="/privacy" target="_blank" rel="noreferrer" className="text-teal hover:text-teal-deep transition-colors">
+            Privacy Policy
+          </a>.
         </p>
       )}
 

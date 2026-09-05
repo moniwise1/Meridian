@@ -27,10 +27,13 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // acceptTeamInvite) - same reasoning, visited by someone with no
   // account yet at all. /mfa-recovery is the lost-authenticator recovery
   // page (see lib/api.ts's redeemMfaRecovery) - visited by someone who,
-  // by definition, can't complete login yet either.
+  // by definition, can't complete login yet either. /privacy and /terms
+  // are the legal pages - public by nature, linked from the marketing
+  // footer for a visitor who has no account at all.
   const isPublicRoute =
     pathname === "/status" || pathname === "/auth/handoff" ||
-    pathname === "/accept-invite" || pathname === "/mfa-recovery";
+    pathname === "/accept-invite" || pathname === "/mfa-recovery" ||
+    pathname === "/privacy" || pathname === "/terms";
   const skipGate = isPlatformRoute || isPublicRoute;
 
   // "/" is the one route this gate does NOT force-redirect when logged

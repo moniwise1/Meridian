@@ -366,6 +366,8 @@ export default function LandingPage() {
             <div className="text-[11.5px] font-medium text-ink uppercase tracking-wide mb-3">Resources</div>
             <nav className="flex flex-col gap-2.5 text-[13px] text-ink-soft">
               <Link href="/status" className="hover:text-ink transition-colors">System status</Link>
+              <Link href="/privacy" className="hover:text-ink transition-colors">Privacy Policy</Link>
+              <Link href="/terms" className="hover:text-ink transition-colors">Terms of Service</Link>
             </nav>
           </div>
         </div>
