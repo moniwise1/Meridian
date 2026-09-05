@@ -20,6 +20,7 @@ tenant_id/user_id/row_scope all come from the caller having already
 resolved them from a verified auth token (see api/routes_ask.py) - this
 module never trusts a client-supplied identity.
 """
+import logging
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -47,6 +48,8 @@ from app.agents import query_cache
 from app.agents.column_heuristics import guess_columns
 from app.audit import logger as audit
 from app.config import settings
+
+logger = logging.getLogger("meridian.planner")
 
 
 @dataclass
@@ -99,6 +102,29 @@ def _json_safe(records: list[dict]) -> list[dict]:
 DOCUMENT_ONLY_SOURCE_ID = "document-only"
 
 
+def _sanitize_by_group(raw: list | None) -> list[dict]:
+    """The document-only insight step's "by_group" is model-supplied (see
+    insight_agent.py's Insight.by_group docstring for why that's fine there
+    specifically) rather than computed by analytics_engine.py like the
+    database path's - so, unlike that path, it hasn't already been through
+    code that guarantees clean {group: str, total: number} shape. A model
+    that copies a formatted figure verbatim (e.g. "18,000" as a string,
+    complete with thousands separator) would otherwise reach GroupBars'
+    `d.total.toLocaleString()` on the frontend or report_generator.py's
+    `f"{row['total']:,.2f}"` and crash there instead - both of which assume
+    a real number, not a string. Silently drops any entry that isn't
+    coercible, rather than failing the whole analysis over one bad row."""
+    cleaned = []
+    for row in raw or []:
+        if not isinstance(row, dict) or "group" not in row or "total" not in row:
+            continue
+        try:
+            cleaned.append({"group": str(row["group"]), "total": float(str(row["total"]).replace(",", ""))})
+        except (TypeError, ValueError):
+            continue
+    return cleaned
+
+
 def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
                                  question: str, documents: list[UploadedDocument], query_id: str):
     """The document-only path: no DataSourceConnection at all, one or more
@@ -132,18 +158,30 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
 
     yield StepEvent("preparing_insights", "running")
     document_payload = [{"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents]
+    by_group: list[dict] = []
     try:
         insight = explain_document_only(question, document_payload)
         insight_dict = asdict(insight)
+        by_group = _sanitize_by_group(insight_dict.pop("by_group", None))
     except Exception as e:
+        logger.exception("Document-only insight generation failed for query %s", query_id)
+        audit.log(db, tenant_id, "insight_generation_failed", user_id,
+                  connection_id=DOCUMENT_ONLY_SOURCE_ID, query_id=query_id,
+                  detail={"reason": str(e)[:500]}, status="error")
         insight_dict = {"error": f"Insight generation unavailable: {e}"}
     yield StepEvent("preparing_insights", "done")
 
+    data_quality_notes = ["Document-only analysis — no database query was run; this reflects the "
+                          "selected document(s)' content only."]
+    if by_group:
+        data_quality_notes.append(
+            "The breakdown below was extracted from the document's text by the AI, not computed "
+            "deterministically from a database — verify important figures against the source document."
+        )
     data_quality = {
         "row_count": 0, "completeness_pct": 100.0, "duplicate_pct": 0.0,
         "missing_by_column": {}, "outlier_notes": [], "excluded_row_count": 0,
-        "notes": ["Document-only analysis — no database query was run; this reflects the "
-                  "selected document(s)' content only."],
+        "notes": data_quality_notes,
     }
     snapshot = {
         "sql": "-- No SQL executed; this analysis used document content only.",
@@ -152,7 +190,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "duration_ms": 0,
         "truncated": False,
         "metrics": {},
-        "by_group": [],
+        "by_group": by_group,
         "insight": insight_dict,
         "data_quality": data_quality,
         "anomalies": [],
@@ -375,7 +413,11 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     try:
         insight = explain(resolved_question, insight_metrics, quality.notes, document_payload)
         insight_dict = asdict(insight)
+        insight_dict.pop("by_group", None)  # always None here - see Insight.by_group's docstring
     except Exception as e:
+        logger.exception("Insight generation failed for query %s", query_id)
+        audit.log(db, tenant_id, "insight_generation_failed", user_id, connection_id=connection_id,
+                  query_id=query_id, detail={"reason": str(e)[:500]}, status="error")
         insight_dict = {"error": f"Insight generation unavailable: {e}"}
     yield StepEvent("preparing_insights", "done")
 

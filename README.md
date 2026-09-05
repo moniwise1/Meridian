@@ -691,6 +691,75 @@ without a live key (`generate_sql`'s LLM call, unlike `explain()`'s, isn't
 exception-wrapped — a real pre-existing gap, confirmed via `git diff` that
 not one line of the database branch's existing logic changed).
 
+**Document-only analysis: real chart data, and a diagnosable failure mode**
+(`app/agents/insight_agent.py`, `app/agents/planner.py`,
+`components/ResultView.tsx`) — a real user's document-only question
+("which account is worst performing, create a barchart and pie chart...")
+came back with a near-empty report: the explanation step showed "unavailable"
+and the downloaded PDF had no findings, no breakdown table, nothing. Reading
+the actual pipeline (not just the symptom) turned up two compounding causes,
+both now fixed:
+- `explain_document_only()`'s JSON parsing was strict enough to crash on the
+  most likely real trigger: a user question explicitly asking for a chart
+  invites a model to add prose around its JSON ("I can't literally draw a
+  chart, but...") or an extra key the schema never asked for — either one
+  raised (`json.loads` on non-JSON, or an unexpected keyword argument into
+  `Insight(**parsed)`). Fixed with `_parse_json_response()` (salvages the
+  outermost `{...}` object from a prose-wrapped response) and an explicit
+  known-fields filter before constructing `Insight`, shared with `explain()`
+  (the database path) so both are equally robust to a model adding content
+  beyond what was asked for.
+- Document-only analysis *hardcoded* `by_group: []` and `metrics: {}` —
+  every single time, regardless of what the model said — so even a
+  perfectly successful explanation could never have produced the requested
+  bar/pie chart, and `report_generator.py`/`presentation_generator.py`'s
+  "Breakdown" section (which reads `by_group` the exact same way for both
+  analysis paths) had nothing to render either. `explain_document_only()`
+  now has an explicit, tightly-scoped `by_group` field in its JSON schema:
+  the model may populate it ONLY with figures that literally appear in the
+  document text (never estimated or invented), only when the question asks
+  for a category comparison, and is told plainly that a request to "create
+  a chart" is answered by populating this field, not by describing an image
+  in prose. Deliberately NOT added to `explain()`'s (the database path's)
+  accepted fields — that path already has a REAL `by_group`, computed
+  deterministically by `analytics_engine.py`; letting the LLM supply its own
+  there would break the "AI never invents a number" rule the rest of this
+  app is built around. `planner._sanitize_by_group()` then defends the
+  boundary between "model-supplied" and "renders/exports without crashing"
+  — coercing a formatted string total (`"18,000"`) to a real float and
+  silently dropping any entry that isn't coercible, since this is the one
+  chart-data path in the whole app that didn't already come out of
+  deterministic code.
+- Every insight-generation failure (both paths) was previously swallowed
+  into the returned `{"error": ...}` dict alone — nothing was logged
+  server-side, and nothing showed up in the audit log, so this exact
+  failure would have been just as invisible on a retry. Both `explain()`
+  and `explain_document_only()` failures now call `logger.exception()` and
+  write a real `AuditLog` row (`action="insight_generation_failed",
+  status="error"`), which also means they now count toward the platform
+  dashboard's `recent_errors_last_hour` (see "Health snapshot" above) —
+  this class of failure is diagnosable from now on instead of only visible
+  in an end user's downloaded report.
+- **New on the frontend**: a dependency-free pie chart (`PieChart` in
+  `ResultView.tsx`, a CSS `conic-gradient` circle plus a legend — no
+  charting library, consistent with `GroupBars` right above it and the
+  platform analytics dashboard's own bar charts) now renders alongside the
+  existing bar chart whenever `by_group` data exists, for BOTH analysis
+  paths — there was previously no pie chart anywhere in this app at all.
+  Negative totals (a "loss" figure some questions produce) can't be
+  represented as a pie slice and are clamped to zero for that chart only;
+  the bar chart above it still shows the true signed value.
+
+Verified end-to-end with a real FastAPI generator call (no Anthropic key
+needed — `explain_document_only` mocked at the exact seam the real call
+would occupy): a prose-wrapped, extra-keyed mock response parses instead of
+crashing; a `by_group` response with a comma-formatted string total comes
+out the other end as a clean float in the final snapshot with the malformed
+sibling entries dropped; the returned `insight` dict carries no stray
+`by_group` key; and a simulated failure produces a real, queryable
+`AuditLog` row with the actual exception text in `detail.reason` — the exact
+piece of information the original failure gave no way to recover.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question
