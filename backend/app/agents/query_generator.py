@@ -31,6 +31,9 @@ Rules:
   question can be answered that way — the goal is the smallest result set that answers
   the question, not a full table dump.
 - If the question cannot be answered with the given schema, return {"sql": "", "rationale": "explain why"}.
+- "rationale" must read as a finished, single-pass explanation — never a visible correction
+  like "wait, let me reconsider". Work through any uncertainty privately and state only your
+  final choice.
 """
 
 

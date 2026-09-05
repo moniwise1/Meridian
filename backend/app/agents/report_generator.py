@@ -16,6 +16,24 @@ _UNICODE_TO_LATIN1 = str.maketrans({
 })
 
 
+class MeridianPDF(FPDF):
+    """Adds a consistent "Made by Meridian" footer to every page - fpdf2
+    calls footer() automatically for each page, including ones added by
+    auto_page_break, so a long report brands every page, not just the
+    first. Purely cosmetic; never touches the report's actual content."""
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_draw_color(220, 220, 220)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+        self.set_y(-12)
+        self.set_font("Helvetica", "", 8)
+        self.set_text_color(140, 140, 140)
+        self.cell(0, 8, "Made by Meridian - getmeridiananalytics.com", align="L")
+        self.set_y(-12)
+        self.cell(0, 8, f"Page {self.page_no()}", align="R")
+
+
 def _safe(text: str) -> str:
     # fpdf2's core fonts are Latin-1; translate common smart punctuation
     # (em dashes, curly quotes) to ASCII equivalents first, then fall back
@@ -35,7 +53,7 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
     os.makedirs(settings.artifacts_dir, exist_ok=True)
     path = os.path.join(settings.artifacts_dir, f"report-{uuid.uuid4().hex[:8]}.pdf")
 
-    pdf = FPDF()
+    pdf = MeridianPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
