@@ -8,13 +8,36 @@ import os
 import uuid
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
 from app.config import settings
+
+
+def _add_branding(prs, slide) -> None:
+    """A small "Made by Meridian" footer on every slide - python-pptx has
+    no per-slide auto-callback the way fpdf2 does, so this is called
+    explicitly after each slide is built. Bottom-right, out of the way of
+    the actual content (title/bullets/table all sit above this band).
+    Purely cosmetic; never touches the slide's real content."""
+    box = slide.shapes.add_textbox(
+        prs.slide_width - Inches(3.2), prs.slide_height - Inches(0.4), Inches(3.0), Inches(0.3),
+    )
+    tf = box.text_frame
+    tf.margin_top = 0
+    tf.margin_bottom = 0
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.RIGHT
+    run = p.add_run()
+    run.text = "Made by Meridian"
+    run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 
 
 def _add_title_slide(prs, title, subtitle):
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = title
     slide.placeholders[1].text = subtitle
+    _add_branding(prs, slide)
     return slide
 
 
@@ -27,6 +50,7 @@ def _add_bullets_slide(prs, title, bullets):
         p = body.paragraphs[0] if i == 0 else body.add_paragraph()
         p.text = b
         p.font.size = Pt(16)
+    _add_branding(prs, slide)
     return slide
 
 
@@ -42,6 +66,7 @@ def _add_table_slide(prs, title, headers, rows):
     for r, row in enumerate(rows[:12], start=1):
         for c, val in enumerate(row):
             table.cell(r, c).text = str(val)
+    _add_branding(prs, slide)
     return slide
 
 

@@ -623,6 +623,55 @@ text page, one scanned page) correctly used native extraction for one and
 OCR for exactly the other; and the full upload → get → list round trip
 correctly surfaced `ocr_pages_used` throughout.
 
+**Clean, single-pass insight text** (`app/agents/insight_agent.py`,
+`app/agents/query_generator.py`) — the model is now explicitly instructed
+to never show its own reasoning process (arithmetic, reconsidering an
+answer) in any field it returns; caught live against the real, funded
+Anthropic API, not theorized about: an early production test asked a
+genuine question against an uploaded spreadsheet and got back a
+technically-correct answer whose "what" field visibly included the
+model's own mid-sentence correction ("West had the highest revenue at
+120000... wait, let me recompute..."). Every prompt that can involve any
+arithmetic or judgment call (the insight explanation, the document-only
+explanation, and the SQL-generation rationale) now explicitly says to do
+that thinking privately and output only the finished conclusion.
+
+**"Made by Meridian" branding on every generated download**
+(`app/agents/report_generator.py`, `presentation_generator.py`,
+`export.py`) — every artifact a user downloads now visibly credits the
+platform, proportionate to what each format actually supports:
+- **PDF report**: a `MeridianPDF(FPDF)` subclass overrides fpdf2's
+  `footer()` hook, which fires automatically on every page (including
+  ones added by `auto_page_break`) — a thin rule, "Made by Meridian -
+  getmeridiananalytics.com", and a page number, on every page of a
+  multi-page report, not just the first.
+- **PPTX presentation**: python-pptx has no equivalent per-slide
+  callback, so a small bottom-right textbox is added explicitly after
+  each of the three slide-builder helpers — verified on all 5 slides of
+  a real generated deck, not just the title slide.
+- **CSV export**: deliberately carries NO in-data branding — CSV is pure
+  tabular data with no metadata capability, and a downstream script
+  piping the export into another tool expects exactly the columns it
+  asked for. Injecting a branding row/comment would silently corrupt
+  that. Branding here is filename-only (`meridian-export-*.csv`), never
+  touching a single byte of the actual data.
+- **XLSX export**: real metadata support, so it gets a fuller (but still
+  non-intrusive) treatment via `pd.ExcelWriter`'s underlying openpyxl
+  workbook — document properties (`creator`/`last_modified_by`/
+  `description`) and a print-only footer (`ws.oddFooter`, visible only
+  when printed/exported to PDF, invisible to any cell read) — neither of
+  which touch the actual data rows, verified by reading the file back
+  with both `pandas` and `openpyxl` and confirming the values are
+  byte-for-byte what went in.
+
+Verified end-to-end against the real HTTP pipeline (register → mark
+tenant active → generate a real report/presentation/export from a real
+`QueryRecord` → download each file back and inspect it): PDF footer text
+extracted and confirmed present, PPTX branding confirmed present on
+every one of 5 slides, CSV confirmed byte-identical to its unbranded data
+(only the filename differs), and XLSX confirmed to carry the metadata
+and print footer while its actual cell values remain untouched.
+
 Document-as-data-source verified end-to-end with a real generated PDF
 through the real app: rejected with neither a connection nor a document
 selected; a document-only question produces the correct step sequence,
