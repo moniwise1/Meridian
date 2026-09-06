@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     # secret, separate from both app_secret_key and jwt_secret_key. Falls
     # back to jwt_secret_key, then app_secret_key, if unset.
     platform_jwt_secret: str = ""
+    # One-time secret gating POST /platform/bootstrap, the endpoint that
+    # creates the very first platform-owner account (full cross-tenant
+    # access). "No staff exist yet" is NOT a sufficient guard on its own:
+    # the source is public, so an attacker knows to race this against a
+    # fresh deployment, and winning it is a complete breach. Unset
+    # (default) disables /platform/bootstrap entirely (403). Set it to a
+    # high-entropy value for the single deploy where you create the first
+    # owner, then unset it again.
+    platform_bootstrap_token: str = ""
     metadata_db_url: str = "sqlite:///./metadata.db"
     anthropic_api_key: str = ""
     # Comma-separated when there's more than one real frontend origin to

@@ -40,11 +40,17 @@ export async function staffLogin(email: string, password: string): Promise<Staff
 
 export type StaffBootstrapResponse = StaffAuthResponse;
 
-export async function bootstrapOwner(email: string, password: string): Promise<StaffBootstrapResponse> {
+export async function bootstrapOwner(
+  email: string,
+  password: string,
+  bootstrapToken: string,
+): Promise<StaffBootstrapResponse> {
   const res = await fetch(`${API_BASE}/platform/bootstrap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    // bootstrap_token must match PLATFORM_BOOTSTRAP_TOKEN on the backend -
+    // "no staff exist yet" is not a sufficient guard on a public repo.
+    body: JSON.stringify({ email, password, bootstrap_token: bootstrapToken }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not create the first admin account.");

@@ -6,6 +6,7 @@ never by the tenant-scoped auth used everywhere else in the app - see that
 module's docstring for why the two are kept structurally separate rather
 than one being a role flag on the other.
 """
+import hmac
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
@@ -85,19 +86,35 @@ def staff_login(body: StaffLoginRequest, db: Session = Depends(get_db)):
 class StaffBootstrapRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
+    # Must equal settings.platform_bootstrap_token. See bootstrap_owner.
+    bootstrap_token: str = ""
 
 
 @router.post("/bootstrap", response_model=StaffTokenResponse)
 def bootstrap_owner(body: StaffBootstrapRequest, db: Session = Depends(get_db)):
-    """Creates the very first platform-staff account, as an 'owner'. Only
-    works when NO staff accounts exist yet - the one and only
-    unauthenticated way into this system, and it closes itself after one
-    use. Every account after this one is created via POST /platform/staff
-    by an existing owner. Run this once right after your first deploy,
-    then treat the URL as sensitive until you have — after that it's
-    self-disabling regardless."""
+    """Creates the very first platform-staff account, as an 'owner'. Every
+    account after this one is created via POST /platform/staff by an
+    existing owner.
+
+    Gated by TWO conditions, not one: no staff account may exist yet, AND
+    the request must carry the correct PLATFORM_BOOTSTRAP_TOKEN. "No staff
+    yet" alone is not a real guard - the source is public, so an attacker
+    knows to race this against a fresh deploy, and winning it is a full
+    cross-tenant breach. With the token unset (the default) this endpoint
+    is disabled outright. Set the token for the one deploy where you
+    create the first owner, run this once, then unset it."""
     if db.query(PlatformStaff).count() > 0:
         raise HTTPException(403, "A platform staff account already exists; ask an owner to add you instead.")
+    if not settings.platform_bootstrap_token:
+        raise HTTPException(
+            403,
+            "Platform bootstrap is disabled. Set PLATFORM_BOOTSTRAP_TOKEN on the backend to a "
+            "one-time secret, create the first owner, then unset it.",
+        )
+    if not body.bootstrap_token or not hmac.compare_digest(
+        body.bootstrap_token, settings.platform_bootstrap_token
+    ):
+        raise HTTPException(403, "Invalid bootstrap token.")
     staff = PlatformStaff(email=body.email, password_hash=hash_password(body.password), role="owner")
     db.add(staff)
     db.commit()

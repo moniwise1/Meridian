@@ -10,6 +10,7 @@ export default function PlatformLoginPage() {
   const [mode, setMode] = useState<"login" | "bootstrap">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [bootstrapToken, setBootstrapToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -18,7 +19,10 @@ export default function PlatformLoginPage() {
     setError("");
     setSubmitting(true);
     try {
-      const auth = mode === "login" ? await staffLogin(email, password) : await bootstrapOwner(email, password);
+      const auth =
+        mode === "login"
+          ? await staffLogin(email, password)
+          : await bootstrapOwner(email, password, bootstrapToken);
       savePlatformSession({ token: auth.access_token, staffId: auth.staff_id, role: auth.role, email });
       router.push("/platform");
     } catch (e) {
@@ -82,6 +86,19 @@ export default function PlatformLoginPage() {
                 className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
               />
             </label>
+            {mode === "bootstrap" && (
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] text-ink-soft">Setup token</span>
+                <input
+                  type="password"
+                  value={bootstrapToken}
+                  onChange={(e) => setBootstrapToken(e.target.value)}
+                  placeholder="PLATFORM_BOOTSTRAP_TOKEN"
+                  required
+                  className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
+                />
+              </label>
+            )}
 
             {error && <div className="text-[12.5px] text-red">{error}</div>}
 
@@ -97,8 +114,9 @@ export default function PlatformLoginPage() {
 
         {mode === "bootstrap" && (
           <p className="text-[11.5px] text-ink-soft text-center mt-4 leading-relaxed">
-            Only works once — this creates the very first internal admin ("owner") account. If one
-            already exists, this will fail; ask an existing owner to add you from Staff instead.
+            Only works once — this creates the very first internal admin (&quot;owner&quot;) account, and
+            only while <code>PLATFORM_BOOTSTRAP_TOKEN</code> is set on the backend and matches the
+            setup token above. If an owner already exists, this fails; ask them to add you from Staff.
           </p>
         )}
       </div>
