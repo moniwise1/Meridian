@@ -311,8 +311,17 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         conversation_id=None, question=question, generated_sql=snapshot["sql"],
         row_count=0, duration_ms=0, result_snapshot=snapshot,
     ))
+    # Whether real structured data was actually used is exactly the
+    # question a real user needed answered after a wrong-sounding answer
+    # ("it says my file is empty") - previously only answerable by asking
+    # for the step trace separately. Recorded here too so it's visible
+    # from the Audit log on its own, the same screen a "insight
+    # generation failed" row (right below/above this one) is already
+    # checked on.
     audit.log(db, tenant_id, "document_only_query_executed", user_id, DOCUMENT_ONLY_SOURCE_ID, query_id,
-              {"documents": [d.filename for d in documents]})
+              {"documents": [d.filename for d in documents],
+               "structured_table_used": profile is not None,
+               "table_shape": [profile.row_count, len(profile.columns)] if profile else None})
     db.commit()
 
     yield {
