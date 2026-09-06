@@ -9,6 +9,7 @@ picking a temporary password for them.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -17,6 +18,7 @@ from app.db.models import Tenant, User, Invite
 from app.security.auth import (
     hash_password, verify_password, create_access_token, create_pre_auth_token,
     decode_pre_auth_token, get_current_user, require_role, AuthContext,
+    normalize_email, password_needs_rehash, dummy_password_hash,
 )
 from app.security.login_cooldown import (
     check_tenant_login_cooldown, record_tenant_login_failure, record_tenant_login_success,
@@ -179,7 +181,8 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
                    detail={"ip": ip, "retry_after_seconds": round(e.retry_after_seconds, 1)})
         raise HTTPException(429, "Too many sign-ups from this network recently. Try again later.")
 
-    if db.query(User).filter_by(email=body.email).first():
+    email = normalize_email(body.email)
+    if db.query(User).filter(func.lower(User.email) == email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     # Trim before storing: the name is later used as a real login boundary
@@ -204,7 +207,7 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     db.refresh(tenant)
 
     user = User(
-        tenant_id=tenant.id, email=body.email, role="admin",
+        tenant_id=tenant.id, email=email, role="admin",
         password_hash=hash_password(body.password),
     )
     db.add(user)
@@ -225,26 +228,37 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
 @router.post("/login", response_model=LoginResponse)
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     ip = client_ip(request)
+    email = normalize_email(body.email)
     try:
         # Per-email AND per-IP: the per-email guard blunts guessing at one
         # account, the per-IP guard blunts credential stuffing across many
         # accounts from one source (which per-email keying can't see).
-        check_tenant_login_cooldown(body.email)
+        check_tenant_login_cooldown(email)
         check_login_ip_cooldown(ip)
     except LoginCooldownActive as e:
         raise HTTPException(429, str(e))
 
-    user = db.query(User).filter_by(email=body.email).first()
-    if not user or not verify_password(body.password, user.password_hash):
-        record_tenant_login_failure(body.email)
+    user = db.query(User).filter(func.lower(User.email) == email).first()
+    # Always run verify_password (against a fixed dummy hash if the account
+    # doesn't exist) so "no such email" and "wrong password" take the same
+    # time and can't be told apart to enumerate accounts.
+    password_ok = verify_password(body.password, user.password_hash if user else dummy_password_hash())
+    if not user or not password_ok:
+        record_tenant_login_failure(email)
         record_login_ip_failure(ip)
         raise HTTPException(401, "Incorrect email or password.")
+
+    # Transparently upgrade an old-format / low-iteration password hash now
+    # that we hold the plaintext and know it's correct.
+    if password_needs_rehash(user.password_hash):
+        user.password_hash = hash_password(body.password)
+        db.commit()
 
     # Password is correct — this clears the password-guessing cooldown
     # regardless of what happens with MFA below, since that guard exists
     # specifically to blunt password guessing, a fully separate concern
     # from the code check (see app/security/login_cooldown.py's mfa guard).
-    record_tenant_login_success(body.email)
+    record_tenant_login_success(email)
     record_login_ip_success(ip)
 
     tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
@@ -341,8 +355,8 @@ def invite_teammate(body: TeamInviteRequest, db: Session = Depends(get_db),
         raise HTTPException(403, "Only an admin can invite teammates.")
     if body.role not in VALID_TENANT_ROLES:
         raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_TENANT_ROLES))}.")
-    email = body.email.strip().lower()
-    if db.query(User).filter_by(email=email).first():
+    email = normalize_email(body.email)
+    if db.query(User).filter(func.lower(User.email) == email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     # Seat cap: each plan (see app/billing/plans.py) allows a different
@@ -449,7 +463,7 @@ def accept_team_invite(body: AcceptInviteRequest, db: Session = Depends(get_db))
     invite = get_invite_by_token(db, "team", body.token)
     if not invite or invite.status != "pending":
         raise HTTPException(400, "This invite is invalid or has expired. Ask an admin to send a new one.")
-    if db.query(User).filter_by(email=invite.email).first():
+    if db.query(User).filter(func.lower(User.email) == normalize_email(invite.email)).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     user = User(tenant_id=invite.tenant_id, email=invite.email, role=invite.role,

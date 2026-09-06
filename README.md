@@ -302,10 +302,23 @@ back to free and clears the expiry, without retroactively removing the
 already-added 2nd account → a 3rd account is blocked again post-downgrade).
 
 **Auth & multi-tenancy**
-- Real registration/login: PBKDF2-SHA256 password hashing, signed JWT
-  sessions. Every route derives `tenant_id`/`user_id` from the verified
-  token — never from the request body — so a client can't claim a wider
-  scope than it was granted.
+- Real registration/login: PBKDF2-SHA256 password hashing (600,000
+  iterations, OWASP's current floor — raised from 260k in a security-review
+  pass; the iteration count is stored in the hash string now, so it can be
+  raised again without breaking anything, and a successful login on an
+  old-format hash transparently re-hashes it), signed JWT sessions. Every
+  route derives `tenant_id`/`user_id` from the verified token — never from
+  the request body — so a client can't claim a wider scope than it was
+  granted. Login also equalises response time on the "no such account"
+  path (a fixed dummy hash is verified so it can't be told apart from
+  "wrong password" by timing), and email is normalised (stored
+  lower-cased, looked up case-insensitively so legacy mixed-case rows
+  still resolve) so `Bob@x.com` and `bob@x.com` can't become two accounts.
+  Verified: new hashes are `pbkdf2_sha256$600000$…` and verify; legacy
+  2-part hashes still verify at 260k and upgrade on login; a mixed-case
+  signup is stored lower-cased and logs in from any casing; a same-address
+  re-registration in another case is a `400`; an unknown email is a plain
+  `401`.
 - Role-based access (`admin` can connect data sources and edit policy;
   other roles can't) and per-user capabilities (querying, report
   generation, email delivery, etc. can each be individually enabled).
