@@ -1639,6 +1639,23 @@ was confirmed to fail open in ~1s rather than hang or crash. Also
 reverified the REDIS_URL-unset path still picks the original in-process
 classes with zero behavior change.
 
+**HTTP response headers & the interactive docs** (`app/main.py`, a
+security-review fix — there were no security headers at all). A small
+middleware now sets `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (which matters
+specifically for the signed artifact-download URLs), and
+`Cross-Origin-Opener-Policy: same-origin` on every response, plus
+`Strict-Transport-Security` when the request arrived over HTTPS
+(`X-Forwarded-Proto`, so never on plain-http local dev). No full CSP:
+this API returns JSON and file downloads, never attacker-controlled HTML.
+Separately, FastAPI's interactive docs (`/docs`, `/redoc`,
+`/openapi.json`) — which publish the whole API surface — are **disabled
+when `ENVIRONMENT=production`** and kept in development where they're
+useful. Verified: the header set is present on a plain response with no
+HSTS; HSTS appears with `X-Forwarded-Proto: https`; `/docs` is `200` in
+dev and `404` in production; and `/ask/stream` still streams SSE (and
+carries the headers) through the middleware.
+
 **Rate & concurrency limits** (`app/security/rate_limit.py`) — `/ask/stream`
 is the one endpoint that costs a real LLM call plus a live customer-DB
 query per request, so it's rate-limited per user (sliding window,
