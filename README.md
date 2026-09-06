@@ -1126,6 +1126,44 @@ trend (72.5 → 76.5 → 34.4 → 72.4 → 76.4) including the same sharp,
 isolated June anomaly the original manual analysis flagged as more likely
 a data issue than a real business collapse.
 
+**Structured-table analysis, round three: a genuinely new JSON failure
+mode, and closing the "why does it think my file is empty" loop for
+good** — the same real user tried it again after round two shipped and
+got a confidently wrong answer ("this workbook is a blank template with
+no data") for a file that very much has data. Two real, separate things
+were going on, both found from the tenant's own Audit log rather than
+guessed at:
+
+- A **genuinely new failure mode**: one attempt's `insight generation
+  failed` entry read `Invalid control character at: line 1 column 479`
+  — not the empty-response failure round one fixed, and not a formatting
+  mismatch round two's `body` field was built for. This is Python's
+  `json` module refusing an otherwise well-formed response over a single
+  technicality: the JSON spec requires a newline *inside* a string value
+  to be escaped (`\n`), but `SYSTEM_PROMPT_DOCUMENT_ONLY`'s own
+  instructions ask the model to use real blank lines and `"- "` bullets
+  in `body` for readability — exactly the shape of output most likely to
+  tempt a model into emitting a raw, unescaped line break instead of the
+  escaped form. `_parse_json_response()` now calls `json.loads(...,
+  strict=False)` — the standard, documented way to accept a control
+  character inside a string rather than reject an otherwise-valid
+  response over it. Reproduced directly from the real audit log message
+  before fixing it: a JSON string built with a literal embedded newline
+  confirmed to fail under Python's default strict parsing with the exact
+  same error, then confirmed to parse correctly once `strict=False` was
+  applied.
+- **Answering "did it even try" without another round of screenshots**:
+  the *other* real attempt that produced the wrong "empty template"
+  answer had no failed-insight audit entry at all — the model returned
+  valid JSON, just a wrong conclusion, which meant there was no way to
+  tell, from the audit log alone, whether structured extraction had even
+  been attempted for that specific request. The `document_only_query_
+  executed` audit entry now records `structured_table_used` and, when
+  true, the real parsed `table_shape` — so "did this one actually get
+  real computed data, or was it reading text" is answered directly from
+  the same Audit log screen already being checked for insight failures,
+  without needing to ask for a different piece of evidence each time.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question

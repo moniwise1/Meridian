@@ -184,15 +184,30 @@ def _parse_json_response(text_out: str) -> dict:
     model to explain, in words, that it can't literally draw one). Rather
     than letting stray text around the JSON fail the whole insight step,
     fall back to salvaging the outermost {...} object from the response
-    before giving up."""
+    before giving up.
+
+    strict=False on every json.loads call here: the JSON spec requires a
+    literal newline/tab inside a string value to be escaped ("\\n"), but
+    "body"'s own system prompt explicitly asks the model to use real
+    blank lines and "- " bullets for readability - exactly the shape of
+    output most likely to trip a model into emitting a raw, unescaped
+    control character inside the JSON string instead of the escaped
+    form. That's not malformed JSON in any way that salvaging the outer
+    {...} object would fix (the object is otherwise complete and valid),
+    which is exactly what a real production failure's audit log
+    confirmed: "Invalid control character at: line 1 column N" — Python's
+    strict-mode json parser refusing an otherwise well-formed response
+    over exactly this. strict=False is the standard, documented way to
+    accept it instead of rejecting a good response over a formatting
+    technicality the model's own instructions half-invited."""
     stripped = text_out.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     try:
-        return json.loads(stripped)
+        return json.loads(stripped, strict=False)
     except json.JSONDecodeError:
         start, end = stripped.find("{"), stripped.rfind("}")
         if start == -1 or end == -1 or end <= start:
             raise
-        return json.loads(stripped[start:end + 1])
+        return json.loads(stripped[start:end + 1], strict=False)
 
 
 def explain(question: str, metrics: dict, quality_notes: list[str],
