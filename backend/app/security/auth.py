@@ -23,7 +23,12 @@ from app.db.models import User, Tenant
 
 _bearer = HTTPBearer(auto_error=False)
 
-PBKDF2_ITERATIONS = 260_000
+# OWASP's current floor for PBKDF2-HMAC-SHA256 is 600k. New hashes use
+# this; the old 260k hashes stay verifiable (the iteration count is now
+# stored in the hash string - see hash_password/verify_password - so it
+# can be raised again later without breaking anything).
+PBKDF2_ITERATIONS = 600_000
+_LEGACY_PBKDF2_ITERATIONS = 260_000  # hashes written before the count was stored
 
 # Falls back to app_secret_key when JWT_SECRET_KEY isn't set, so existing
 # deployments keep working unchanged. Split into its own setting (rather
@@ -39,18 +44,57 @@ _JWT_SECRET = settings.jwt_secret_key or settings.app_secret_key
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
-    return f"{salt.hex()}${dk.hex()}"
+    # New format carries the iteration count: "pbkdf2_sha256$<iters>$<salt>$<dk>".
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
 
 
 def verify_password(password: str, stored: str) -> bool:
+    parts = stored.split("$")
     try:
-        salt_hex, dk_hex = stored.split("$")
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(dk_hex)
+        if len(parts) == 4 and parts[0] == "pbkdf2_sha256":
+            iterations = int(parts[1])
+            salt, expected = bytes.fromhex(parts[2]), bytes.fromhex(parts[3])
+        elif len(parts) == 2:
+            # Legacy hashes written before the iteration count was stored.
+            iterations = _LEGACY_PBKDF2_ITERATIONS
+            salt, expected = bytes.fromhex(parts[0]), bytes.fromhex(parts[1])
+        else:
+            return False
     except ValueError:
         return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
     return hmac.compare_digest(candidate, expected)
+
+
+def normalize_email(email: str) -> str:
+    """The single normalization for an address used as an identity key.
+    Stored lower-cased on every write; login lookups compare case-
+    insensitively (func.lower on the column) so legacy mixed-case rows
+    still resolve. Invites already lower-case at creation time."""
+    return (email or "").strip().lower()
+
+
+_dummy_password_hash_cache: str | None = None
+
+
+def dummy_password_hash() -> str:
+    """A fixed valid hash to run verify_password against when the account
+    doesn't exist, so "no such email" costs the same PBKDF2 work as "wrong
+    password" and can't be told apart by timing. Computed once, lazily, so
+    it doesn't add 600k PBKDF2 rounds to every process/module import."""
+    global _dummy_password_hash_cache
+    if _dummy_password_hash_cache is None:
+        _dummy_password_hash_cache = hash_password("meridian-login-timing-equalizer")
+    return _dummy_password_hash_cache
+
+
+def password_needs_rehash(stored: str) -> bool:
+    """True if `stored` isn't at the current format+iteration count, so a
+    caller that has the plaintext (i.e. a successful login) can transparently
+    upgrade it."""
+    parts = stored.split("$")
+    return not (len(parts) == 4 and parts[0] == "pbkdf2_sha256"
+                and parts[1].isdigit() and int(parts[1]) >= PBKDF2_ITERATIONS)
 
 
 def create_access_token(user_id: str, tenant_id: str, role: str, ttl_seconds: int = 60 * 60 * 12) -> str:

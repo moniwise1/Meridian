@@ -10,6 +10,7 @@ import hmac
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -19,7 +20,9 @@ from app.db.models import (
     GeneratedArtifact, UploadedDocument, EmailDeliveryLog, AuditLog,
     PlatformStaff, SupportTicket, TicketMessage, SystemIncident, IncidentUpdate, Invite,
 )
-from app.security.auth import hash_password, verify_password
+from app.security.auth import (
+    hash_password, verify_password, normalize_email, password_needs_rehash, dummy_password_hash,
+)
 from app.security.platform_auth import (
     create_platform_access_token, get_current_staff, require_staff_role, PlatformAuthContext,
 )
@@ -61,19 +64,25 @@ class StaffTokenResponse(BaseModel):
 @router.post("/login", response_model=StaffTokenResponse)
 def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends(get_db)):
     ip = client_ip(request)
+    email = normalize_email(body.email)
     try:
-        check_platform_login_cooldown(body.email)
+        check_platform_login_cooldown(email)
         check_login_ip_cooldown(ip)
     except LoginCooldownActive as e:
         raise HTTPException(429, str(e))
 
-    staff = db.query(PlatformStaff).filter_by(email=body.email).first()
-    if not staff or not verify_password(body.password, staff.password_hash):
-        record_platform_login_failure(body.email)
+    staff = db.query(PlatformStaff).filter(func.lower(PlatformStaff.email) == email).first()
+    password_ok = verify_password(body.password, staff.password_hash if staff else dummy_password_hash())
+    if not staff or not password_ok:
+        record_platform_login_failure(email)
         record_login_ip_failure(ip)
         raise HTTPException(401, "Incorrect email or password.")
 
-    record_platform_login_success(body.email)
+    if password_needs_rehash(staff.password_hash):
+        staff.password_hash = hash_password(body.password)
+        db.commit()
+
+    record_platform_login_success(email)
     record_login_ip_success(ip)
     audit.log(db, "platform", "platform_staff_logged_in", staff.id, detail={"email": staff.email})
     # Owner-activity notification, not just the audit log above - so a
@@ -189,8 +198,8 @@ def invite_staff(body: StaffInviteRequest, db: Session = Depends(get_db),
                   ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
     if body.role not in VALID_STAFF_ROLES:
         raise HTTPException(400, f"Role must be one of: {', '.join(sorted(VALID_STAFF_ROLES))}.")
-    email = body.email.strip().lower()
-    if db.query(PlatformStaff).filter_by(email=email).first():
+    email = normalize_email(body.email)
+    if db.query(PlatformStaff).filter(func.lower(PlatformStaff.email) == email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     # Re-inviting the same address replaces any still-pending invite for
@@ -261,7 +270,7 @@ def accept_staff_invite(body: StaffAcceptInviteRequest, db: Session = Depends(ge
     invite = get_invite_by_token(db, "staff", body.token)
     if not invite or invite.status != "pending":
         raise HTTPException(400, "This invite is invalid or has expired. Ask an owner to send a new one.")
-    if db.query(PlatformStaff).filter_by(email=invite.email).first():
+    if db.query(PlatformStaff).filter(func.lower(PlatformStaff.email) == normalize_email(invite.email)).first():
         raise HTTPException(400, "An account with this email already exists.")
 
     staff = PlatformStaff(email=invite.email, password_hash=hash_password(body.password), role=invite.role)
