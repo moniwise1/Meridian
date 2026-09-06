@@ -1545,6 +1545,48 @@ questions are never cached (their meaning depends on evolving conversation
 context) and a cache-served answer can't be chained into a follow-up
 directly for the same reason — ask a new question to continue.
 
+**Follow-up threading: the first question's `conversation_id` was silently
+NULL** (`app/agents/planner.py`'s `run_analysis()`) — reading the
+database-backed Ask path turned up a real bug in how a brand-new
+conversation thread was persisted. When a tenant asked a fresh question
+(no `conversation_id` passed in), `run_analysis()` built and `db.add()`-ed
+the `QueryRecord` with `conversation_id=conversation.id if conversation
+else None` *before* the new `Conversation` object was created a few lines
+later. `Conversation.id`'s default is a Python-side `uuid.uuid4()` callable
+that SQLAlchemy only resolves at flush time, so at the moment the
+`QueryRecord` was constructed `conversation` was still `None` — and the
+row was written with `conversation_id = NULL` permanently. The net effect:
+every thread's *first* question had a null `conversation_id` in its own
+database record forever, and only the follow-ups after it correctly showed
+the real link. Anything reading `QueryRecord.conversation_id` saw the gap —
+notably `GET /history/analyses/{id}` (`routes_history.py`), which returned
+`conversation_id: null` when reopening the analysis that actually started
+the thread.
+
+The fix is the same `db.add(parent) → db.flush() → db.add(child)` ordering
+already used in `routes_monitor.py`, `routes_support.py`, and
+`routes_platform.py` for exactly this parent-id-before-child situation:
+the new `Conversation` is created, added, and flushed (forcing its id to
+be assigned) *before* the `QueryRecord` that references it is built, and
+the `QueryRecord` now uses `conversation.id` directly rather than the
+`... if conversation else None` guard. The `conversation.context`
+assignment (`build_context_snapshot(...)`) is unchanged. The sibling
+document-only path (`_run_document_only_analysis`) never had this bug —
+it deliberately never creates or chains a `Conversation` and hard-codes
+`conversation_id=None`.
+
+Verified end-to-end against a real SQLite database and the real
+`run_analysis()` generator (only the warehouse connector, schema
+discovery, and the three LLM calls stubbed — the `QueryRecord`/
+`Conversation` persistence under test is fully real): a fresh question
+with no `conversation_id` now stores a real, non-null UUID
+`QueryRecord.conversation_id` that matches the single `Conversation` row
+actually created; a follow-up on that same `conversation_id` reuses the
+same row and both `QueryRecord`s show the same real id; and the same
+check run against the pre-fix code fails exactly where expected
+(`first QueryRecord.conversation_id is NULL`), confirming the test
+catches the regression rather than passing vacuously.
+
 **Saved/pinned analyses** (`app/db/models.py`'s `PinnedAnalysis`, `/history/analyses/{id}/pin`)
 — star any past analysis from Analyses history (list view or the reopened
 detail view) to keep it in a "Saved" filter for quick access, without
