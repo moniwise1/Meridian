@@ -19,7 +19,9 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models import User, UploadedDocument
 from app.security.auth import get_current_user, AuthContext
-from app.agents.document_intelligence import extract, UnsupportedDocumentType
+from app.agents.document_intelligence import (
+    extract, UnsupportedDocumentType, LockedDocumentError, UnsafeDocumentError,
+)
 from app.audit import logger as audit
 from app.config import settings
 
@@ -48,6 +50,18 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
         kind, extraction = extract(file.filename or "", file_bytes)
     except UnsupportedDocumentType as e:
         raise HTTPException(400, str(e))
+    except LockedDocumentError as e:
+        # Not logged as an "error" the way a genuine parse failure below
+        # is - this isn't the app failing at anything, it's a normal,
+        # expected outcome (the user just needs to remove a password),
+        # so it's audited as a plain, informational "denied" instead.
+        audit.log(db, ctx.tenant_id, "document_upload_locked", ctx.user_id, status="denied",
+                   detail={"filename": file.filename})
+        raise HTTPException(422, str(e))
+    except UnsafeDocumentError as e:
+        audit.log(db, ctx.tenant_id, "document_upload_unsafe", ctx.user_id, status="denied",
+                   detail={"filename": file.filename})
+        raise HTTPException(422, str(e))
     except Exception as e:
         audit.log(db, ctx.tenant_id, "document_upload_failed", ctx.user_id, status="error",
                    detail={"filename": file.filename, "reason": type(e).__name__})

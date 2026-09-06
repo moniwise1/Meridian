@@ -52,6 +52,8 @@ import io
 import logging
 from dataclasses import dataclass
 
+import zipfile
+
 import pypdf
 import docx
 import openpyxl
@@ -87,6 +89,24 @@ NATIVE_TEXT_MIN_CHARS = 20
 
 SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx"}
 
+# DOCX/XLSX/PPTX (Office Open XML) are plain ZIP archives when unprotected.
+# A password-protected one is instead wrapped in the much older OLE2/
+# Compound File Binary Format container (the same container legacy
+# .doc/.xls/.ppt used) - recognizable from its first 8 bytes alone, well
+# before ever attempting to unzip/parse it. This is the same
+# signature-based detection msoffcrypto-tool and similar libraries use;
+# no new dependency is needed just to DETECT it (only decrypting one
+# would need that, which this app doesn't attempt - a locked file is
+# rejected with instructions to unlock and re-upload, not decrypted).
+_OLE2_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# A legitimate Office file rarely compresses beyond roughly 20-50x; a
+# ratio far past that on any single internal part is the classic "zip
+# bomb" red flag - a small file that expands to an enormous one once
+# decompressed, aimed at exhausting memory/CPU the moment
+# openpyxl/python-docx/python-pptx actually reads it.
+_MAX_ZIP_ENTRY_COMPRESSION_RATIO = 200
+_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 500_000_000  # nothing legitimate here needs to expand past 500MB
+
 
 class UnsupportedDocumentType(Exception):
     pass
@@ -94,6 +114,58 @@ class UnsupportedDocumentType(Exception):
 
 class DocumentTooLarge(Exception):
     pass
+
+
+class LockedDocumentError(Exception):
+    """The file is password-protected/encrypted and this app made no
+    attempt to guess or crack the password - the user is the one who can
+    actually remove it, so the fix is always "unlock it and re-upload,"
+    surfaced as a clear, specific error rather than a confusing parse
+    failure or (worse) silently extracting nothing."""
+    pass
+
+
+class UnsafeDocumentError(Exception):
+    """The file failed a basic pre-parse safety check (see
+    _check_ooxml_zip_safety below) - flagged and rejected before this app
+    attempts to actually decompress/parse it, not after."""
+    pass
+
+
+def _check_ooxml_not_locked(file_bytes: bytes, kind: str) -> None:
+    if file_bytes[:8] == _OLE2_SIGNATURE:
+        raise LockedDocumentError(
+            f"This {kind.upper()} file appears to be password-protected. Please remove the "
+            "password (in most Office apps: File > Info > Protect Document/Workbook/"
+            "Presentation > Remove Password, or re-save a copy without one) and upload it again."
+        )
+
+
+def _check_ooxml_zip_safety(file_bytes: bytes) -> None:
+    """Reads each zip entry's own declared compressed/uncompressed sizes
+    from the archive's central directory - metadata every zip file
+    carries regardless of content - without decompressing a single byte
+    of actual data. Bad-zip errors are deliberately NOT caught here: by
+    the time this runs, _check_ooxml_not_locked has already ruled out
+    "it's actually a password-protected OLE2 container" as the
+    explanation, so a file that still isn't a valid zip at this point is
+    genuinely corrupt, and the normal extraction attempt right after this
+    will raise its own clear error for that instead."""
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+        total_uncompressed = 0
+        for info in zf.infolist():
+            if info.compress_size > 0 and info.file_size / info.compress_size > _MAX_ZIP_ENTRY_COMPRESSION_RATIO:
+                raise UnsafeDocumentError(
+                    "This file failed a basic safety check (one of its internal parts has an "
+                    "unusually extreme compression ratio) and was not opened. If this is a file "
+                    "you created yourself in Office or Google Workspace, try re-saving a fresh copy."
+                )
+            total_uncompressed += info.file_size
+        if total_uncompressed > _MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+            raise UnsafeDocumentError(
+                "This file failed a basic safety check (it would expand to an unreasonably large "
+                "size once opened) and was not opened."
+            )
 
 
 @dataclass
@@ -145,6 +217,21 @@ def _ocr_page(pdf_doc, page_index: int) -> str:
 
 def extract_pdf(file_bytes: bytes) -> ExtractionResult:
     reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+    if reader.is_encrypted:
+        # Many "encrypted" PDFs only restrict printing/editing via an
+        # owner password, with a blank USER password - genuinely readable
+        # without ever prompting anyone. Try that blank password first;
+        # only reject as locked if the PDF still can't be opened after
+        # trying it, which means a REAL password is required.
+        try:
+            decrypted = reader.decrypt("")
+        except Exception:
+            decrypted = 0
+        if not decrypted:
+            raise LockedDocumentError(
+                "This PDF is password-protected. Please remove the password (most PDF "
+                "viewers can save an unprotected copy) and upload it again."
+            )
     pages_text = [page.extract_text() or "" for page in reader.pages]
 
     ocr_pages_used = 0
@@ -244,7 +331,12 @@ def extract_pptx(file_bytes: bytes) -> ExtractionResult:
 
 
 def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
-    """Dispatches on file extension. Returns (kind, ExtractionResult)."""
+    """Dispatches on file extension. Returns (kind, ExtractionResult).
+    Safety/lock checks run BEFORE any real parsing, in the same spirit as
+    this app's other upfront gates (the size cap in routes_documents.py
+    runs before this function is even called) - a locked or unsafe file
+    is rejected with a specific, actionable reason, not a generic parse
+    failure or, worse, silently extracted as empty."""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     kind = SUPPORTED_EXTENSIONS.get(ext)
     if kind is None:
@@ -252,6 +344,9 @@ def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
             f"Unsupported file type '{ext or filename}'. Supported: "
             f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}.",
         )
+    if kind in ("docx", "xlsx", "pptx"):
+        _check_ooxml_not_locked(file_bytes, kind)
+        _check_ooxml_zip_safety(file_bytes)
     if kind == "pdf":
         return kind, extract_pdf(file_bytes)
     if kind == "docx":
