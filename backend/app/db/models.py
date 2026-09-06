@@ -253,6 +253,14 @@ class UploadedDocument(Base):
     # the UI so OCR'd text (real, but lower-confidence than a native text
     # layer) is never presented identically to a clean extraction.
     ocr_pages_used = Column(Integer, default=0)
+    # How many real embedded pictures (PDF/PPTX only, always 0 for
+    # DOCX/XLSX) got a real AI-generated description folded into
+    # extracted_text - see app/agents/document_intelligence.py's
+    # _describe_images(). Surfaced the same way ocr_pages_used already is:
+    # an image description is the AI's read of what it visually shows,
+    # not ground truth pulled directly off the page, so it's never shown
+    # identically to a clean text extraction.
+    images_described = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

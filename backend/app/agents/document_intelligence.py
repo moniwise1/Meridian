@@ -6,6 +6,15 @@ turns a file into text the insight-explanation LLM step can read, exactly
 the way it already reads computed metrics — nothing here interprets,
 summarizes, or validates the document's content.
 
+One deliberate, narrow exception: a real embedded picture (PDF/PPTX only
+— see extract_pdf/extract_pptx) has no text form to "extract" at all, so
+describing what it actually shows is the only way its content reaches
+the rest of the pipeline. `_describe_images()` below is a small, tightly-
+scoped AI vision call for exactly that (and only that) — not analysis of
+the document as a whole, and explicitly told never to invent a number or
+word it can't actually read in the image. Everything else in this module
+is still pure extraction with zero interpretation.
+
 Security note this module exists specifically to keep in view: extracted
 document text is the first genuinely externally-authored content this app
 ever hands to an LLM. Row values and schema field names are trusted enough
@@ -48,18 +57,21 @@ Still NOT built: real PDF table structure (text extraction, OCR'd or
 native, flattens tables into reading-order text, which reads poorly for
 anything but simple layouts - a known, unfixed limitation, not a bug).
 """
+import base64
 import io
+import json
 import logging
-from dataclasses import dataclass
-
 import zipfile
+from dataclasses import dataclass
 
 import pypdf
 import docx
 import openpyxl
 import pptx
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 import pytesseract
 import pymupdf
+from anthropic import Anthropic
 
 from app.config import settings
 
@@ -72,6 +84,107 @@ if settings.tesseract_cmd:
     # (backend/Dockerfile installs tesseract-ocr via apt) needs no
     # override at all; PATH resolution just works there.
     pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
+
+# A separate client instance from insight_agent.py's own _client - this
+# module's job (per its docstring) is extraction, not comprehension, and
+# describing an embedded picture is a real, if small, exception to that:
+# there's no way to "extract" a photo or chart as text without actually
+# looking at it. Kept as its own client/prompt here rather than importing
+# insight_agent.py's, so the two stay decoupled - this one has a
+# completely different, much narrower job (describe what's visibly in an
+# image, nothing else) than insight_agent.py's actual analytical
+# reasoning. Same fail-open pattern as a missing Tesseract install below:
+# no key configured means images are still extracted, just never
+# described - never a failed or degraded-looking upload over it.
+_vision_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+
+MAX_IMAGES_DESCRIBED_PER_DOCUMENT = 20
+# Below this on either side, an embedded image is almost always a
+# decorative icon, bullet glyph, or logo, not something with real
+# analyzable content - skipped so a heavily-styled deck's icons don't
+# burn through the per-document image budget before a real chart or
+# photo gets a turn.
+MIN_IMAGE_DIMENSION_PX = 80
+# Resized to fit within this before sending - keeps the request small
+# and fast without a meaningful loss of the kind of detail a factual
+# description actually needs (this is "what does this show", not OCR of
+# fine print).
+MAX_IMAGE_SIDE_PX = 1024
+
+_IMAGE_DESCRIPTION_SYSTEM_PROMPT = """You are describing images extracted from a document, so their
+content can be referenced during analysis alongside the document's own text and tables - the same
+job document_intelligence.py already does for those, just for pictures instead.
+
+You will be given one or more images, each preceded by a label ("Image 1:", "Image 2:", ...).
+For each one, write one factual, specific description of what it actually shows: a chart's
+approximate data or trend, a diagram's structure, a photo's real subject, any text visible in it.
+If an image is purely decorative (a logo, a background pattern, a bullet icon) with no
+informational content, say so briefly rather than inventing meaning it doesn't have.
+
+Never fabricate a specific number, label, or word you cannot actually read in the image - if a
+chart's exact values aren't legible, describe the general shape or trend instead of guessing
+precise figures. This is the same "never invent a fact" rule the rest of this application already
+applies everywhere else it deals with a document's real content.
+
+Respond ONLY with a JSON array of strings, exactly one per image, in the same order given:
+["description of image 1", "description of image 2", ...]
+"""
+
+
+def _downsize_image_for_description(image_bytes: bytes) -> tuple[bytes, str] | None:
+    """Returns (jpeg_bytes, media_type) resized to fit within
+    MAX_IMAGE_SIDE_PX, or None if the bytes can't be decoded as an image
+    at all - an unusual or corrupt embedded image is skipped rather than
+    crashing the whole extraction over one bad picture, the same
+    fails-open-per-item discipline _ocr_page already uses per page."""
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert("RGB")
+        img.thumbnail((MAX_IMAGE_SIDE_PX, MAX_IMAGE_SIDE_PX))
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=85)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        return None
+
+
+def _describe_images(raw_images: list[bytes]) -> list[str]:
+    """One batched vision call describing every image at once, rather
+    than one call per image - far cheaper and faster, and lets the model
+    reference images relative to each other if that's useful context.
+    Fails open (returns []) with no Anthropic key configured, or if the
+    call/parse fails for any reason - a document's images just come back
+    without descriptions, never a failed upload over it."""
+    if _vision_client is None or not raw_images:
+        return []
+    downsized = [d for d in (_downsize_image_for_description(r) for r in raw_images) if d is not None]
+    if not downsized:
+        return []
+    content = []
+    for i, (jpeg_bytes, media_type) in enumerate(downsized, start=1):
+        content.append({"type": "text", "text": f"Image {i}:"})
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(jpeg_bytes).decode()},
+        })
+    try:
+        resp = _vision_client.messages.create(
+            model=settings.llm_model_fast,
+            max_tokens=2048,
+            system=_IMAGE_DESCRIPTION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+        text_out = "".join(b.text for b in resp.content if b.type == "text")
+        stripped = text_out.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        descriptions = json.loads(stripped)
+        if isinstance(descriptions, list):
+            # Never more than what was actually sent, regardless of what
+            # the model's own array length claims to be.
+            return [str(d) for d in descriptions][:len(downsized)]
+    except Exception:
+        logger.warning("Image description failed for this document - continuing without it.", exc_info=True)
+    return []
 
 MAX_EXTRACTED_CHARS = 50_000  # bounds LLM context cost the same way row limits bound query cost
 MAX_XLSX_ROWS_PER_SHEET = 200
@@ -181,6 +294,15 @@ class ExtractionResult:
     # confidence than a native text layer (misreads happen), worth
     # flagging rather than presenting identically to a clean extraction.
     ocr_pages_used: int = 0
+    # How many embedded pictures (PDF/PPTX only; always 0 for DOCX/XLSX -
+    # see this module's docstring for why) got a real AI-generated
+    # description folded into the extracted text. Surfaced the same way
+    # ocr_pages_used already is, since this is the same category of
+    # "real, but different in kind from a native text extraction" signal
+    # - an image description is the AI's read of what it visually shows,
+    # not ground truth pulled directly off the page the way native text
+    # is.
+    images_described: int = 0
 
 
 def _truncate(text: str) -> tuple[str, bool]:
@@ -234,12 +356,18 @@ def extract_pdf(file_bytes: bytes) -> ExtractionResult:
             )
     pages_text = [page.extract_text() or "" for page in reader.pages]
 
+    # A single pymupdf handle serves both the OCR fallback below (needs
+    # it to rasterize a scanned page) and image extraction just after -
+    # opened unconditionally now (it used to open only when OCR was
+    # actually needed) since a PDF with a perfectly good native text
+    # layer can still have real embedded pictures worth describing.
     ocr_pages_used = 0
-    candidates = [i for i, t in enumerate(pages_text) if len(t.strip()) < NATIVE_TEXT_MIN_CHARS]
-    if candidates:
-        tesseract_available = True
-        pdf_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
-        try:
+    images_described = 0
+    pdf_doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    try:
+        candidates = [i for i, t in enumerate(pages_text) if len(t.strip()) < NATIVE_TEXT_MIN_CHARS]
+        if candidates:
+            tesseract_available = True
             for i in candidates[:MAX_OCR_PAGES_PER_DOCUMENT]:
                 if not tesseract_available:
                     break
@@ -253,13 +381,47 @@ def extract_pdf(file_bytes: bytes) -> ExtractionResult:
                 if ocr_text:
                     pages_text[i] = ocr_text
                     ocr_pages_used += 1
-        finally:
-            pdf_doc.close()
+
+        # Real embedded pictures - a chart, a photo, a diagram - not just
+        # the page's text layer. Deduplicated by xref: the same logo
+        # embedded once but referenced on every page would otherwise be
+        # "described" (and billed) once per page it appears on.
+        seen_xrefs: set[int] = set()
+        raw_images: list[bytes] = []
+        image_pages: list[int] = []
+        for page_index in range(len(pdf_doc)):
+            for img_info in pdf_doc.get_page_images(page_index):
+                xref = img_info[0]
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
+                try:
+                    extracted = pdf_doc.extract_image(xref)
+                except Exception:
+                    continue
+                if (extracted.get("width", 0) < MIN_IMAGE_DIMENSION_PX
+                        or extracted.get("height", 0) < MIN_IMAGE_DIMENSION_PX):
+                    continue  # almost certainly a decorative icon/logo, not real content
+                raw_images.append(extracted["image"])
+                image_pages.append(page_index + 1)
+                if len(raw_images) >= MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
+                    break
+            if len(raw_images) >= MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
+                break
+
+        descriptions = _describe_images(raw_images)
+        images_described = len(descriptions)
+        if descriptions:
+            pages_text.append("\n--- Images ---")
+            for page_no, desc in zip(image_pages, descriptions):
+                pages_text.append(f"[Image on page {page_no}]: {desc}")
+    finally:
+        pdf_doc.close()
 
     text, truncated = _truncate("\n\n".join(pages_text))
     return ExtractionResult(
         text=text, truncated=truncated, source_unit_count=len(reader.pages),
-        ocr_pages_used=ocr_pages_used,
+        ocr_pages_used=ocr_pages_used, images_described=images_described,
     )
 
 
@@ -299,6 +461,8 @@ def extract_pptx(file_bytes: bytes) -> ExtractionResult:
     total_slides = len(presentation.slides)
     slides_included = 0
     parts = []
+    raw_images: list[bytes] = []
+    image_slides: list[int] = []
     for i, slide in enumerate(presentation.slides):
         if i >= MAX_PPTX_SLIDES:
             break
@@ -317,6 +481,16 @@ def extract_pptx(file_bytes: bytes) -> ExtractionResult:
             if shape.has_table:
                 for row in shape.table.rows:
                     parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+            # Real embedded pictures - a photo, a chart pasted in as an
+            # image, a diagram - not just the slide's own text shapes.
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE and len(raw_images) < MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
+                try:
+                    width, height = shape.image.size
+                    if width >= MIN_IMAGE_DIMENSION_PX and height >= MIN_IMAGE_DIMENSION_PX:
+                        raw_images.append(shape.image.blob)
+                        image_slides.append(i + 1)
+                except Exception:
+                    pass  # an unusual/corrupt embedded image is skipped, not a crashed upload
         # Speaker notes often carry real analytical content (the actual
         # narration a deck's bullet points only hint at) - included, but
         # clearly labelled so it's obvious in the extracted text which
@@ -325,9 +499,19 @@ def extract_pptx(file_bytes: bytes) -> ExtractionResult:
             notes_text = (slide.notes_slide.notes_text_frame.text or "").strip()
             if notes_text:
                 parts.append(f"[Speaker notes] {notes_text}")
+
+    descriptions = _describe_images(raw_images)
+    images_described = len(descriptions)
+    if descriptions:
+        parts.append("--- Images ---")
+        for slide_no, desc in zip(image_slides, descriptions):
+            parts.append(f"[Image on slide {slide_no}]: {desc}")
+
     text, char_truncated = _truncate("\n".join(parts))
     truncated = char_truncated or slides_included < total_slides
-    return ExtractionResult(text=text, truncated=truncated, source_unit_count=total_slides)
+    return ExtractionResult(
+        text=text, truncated=truncated, source_unit_count=total_slides, images_described=images_described,
+    )
 
 
 def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:

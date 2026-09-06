@@ -108,6 +108,9 @@ export default function DocumentsPage() {
                   {d.truncated ? " (truncated)" : ""}
                   {d.ocr_pages_used > 0
                     ? ` (${d.ocr_pages_used} scanned page${d.ocr_pages_used === 1 ? "" : "s"} read via OCR)`
+                    : ""}
+                  {d.images_described > 0
+                    ? ` (${d.images_described} image${d.images_described === 1 ? "" : "s"} described by AI)`
                     : ""} · {new Date(d.created_at).toLocaleString()}
                 </div>
               </div>
