@@ -678,6 +678,58 @@ full real HTTP round trip (register → upload a real PDF with a real
 embedded image → list → get) confirming `images_described` and the
 actual description text reach every layer correctly.
 
+**...and the same for XLSX** — a real, direct follow-up question ("how
+about excel format?") right after the PDF/PPTX version shipped. XLSX can
+embed real pictures too (a chart pasted in as an image, a logo, a photo),
+and the extraction is possible - but a real, checked constraint shaped
+how: `extract_xlsx()`'s existing text extraction reads a sheet in
+openpyxl's `read_only=True` streaming mode specifically to handle a wide
+or heavily-populated sheet without loading it entirely into memory (the
+same mode this document analysis project's spreadsheet work has cared
+about since the 5,232-column workbook earlier in this README) - and a
+`ReadOnlyWorksheet` in that mode simply doesn't expose embedded images at
+all (confirmed directly: it lacks the attribute entirely, not just an
+empty result). Reaching them needs a genuinely separate, second,
+normal-mode `load_workbook()` call - a real cost that mode was chosen to
+avoid for cell data specifically. Judged acceptable here because by the
+time this runs, the file has already passed the 20MB upload cap and the
+zip-bomb ratio check (see "Locked and unsafe file detection" below) - the
+unbounded-blow-up risk read-only mode also happens to guard against is
+already ruled out by those; what's left is just ordinary parse time for
+an already size-capped file. Images are labelled by sheet name and
+anchor cell (`[Image in sheet 'Report', near C5]: ...`), reusing the same
+`_describe_images()` batched vision call and every one of its existing
+bounds (20 images/document, 80px minimum dimension, 1024px resize)
+unchanged.
+
+Testing this against the real file surfaced one more real gap, fixed
+consistently across all three formats, not just XLSX: `extract_xlsx()`'s
+call to the image-description code had no enclosing `try/except` of its
+own — only the smaller operations *inside* it did. A test that patched
+the image-extraction call to simply raise (simulating an unexpected
+failure the inner handling didn't anticipate) crashed the *entire*
+extraction, discarding cell text that had already been read out
+successfully. Once caught, the same audit found the identical gap in
+`extract_pdf()` and `extract_pptx()` — both already had per-image
+try/excepts inside their extraction loops, but the outer
+`_describe_images()` call itself sat outside any try/except at that
+level. All three now wrap that whole block, so an image-side failure of
+any kind costs a document its image descriptions only, never the text
+that was already successfully extracted alongside them — confirmed by
+patching `_describe_images` to raise directly against all three formats
+and checking the real text still comes through afterward.
+
+Verified with a real XLSX built with openpyxl containing a genuine
+embedded picture (extracted, described, and correctly labelled by sheet
+and cell, alongside real cell values extracted normally); a 30×30 test
+image correctly filtered by the minimum-dimension check; the new
+outer-safety-net fix confirmed on all three formats (PDF/PPTX/XLSX) by
+directly forcing `_describe_images` to raise and checking the
+already-extracted real text survives untouched; and a full real HTTP
+round trip (register → upload a real XLSX with a real embedded image →
+get) confirming `images_described` and the real description text reach
+the API correctly alongside the real cell data.
+
 **Locked and unsafe file detection** (`app/agents/document_intelligence.py`,
 `routes_documents.py`) — before this, a password-protected file just
 failed extraction with a generic, confusing error (or, for some

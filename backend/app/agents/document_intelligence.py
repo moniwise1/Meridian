@@ -385,36 +385,47 @@ def extract_pdf(file_bytes: bytes) -> ExtractionResult:
         # Real embedded pictures - a chart, a photo, a diagram - not just
         # the page's text layer. Deduplicated by xref: the same logo
         # embedded once but referenced on every page would otherwise be
-        # "described" (and billed) once per page it appears on.
-        seen_xrefs: set[int] = set()
-        raw_images: list[bytes] = []
-        image_pages: list[int] = []
-        for page_index in range(len(pdf_doc)):
-            for img_info in pdf_doc.get_page_images(page_index):
-                xref = img_info[0]
-                if xref in seen_xrefs:
-                    continue
-                seen_xrefs.add(xref)
-                try:
-                    extracted = pdf_doc.extract_image(xref)
-                except Exception:
-                    continue
-                if (extracted.get("width", 0) < MIN_IMAGE_DIMENSION_PX
-                        or extracted.get("height", 0) < MIN_IMAGE_DIMENSION_PX):
-                    continue  # almost certainly a decorative icon/logo, not real content
-                raw_images.append(extracted["image"])
-                image_pages.append(page_index + 1)
+        # "described" (and billed) once per page it appears on. The whole
+        # block is its own try/except, on top of _describe_images' own
+        # internal one: pages_text (including any OCR results already
+        # merged into it above) has already been successfully produced
+        # by this point, and nothing about images should ever be able to
+        # take that down with it - the same outer-safety-net gap a real
+        # test caught in extract_xlsx's equivalent code, fixed the same
+        # way here for consistency rather than assumed safe just because
+        # the callee also has its own try/excepts.
+        try:
+            seen_xrefs: set[int] = set()
+            raw_images: list[bytes] = []
+            image_pages: list[int] = []
+            for page_index in range(len(pdf_doc)):
+                for img_info in pdf_doc.get_page_images(page_index):
+                    xref = img_info[0]
+                    if xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
+                    try:
+                        extracted = pdf_doc.extract_image(xref)
+                    except Exception:
+                        continue
+                    if (extracted.get("width", 0) < MIN_IMAGE_DIMENSION_PX
+                            or extracted.get("height", 0) < MIN_IMAGE_DIMENSION_PX):
+                        continue  # almost certainly a decorative icon/logo, not real content
+                    raw_images.append(extracted["image"])
+                    image_pages.append(page_index + 1)
+                    if len(raw_images) >= MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
+                        break
                 if len(raw_images) >= MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
                     break
-            if len(raw_images) >= MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
-                break
 
-        descriptions = _describe_images(raw_images)
-        images_described = len(descriptions)
-        if descriptions:
-            pages_text.append("\n--- Images ---")
-            for page_no, desc in zip(image_pages, descriptions):
-                pages_text.append(f"[Image on page {page_no}]: {desc}")
+            descriptions = _describe_images(raw_images)
+            images_described = len(descriptions)
+            if descriptions:
+                pages_text.append("\n--- Images ---")
+                for page_no, desc in zip(image_pages, descriptions):
+                    pages_text.append(f"[Image on page {page_no}]: {desc}")
+        except Exception:
+            logger.warning("PDF image extraction/description failed - continuing with text only.", exc_info=True)
     finally:
         pdf_doc.close()
 
@@ -435,6 +446,52 @@ def extract_docx(file_bytes: bytes) -> ExtractionResult:
     return ExtractionResult(text=text, truncated=truncated, source_unit_count=len(document.paragraphs))
 
 
+def _extract_xlsx_images(file_bytes: bytes) -> tuple[list[bytes], list[str]]:
+    """openpyxl's embedded-image access (worksheet._images) simply isn't
+    available in the read_only=True streaming mode extract_xlsx uses for
+    cell text (confirmed directly - a ReadOnlyWorksheet doesn't even have
+    the attribute) - a genuinely separate, normal-mode load is the only
+    way to reach it. That's a real, if bounded, cost the read_only mode
+    was chosen specifically to avoid for a large sheet's cell data - but
+    by this point the file has already passed the 20MB upload cap and
+    the zip-bomb ratio check (see _check_ooxml_zip_safety), so the
+    "unbounded blow-up" risk that mode was guarding against is already
+    ruled out; what's left is ordinary parse time for an already
+    size-capped file. Fails open on ANY error (a malformed drawing part,
+    an image openpyxl can't resolve, or an unexpected structural quirk)
+    - the text extraction from the read_only pass already succeeded
+    independently, so a problem here costs the document its image
+    descriptions, never the whole upload."""
+    try:
+        workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception:
+        return [], []
+    images, labels = [], []
+    try:
+        for sheet in workbook.worksheets[:MAX_XLSX_SHEETS]:
+            for img in getattr(sheet, "_images", []):
+                if len(images) >= MAX_IMAGES_DESCRIBED_PER_DOCUMENT:
+                    return images, labels
+                try:
+                    data = img._data()
+                    if img.width < MIN_IMAGE_DIMENSION_PX or img.height < MIN_IMAGE_DIMENSION_PX:
+                        continue
+                    cell_ref = "?"
+                    try:
+                        from openpyxl.utils import get_column_letter
+                        anchor = img.anchor._from
+                        cell_ref = f"{get_column_letter(anchor.col + 1)}{anchor.row + 1}"
+                    except Exception:
+                        pass
+                    images.append(data)
+                    labels.append(f"sheet '{sheet.title}', near {cell_ref}")
+                except Exception:
+                    continue
+    finally:
+        workbook.close()
+    return images, labels
+
+
 def extract_xlsx(file_bytes: bytes) -> ExtractionResult:
     workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     total_sheets = len(workbook.worksheets)
@@ -451,9 +508,31 @@ def extract_xlsx(file_bytes: bytes) -> ExtractionResult:
                 break
             parts.append(" | ".join("" if v is None else str(v) for v in row))
     workbook.close()
+
+    # An outer safety net on top of _extract_xlsx_images' own internal
+    # error handling, not a substitute for it: the cell text above has
+    # already been successfully extracted by this point, and nothing
+    # about images should ever be able to take that down with it -
+    # caught directly by a test patching this call to raise unexpectedly,
+    # not assumed safe just because the callee also has its own
+    # try/excepts.
+    images_described = 0
+    try:
+        raw_images, image_labels = _extract_xlsx_images(file_bytes)
+        descriptions = _describe_images(raw_images)
+        images_described = len(descriptions)
+        if descriptions:
+            parts.append("--- Images ---")
+            for label, desc in zip(image_labels, descriptions):
+                parts.append(f"[Image in {label}]: {desc}")
+    except Exception:
+        logger.warning("XLSX image extraction/description failed - continuing with text only.", exc_info=True)
+
     text, char_truncated = _truncate("\n".join(parts))
     truncated = char_truncated or row_truncated or sheets_included < total_sheets
-    return ExtractionResult(text=text, truncated=truncated, source_unit_count=total_sheets)
+    return ExtractionResult(
+        text=text, truncated=truncated, source_unit_count=total_sheets, images_described=images_described,
+    )
 
 
 def extract_pptx(file_bytes: bytes) -> ExtractionResult:
@@ -500,12 +579,19 @@ def extract_pptx(file_bytes: bytes) -> ExtractionResult:
             if notes_text:
                 parts.append(f"[Speaker notes] {notes_text}")
 
-    descriptions = _describe_images(raw_images)
-    images_described = len(descriptions)
-    if descriptions:
-        parts.append("--- Images ---")
-        for slide_no, desc in zip(image_slides, descriptions):
-            parts.append(f"[Image on slide {slide_no}]: {desc}")
+    # Same outer safety net as extract_pdf/extract_xlsx: parts already
+    # holds every slide's real text/tables/notes by this point, and
+    # nothing about images should ever be able to take that down with it.
+    images_described = 0
+    try:
+        descriptions = _describe_images(raw_images)
+        images_described = len(descriptions)
+        if descriptions:
+            parts.append("--- Images ---")
+            for slide_no, desc in zip(image_slides, descriptions):
+                parts.append(f"[Image on slide {slide_no}]: {desc}")
+    except Exception:
+        logger.warning("PPTX image description failed - continuing with text only.", exc_info=True)
 
     text, char_truncated = _truncate("\n".join(parts))
     truncated = char_truncated or slides_included < total_slides
