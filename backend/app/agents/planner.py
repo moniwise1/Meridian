@@ -31,6 +31,7 @@ from app.db.models import DataSourceConnection, QueryRecord, Conversation, Uploa
 from app.security.secrets import decrypt, RedactedSecret
 from app.security.query_validator import validate_readonly_sql
 from app.security.output_guard import check_dataframe
+from app.security.ssrf import check_connection_host, BlockedHostError
 from app.connectors.postgres import PostgresConnector
 from app.connectors.mysql import MySQLConnector
 from app.connectors.mssql import MSSQLConnector
@@ -71,6 +72,11 @@ _CONNECTOR_REGISTRY = {
 
 
 def build_connector(conn_row: DataSourceConnection):
+    # Re-check the host here, not just at connection-creation time: this
+    # narrows the DNS-rebinding window where a name resolved to a public
+    # address when the connection was saved and to a private one now. See
+    # app/security/ssrf.py.
+    check_connection_host(conn_row.host)
     password = RedactedSecret(decrypt(conn_row.encrypted_password))
     connector_cls = _CONNECTOR_REGISTRY.get(conn_row.kind)
     if connector_cls is None:
@@ -428,7 +434,13 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
             }
             return
 
-    connector = build_connector(conn_row)
+    try:
+        connector = build_connector(conn_row)
+    except BlockedHostError as e:
+        audit.log(db, tenant_id, "connection_host_blocked", user_id, connection_id, query_id,
+                  {"reason": str(e), "host": conn_row.host}, status="denied")
+        yield StepEvent("finding_data", "error", str(e))
+        return
 
     yield StepEvent("finding_data", "running")
     tables = discover_schema(connector, conn_row.table_allowlist or None, conn_row.column_policy or {})

@@ -518,6 +518,25 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   serves `/health` in dev.
 
 **Connectors**
+- **SSRF guard on the connection host** (`app/security/ssrf.py`, a
+  security-review fix). A connection's `host` is set by a tenant admin and
+  then dialed *from the backend's own network* — without a guard, an
+  authenticated paying admin could point a connection at `127.0.0.1`,
+  `169.254.169.254`, or an internal `10.x` address and use Meridian as a
+  working internal port scanner (and, against an internal DB with weak
+  auth, an actual read path). `check_connection_host` now resolves the
+  host and refuses anything that lands on a private / loopback /
+  link-local / CGNAT / cloud-metadata address (and fails closed on an
+  unresolvable name). Checked both when a connection is created *and* when
+  a connector is built to run a query — the second check narrows the
+  DNS-rebinding window. A self-hosted deployment that legitimately needs a
+  private-network database sets `ALLOW_PRIVATE_CONNECTION_HOSTS=true`.
+  Verified: every private/loopback/link-local/CGNAT/metadata/IPv6-ULA
+  address and `localhost` are blocked; public IPs pass; an unresolvable
+  host is blocked; the opt-out flag disables it; `POST /connections` with
+  an internal host is a `400` + an audited `connection_host_blocked`; a
+  public host passes the guard and only then fails at the connectivity
+  check (so it isn't over-blocking).
 - **PostgreSQL** and **MySQL/MariaDB**, both proven against real instances:
   every query runs inside an explicit read-only transaction
   (`BEGIN TRANSACTION READ ONLY` / `START TRANSACTION READ ONLY`), on top of

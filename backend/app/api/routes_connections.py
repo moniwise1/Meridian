@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.models import DataSourceConnection, Tenant
 from app.security.secrets import encrypt, RedactedSecret
+from app.security.ssrf import check_connection_host, BlockedHostError
 from app.security.auth import get_current_user, require_role, require_active_subscription, AuthContext
 from app.connectors.postgres import PostgresConnector
 from app.connectors.mysql import MySQLConnector
@@ -67,6 +68,16 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
     if connector_cls is None:
         raise HTTPException(400, f"Unsupported connector kind '{body.kind}'. "
                                   f"Supported: {', '.join(_CONNECTOR_CLASSES)}.")
+
+    # SSRF guard: the host is about to be dialed from the backend's own
+    # network. Refuse anything that resolves to a private / loopback /
+    # link-local / CGNAT address (see app/security/ssrf.py).
+    try:
+        check_connection_host(body.host)
+    except BlockedHostError as e:
+        audit.log(db, ctx.tenant_id, "connection_host_blocked", ctx.user_id,
+                   detail={"host": body.host, "reason": str(e)}, status="denied")
+        raise HTTPException(400, str(e))
 
     # Connection cap: each plan (see app/billing/plans.py) allows a
     # different number of connected data sources - Basic 3, Pro 10,

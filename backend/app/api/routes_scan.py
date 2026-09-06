@@ -25,6 +25,7 @@ from app.security.rate_limit import (
     RateLimitExceeded, ConcurrencyLimitExceeded,
 )
 from app.agents.planner import build_connector
+from app.security.ssrf import BlockedHostError
 from app.agents.schema_discovery import discover_schema
 from app.agents.risk_scan import scan_connection
 from app.audit import logger as audit
@@ -81,7 +82,13 @@ def scan_stream(body: ScanRequest, db: Session = Depends(get_db),
     def gen():
         try:
             yield _sse({"type": "step", "step": "finding_data", "status": "running"})
-            connector = build_connector(conn_row)
+            try:
+                connector = build_connector(conn_row)
+            except BlockedHostError as e:
+                audit.log(db, ctx.tenant_id, "connection_host_blocked", ctx.user_id, body.connection_id,
+                          status="denied", detail={"reason": str(e), "host": conn_row.host})
+                yield _sse({"type": "step", "step": "finding_data", "status": "error", "detail": str(e)})
+                return
             tables = discover_schema(connector, conn_row.table_allowlist or None, conn_row.column_policy or {})
             if not tables:
                 yield _sse({"type": "step", "step": "finding_data", "status": "error",

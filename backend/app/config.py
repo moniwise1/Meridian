@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     # FRONTEND_ORIGIN_REGEX=https://([a-z0-9-]+\.)?getmeridiananalytics\.com
     frontend_origin_regex: str = ""
 
+    # SSRF guard (app/security/ssrf.py). A data-source connection's host is
+    # supplied by a tenant admin and dialed from the backend's own network;
+    # by default a host that resolves to a private / loopback / link-local
+    # / CGNAT address is refused, so a connection can't be pointed at an
+    # internal service or the cloud metadata endpoint. Set true only on a
+    # self-hosted deployment that genuinely needs to reach a database on a
+    # private network.
+    allow_private_connection_hosts: bool = False
+
     # Credential encryption backend - see app/security/secrets.py.
     # "local" (default): a static Fernet key from app_secret_key, fine for
     # dev. "aws": envelope encryption via AWS KMS for production - see
