@@ -1,12 +1,28 @@
 """
 Central configuration. All security-relevant defaults live here so they are
 easy to audit in one place, instead of scattered magic numbers through the app.
+
+`validate_startup_config()` at the bottom is called from app.main's startup
+event: in a hardened (production / real-KMS) deployment it hard-fails the
+process rather than boot with a config that undermines the whole security
+model - most importantly a single shared secret doing the job of all three.
 """
+import logging
+
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger("meridian.config")
 
 
 class Settings(BaseSettings):
     app_secret_key: str
+
+    # "development" (default) | "production". In production - or any time
+    # KMS_PROVIDER=aws, which is itself a production signal -
+    # validate_startup_config() below refuses to start unless the three
+    # signing secrets are set and distinct and KMS is real. Set explicitly
+    # to "development" to bypass those checks on a non-production box.
+    environment: str = "development"
     # Falls back to app_secret_key if unset, matching the original
     # single-key behavior - see the note in app/security/auth.py on why
     # splitting this from the credential-encryption key matters.
@@ -205,3 +221,65 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class StartupConfigError(RuntimeError):
+    """Raised by validate_startup_config for a config that must not run in a
+    hardened deployment. Fails the process at startup, on purpose."""
+
+
+def validate_startup_config(s: "Settings | None" = None) -> list[str]:
+    """Called from app.main's startup event. Returns a list of non-fatal
+    warning strings (the caller logs them). Raises StartupConfigError for
+    anything that must block startup in a hardened deployment.
+
+    "Hardened" = ENVIRONMENT=production, or KMS_PROVIDER=aws (nobody runs
+    real KMS outside production). In that mode:
+
+    - JWT_SECRET_KEY and PLATFORM_JWT_SECRET must each be set and distinct
+      from APP_SECRET_KEY (and from each other). Otherwise one leaked value
+      forges any tenant session, forges a platform-owner token, AND - with
+      the local KMS backend - decrypts every stored customer DB credential.
+    - KMS_PROVIDER must be "aws" with AWS_KMS_KEY_ID set: the "local"
+      backend keeps the credential-encryption key in the same environment
+      as the encrypted data.
+
+    Warnings (don't block, but a real production deployment should fix):
+    a SQLite metadata DB, a localhost FRONTEND_ORIGIN.
+    """
+    s = s or settings
+    hardened = s.environment == "production" or s.kms_provider == "aws"
+    if not hardened:
+        return []
+
+    errors: list[str] = []
+    if not s.jwt_secret_key or s.jwt_secret_key == s.app_secret_key:
+        errors.append("JWT_SECRET_KEY must be set to a value distinct from APP_SECRET_KEY.")
+    if not s.platform_jwt_secret or s.platform_jwt_secret in (s.app_secret_key, s.jwt_secret_key):
+        errors.append(
+            "PLATFORM_JWT_SECRET must be set to a value distinct from APP_SECRET_KEY and JWT_SECRET_KEY."
+        )
+    if s.kms_provider != "aws":
+        errors.append(
+            "KMS_PROVIDER must be 'aws' in production - the 'local' backend keeps the "
+            "credential-encryption key in the same environment as the data it protects."
+        )
+    elif not s.aws_kms_key_id:
+        errors.append("KMS_PROVIDER=aws requires AWS_KMS_KEY_ID to be set.")
+
+    if errors:
+        raise StartupConfigError(
+            "Refusing to start: unsafe configuration for a production / real-KMS deployment.\n  - "
+            + "\n  - ".join(errors)
+            + "\n(Set ENVIRONMENT=development to bypass this on a non-production box.)"
+        )
+
+    warnings: list[str] = []
+    if s.metadata_db_url.startswith("sqlite"):
+        warnings.append(
+            "METADATA_DB_URL is SQLite - use managed Postgres in production for durability, "
+            "backups, and safe concurrent writes."
+        )
+    if "localhost" in s.frontend_origin or "127.0.0.1" in s.frontend_origin:
+        warnings.append("FRONTEND_ORIGIN still points at localhost.")
+    return warnings

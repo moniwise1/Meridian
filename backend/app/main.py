@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 import os
 
-from app.config import settings
+from app.config import settings, validate_startup_config
 from app.db.session import init_db
 from app.api import (
     routes_connections, routes_ask, routes_audit, routes_auth, routes_artifacts,
@@ -36,6 +37,11 @@ os.makedirs(settings.documents_dir, exist_ok=True)
 
 @app.on_event("startup")
 def on_startup():
+    # Hard-fails the process in a production / real-KMS deployment if the
+    # signing secrets aren't set and distinct, or KMS isn't real - see
+    # app/config.py. Non-production (the default) is unaffected.
+    for warning in validate_startup_config():
+        logging.getLogger("meridian.config").warning("startup config: %s", warning)
     init_db()
 
 

@@ -498,6 +498,24 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   calls, full encrypt/decrypt round trip, confirms the plaintext
   credential never appears in the stored token), not a live AWS account —
   none available here.
+- **Production config is now enforced at startup, not just documented**
+  (a security-review fix, `validate_startup_config` in `app/config.py`,
+  called from the startup event). The backward-compatible fallbacks above
+  are a real footgun: with only `APP_SECRET_KEY` set, that one value signs
+  tenant sessions, signs platform-owner tokens, *and* is the local-KMS
+  credential-encryption key — one leak is a total compromise. So when
+  `ENVIRONMENT=production` (or `KMS_PROVIDER=aws`, which nobody runs
+  outside production), the process **refuses to start** unless
+  `JWT_SECRET_KEY` and `PLATFORM_JWT_SECRET` are both set and distinct
+  from `APP_SECRET_KEY` and each other, and `KMS_PROVIDER=aws` with
+  `AWS_KMS_KEY_ID` set. A SQLite `METADATA_DB_URL` or a localhost
+  `FRONTEND_ORIGIN` in that mode logs a loud warning but doesn't block.
+  Development (the default) is completely unaffected. Verified: dev mode
+  bypasses every check; production with collapsed secrets raises listing
+  each problem; `jwt == app` and `platform == jwt` are each caught;
+  `KMS_PROVIDER=aws` with no key id is caught; a correct hardened config
+  passes with only the soft warnings; and the real app still boots and
+  serves `/health` in dev.
 
 **Connectors**
 - **PostgreSQL** and **MySQL/MariaDB**, both proven against real instances:
