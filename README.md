@@ -1320,6 +1320,103 @@ guessed at:
   the same Audit log screen already being checked for insight failures,
   without needing to ask for a different piece of evidence each time.
 
+**Document analysis becomes a real conversation** (`app/agents/planner.py`,
+`insight_agent.py`, `tabular_analysis.py`) — the third of three explicitly
+requested pieces toward a serious analysis engine (safety/lock detection →
+full extraction fidelity, both above → this). Document-only questions
+have always been a strict one-shot: every question started completely
+fresh, with no memory of anything asked before, even about the exact same
+document seconds earlier — a deliberate exclusion when documents were
+first added as their own data source, since a document-attached question
+already opted out of the result cache and conversation chaining for
+similar reasons. That exclusion made sense for "attach a document as
+supplementary context to a database question." It stopped making sense
+once a document could BE the whole analysis, and a user explicitly asked
+for "an active chat... the attached document is the memory used to
+analyse."
+
+Database questions already get real follow-ups via `context_resolver.py`:
+a follow-up is rewritten into a fully self-contained question using
+structural context (table, columns, top groups), then re-run through the
+exact same fresh-query pipeline — sensible there because a NEW SQL query
+has to be generated and executed every turn regardless. A document never
+changes and there's no query to regenerate, so the more natural design
+for real conversational continuity is the actual transcript itself: a
+bounded history of the last `MAX_DOCUMENT_CONVERSATION_TURNS` (10)
+{question, answer} pairs, handed to the model so it can reference "the
+second point," "what you said about June," or "that" the way a real
+back-and-forth with an analyst works — not just a rewritten standalone
+question with no memory of the conversation's own shape.
+
+`Conversation` (previously database-only — `connection_id` was
+`nullable=False`) now also holds document-only threads, using the exact
+same `DOCUMENT_ONLY_SOURCE_ID` sentinel `QueryRecord.connection_id`
+already uses for this — no schema change needed, since neither column
+has a real foreign-key constraint. Its `context` remembers three things a
+document conversation actually needs: `document_ids` (so a follow-up
+doesn't need the document re-selected — the same convention a database
+follow-up already has for `connection_id`), the bounded `turns` history,
+and the previous turn's `last_primary_value_column`/`last_primary_group_
+column` when structured-table analysis was used. That last one matters
+for a real reason: a follow-up like "what about the low end" names no
+column at all — `build_profile()` now accepts these as a second-priority
+default (behind a column the CURRENT question explicitly names, ahead of
+the generic keyword/cardinality heuristic a fresh conversation still
+uses), so a follow-up naturally keeps talking about the same breakdown
+instead of the profiler silently re-guessing from scratch every turn.
+
+The conversation history is handed to `explain_document_only()` as a new
+`conversation_history` payload key, with the system prompt explicit about
+its role: useful for understanding what the CURRENT question refers to
+and for answering as a natural continuation (a follow-up about one
+specific thing gets a focused answer, not the full multi-section
+structure repeated every turn) — but never itself a source of facts. Every
+claim still has to be grounded in the actual document content or
+`computed_profile`, exactly as if it were the first question asked; a
+prior answer being *said* doesn't make it true the way a document's own
+text or a deterministically computed number is.
+
+Two real bugs surfaced building this, both fixed:
+- `Conversation.id`'s column default (a Python-side `uuid.uuid4()`
+  callable) isn't actually resolved until the object is flushed — a real
+  test caught the very first turn's `QueryRecord.conversation_id` landing
+  as `null` forever, because `conversation.id` was read immediately after
+  construction, with no flush in between. Fixed with an explicit
+  `db.flush()` right after creating a new conversation, before building
+  the `QueryRecord` that references its id. (The same, pre-existing bug
+  was found in the *database*-backed path too, once this fix made the
+  pattern easy to recognize — flagged as its own separate fix rather than
+  changed here, to keep this change scoped to the document-only path it
+  was actually built for.)
+- `routes_ask.py`'s own request-validation gate rejected a document-only
+  follow-up outright: "select a data source or a document" fired whenever
+  BOTH `connection_id` and `document_ids` were empty, which is exactly
+  what a legitimate follow-up looks like (it relies on `conversation_id`
+  alone). Fixed by allowing a request through when `conversation_id` is
+  present even with the other two empty — and, while auditing that same
+  gate, found the `document_retrieval` capability check only fired when
+  `document_ids` was non-empty, meaning a follow-up could keep going even
+  after that capability was revoked. Fixed by also requiring the
+  capability whenever `conversation_id` is set without a `connection_id`
+  — a signal that can only mean a document conversation continuing, since
+  a genuine database follow-up always still carries its `connection_id`.
+
+Verified end-to-end, not just at the unit level: a real two-turn document
+conversation run through `run_analysis()` directly — turn one asks a
+fresh question with real `document_ids` and gets back a genuine new
+conversation id; turn two sends ONLY that `conversation_id` (no
+`document_ids`, no `connection_id` — exactly what the existing frontend
+already sends for any follow-up, unchanged) and is confirmed to
+re-resolve and re-parse the real document from the conversation's own
+memory, with the real turn-one question and answer confirmed present in
+what `explain_document_only()` actually received as `conversation_history`
+— and both `QueryRecord` rows confirmed linked to the same real
+conversation afterward. Then the same two-turn flow re-verified through
+the actual live HTTP stack (`TestClient` against a real registered
+tenant, a real uploaded DOCX, a real `/ask/stream` call for each turn):
+the follow-up confirmed NOT rejected by either policy gate, and the real
+second answer confirmed present in the streamed result.
+
 **Risk scan** (`app/agents/risk_scan.py`, `/scan/stream`) — proactive
 "find anything unusual across everything" scanning, answering "give me the
 top five risks" without the user already knowing which table or question

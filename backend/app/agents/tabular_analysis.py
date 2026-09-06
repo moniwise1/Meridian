@@ -529,12 +529,23 @@ class TabularProfile:
     threshold_band: dict | None
 
 
-def build_profile(df: pd.DataFrame, question: str) -> TabularProfile:
+def build_profile(df: pd.DataFrame, question: str, sticky_value_col: str | None = None,
+                   sticky_group_col: str | None = None) -> TabularProfile:
     """The actual computation - every number below comes from pandas
     arithmetic on real parsed cells, never from the LLM. This is then
     handed to explain_document_only() (insight_agent.py) as
     "computed_profile", the same trust boundary explain()'s own
-    "computed_metrics" already relies on for the database path."""
+    "computed_metrics" already relies on for the database path.
+
+    sticky_value_col/sticky_group_col carry which columns the PREVIOUS
+    turn of a conversation used (see planner.py's conversation memory) -
+    a follow-up like "what about the low end" doesn't name any column at
+    all, and without this it would silently fall back to the generic
+    keyword/cardinality default instead of naturally continuing to talk
+    about the same breakdown the conversation was already on. Only
+    ranked ABOVE the generic default, never above a column the current
+    question explicitly names - if the user asks about something new,
+    that always wins."""
     group_cols = pick_group_columns(df)
     value_cols = pick_value_columns(df)
     date_col = pick_date_column(df)
@@ -546,8 +557,10 @@ def build_profile(df: pd.DataFrame, question: str) -> TabularProfile:
     q_lower = question.lower()
     named_group = next((c for c in group_cols if str(c).lower() in q_lower), None)
     named_value = next((c for c in value_cols if str(c).lower() in q_lower), None)
-    primary_group = named_group or (group_cols[0] if group_cols else None)
-    primary_value = named_value or (value_cols[0] if value_cols else None)
+    sticky_group = sticky_group_col if sticky_group_col in group_cols else None
+    sticky_value = sticky_value_col if sticky_value_col in value_cols else None
+    primary_group = named_group or sticky_group or (group_cols[0] if group_cols else None)
+    primary_value = named_value or sticky_value or (value_cols[0] if value_cols else None)
 
     overall = summarize(df, value_col=primary_value, group_col=primary_group, date_col=date_col).summary
 
