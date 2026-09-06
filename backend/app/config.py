@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     artifacts_dir: str = "./artifacts"
     documents_dir: str = "./documents"
     max_document_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+    # How many uploaded documents a tenant can have stored at once (a
+    # deleted document frees a slot). Bounds disk growth - there was no
+    # cap before.
+    max_documents_per_tenant: int = 200
     # Override for pytesseract's path to the Tesseract binary - needed
     # only where it isn't already resolvable on PATH (e.g. local Windows
     # dev, if its installer didn't add itself to PATH for an already-open

@@ -720,8 +720,11 @@ every document (upload/list/get responses, and as a "(N scanned page(s)
 read via OCR)" note on the Documents page) so OCR'd text — real but
 lower-confidence than a native text layer — is never presented identically
 to a clean extraction. NOT built: real PDF table structure (flattened to
-reading-order text, OCR'd or native). Bounded to 20MB per upload and
-50,000 extracted characters.
+reading-order text, OCR'd or native). Bounded to 20MB per upload, 50,000
+extracted characters, and (a security-review pass) `MAX_DOCUMENTS_PER_TENANT`
+stored documents at once — deleting one frees a slot; an oversized upload
+is now rejected from its declared size before the body is read into
+memory, not only after.
 Extraction verified against real generated PDF/DOCX/PPTX/XLSX files (not
 reimplemented logic) — actual page text, paragraphs, tables, multi-sheet/
 multi-slide content, PPTX speaker notes, truncation at the character cap,
@@ -1808,7 +1811,10 @@ the *same* tenant each see the shared analysis history but maintain fully
 independent pin state on it.
 
 **Audit log** — every query, rejection, connection event, and artifact
-generation, tenant-scoped, queryable via `/audit`. Hash-chained
+generation, tenant-scoped, queryable via `/audit` (the `limit` query
+param is clamped to a hard ceiling, here and on `/history/*` and
+`/platform/audit` — a security-review pass, so `?limit=99999999` can't
+ask for the whole table). Hash-chained
 (`app/audit/logger.py`): each entry's hash covers its own fields plus the
 previous entry's hash, so editing, deleting, or inserting a row out of band
 breaks the chain from that point forward — `GET /audit/verify` recomputes

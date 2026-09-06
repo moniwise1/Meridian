@@ -6,9 +6,11 @@ syntax:
   1. `START TRANSACTION READ ONLY` — MySQL rejects writes inside this at the
      server level, independent of the role's own grants (available since
      MySQL 5.6 / MariaDB 10.0).
-  2. `SET SESSION MAX_EXECUTION_TIME` bounds runaway queries (MySQL 5.7.8+;
-     MariaDB uses `SET STATEMENT max_statement_time=... FOR <query>` instead
-     — see _timeout_prefix below).
+  2. A per-query statement timeout: `SET SESSION MAX_EXECUTION_TIME`
+     (milliseconds) on MySQL 5.7.8+, `SET SESSION max_statement_time`
+     (seconds) on MariaDB 10.1+. Both are set on every connection, each
+     guarded — one applies, the other raises harmlessly — so neither
+     server is left without a bound (see _readonly_conn).
   3. `verify_read_only()` proactively proves a write is rejected inside the
      read-only transaction, the same probe pattern as Postgres.
 """
@@ -36,10 +38,22 @@ class MySQLConnector(Connector):
     def _readonly_conn(self, timeout_seconds: int):
         conn = self._engine.connect().execution_options(isolation_level="AUTOCOMMIT")
         try:
+            # MySQL 5.7.8+ uses MAX_EXECUTION_TIME (milliseconds); MariaDB
+            # 10.1+ uses max_statement_time (seconds, float). They don't
+            # recognize each other's name, so set both, each guarded - one
+            # of them takes effect and the other raises harmlessly. A
+            # security-review pass: the MariaDB side was previously just a
+            # silent `pass` with a comment pointing at a per-query prefix
+            # that never actually existed, so a MariaDB connection had no
+            # statement timeout at all.
             try:
                 conn.execute(text(f"SET SESSION MAX_EXECUTION_TIME = {int(timeout_seconds * 1000)}"))
             except Exception:
-                pass  # MariaDB doesn't support this GUC; per-query timeout is applied differently there
+                pass
+            try:
+                conn.execute(text(f"SET SESSION max_statement_time = {float(timeout_seconds)}"))
+            except Exception:
+                pass
             conn.execute(text("START TRANSACTION READ ONLY"))
             try:
                 yield conn

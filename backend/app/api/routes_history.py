@@ -33,7 +33,7 @@ def list_analyses(limit: int = 50, pinned_only: bool = False, db: Session = Depe
         if not pinned_ids:
             return []
         q = q.filter(QueryRecord.id.in_(pinned_ids))
-    rows = q.order_by(QueryRecord.created_at.desc()).limit(limit).all()
+    rows = q.order_by(QueryRecord.created_at.desc()).limit(min(max(limit, 1), 500)).all()
     return [
         {
             "query_id": r.id,
@@ -127,7 +127,7 @@ def list_artifacts(kind: str | None = None, limit: int = 50, db: Session = Depen
     q = db.query(GeneratedArtifact).filter_by(tenant_id=ctx.tenant_id)
     if kind:
         q = q.filter_by(kind=kind)
-    rows = q.order_by(GeneratedArtifact.created_at.desc()).limit(limit).all()
+    rows = q.order_by(GeneratedArtifact.created_at.desc()).limit(min(max(limit, 1), 500)).all()
     return [
         {
             "id": a.id,

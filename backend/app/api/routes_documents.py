@@ -39,6 +39,27 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
     user = db.query(User).filter_by(id=ctx.user_id).first()
     _require_capability(user)
 
+    # Per-tenant cap on how many documents can be stored at once - stops
+    # unbounded disk growth from an automated uploader (there was no cap at
+    # all before). Deleting a document frees a slot.
+    existing = db.query(UploadedDocument).filter_by(tenant_id=ctx.tenant_id).count()
+    if existing >= settings.max_documents_per_tenant:
+        raise HTTPException(
+            400,
+            f"Your organization has reached its stored-document limit "
+            f"({settings.max_documents_per_tenant}). Delete some documents to upload more.",
+        )
+
+    # Reject an oversized upload from its declared size BEFORE reading the
+    # whole thing into memory. Starlette has already spooled the body (to
+    # disk past ~1MB), so file.size is populated here; the post-read check
+    # below is the backstop for a client that lied about / omitted it.
+    if file.size is not None and file.size > settings.max_document_upload_bytes:
+        raise HTTPException(
+            400, f"File too large ({file.size} bytes) — limit is "
+                 f"{settings.max_document_upload_bytes} bytes.",
+        )
+
     file_bytes = await file.read()
     if len(file_bytes) > settings.max_document_upload_bytes:
         raise HTTPException(

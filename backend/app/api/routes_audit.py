@@ -15,7 +15,7 @@ def list_audit(limit: int = 100, db: Session = Depends(get_db),
         db.query(AuditLog)
         .filter_by(tenant_id=ctx.tenant_id)
         .order_by(AuditLog.timestamp.desc())
-        .limit(limit)
+        .limit(min(max(limit, 1), 1000))  # hard ceiling - no unbounded table dump / OOM
         .all()
     )
     return [
