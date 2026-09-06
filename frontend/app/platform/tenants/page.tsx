@@ -59,7 +59,11 @@ export default function PlatformTenantsPage() {
   }
 
   async function handleDelete(tenant: PlatformTenant) {
-    if (confirmText !== tenant.name) return;
+    // Compare trimmed: a tenant whose stored name has a stray leading or
+    // trailing space (older signups didn't trim it — see the backend's
+    // /auth/register) is otherwise impossible to confirm here, since the
+    // padding is invisible in the input and the placeholder.
+    if (confirmText.trim() !== tenant.name.trim()) return;
     try {
       await deleteTenant(tenant.id);
       setDeletingId(null);
@@ -249,7 +253,7 @@ export default function PlatformTenantsPage() {
                   />
                   <button
                     onClick={() => handleDelete(t)}
-                    disabled={confirmText !== t.name}
+                    disabled={confirmText.trim() !== t.name.trim()}
                     className="text-[12.5px] px-3 py-1.5 rounded-[3px] bg-red text-white disabled:opacity-40 hover:opacity-90 transition-opacity"
                   >
                     Permanently delete

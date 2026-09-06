@@ -88,6 +88,25 @@ field can't absorb a `datetime` object, so every row-scope save was
 silently 500ing in production. Found by actually exercising the endpoint
 end-to-end rather than assuming an unrelated-looking change was safe.
 
+Fixed a real report of a tenant that **couldn't be deleted from the
+panel** — the "Permanently delete" button stayed greyed out no matter
+what was typed into the confirm box. The delete confirmation requires
+retyping the organization's name exactly (`confirmText === tenant.name`),
+and `/auth/register` stored `company_name` verbatim — so a signup with a
+stray leading or trailing space (`"Joelan "`) produced a name that's
+impossible to reproduce by typing, since the padding is invisible in both
+the input and the placeholder. Three-part fix: `/auth/register` now
+`.strip()`s the company name before storing it (and rejects a
+blank-after-strip name outright); the platform Tenants page compares
+`confirmText.trim() === tenant.name.trim()`, so any already-affected row
+can be confirmed by typing the visible name; and `PATCH
+/platform/tenants/{id}` strips `name` too, which also gives a staffer a
+way to repair an existing padded row by saving the visible name back over
+it. Verified with a real SQLite + FastAPI round trip: a padded signup now
+stores the trimmed name, a whitespace-only name is rejected, the trimmed
+confirm gate accepts the visible name for a simulated legacy padded row,
+and the `PATCH` path stores its name trimmed.
+
 **Billing** (`app/billing/paystack.py`, `app/api/routes_billing.py`) —
 premium-from-onset: a tenant is charged immediately on subscribe via
 Paystack, not given a delayed-billing free trial, with a self-serve full
