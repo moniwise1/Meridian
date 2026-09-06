@@ -41,8 +41,21 @@ from email.utils import formataddr
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import User, EmailDeliveryLog
+from app.db.models import User, EmailDeliveryLog, Tenant
 from app.audit import logger as audit
+
+VALID_OUTBOUND_EMAIL_MODES = ("open", "self_only", "domain_allowlist")
+
+
+def normalize_outbound_email_policy(raw: dict | None) -> dict:
+    """A tenant that predates this feature has NULL here; normalize to the
+    'open' default (prior behavior). Also lower-cases the allowlist."""
+    raw = raw or {}
+    mode = raw.get("mode")
+    if mode not in VALID_OUTBOUND_EMAIL_MODES:
+        mode = "open"
+    domains = [d.strip().lower() for d in (raw.get("allowed_domains") or []) if d and d.strip()]
+    return {"mode": mode, "allowed_domains": domains}
 
 # Same brand tokens as frontend/app/globals.css - kept in sync by hand
 # since an email needs its styling INLINE (email clients strip <style>
@@ -197,9 +210,28 @@ def send_report(db: Session, tenant_id: str, user_id: str, recipient: str, subje
                  body: str, attachment_path: str | None, artifact_id: str | None,
                  confirmed: bool) -> DeliveryResult:
     user = db.query(User).filter_by(id=user_id, tenant_id=tenant_id).first()
+    tenant = db.query(Tenant).filter_by(id=tenant_id).first()
+    recipient_lc = recipient.strip().lower()
+    own_lc = (user.email or "").strip().lower() if user else ""
+    to_self = recipient_lc == own_lc
+    policy = normalize_outbound_email_policy(tenant.outbound_email_policy if tenant else None)
+    recipient_domain = recipient_lc.rsplit("@", 1)[-1] if "@" in recipient_lc else ""
+
     if not user or "email_delivery" not in (user.capabilities or []):
         result = DeliveryResult("blocked", "Email delivery is not enabled for your account.")
-    elif recipient.strip().lower() != (user.email or "").strip().lower() and not confirmed:
+    elif not to_self and policy["mode"] == "self_only":
+        result = DeliveryResult(
+            "blocked",
+            "Your organization only allows emailing reports to your own address.",
+        )
+    elif (not to_self and policy["mode"] == "domain_allowlist"
+          and recipient_domain not in policy["allowed_domains"]):
+        allowed = ", ".join(policy["allowed_domains"]) or "(no domains configured)"
+        result = DeliveryResult(
+            "blocked",
+            f"Your organization only allows emailing reports to addresses at: {allowed}.",
+        )
+    elif not to_self and not confirmed:
         result = DeliveryResult(
             "pending_confirmation",
             "Sending to a recipient other than your own address requires confirmation.",

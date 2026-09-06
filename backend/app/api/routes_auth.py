@@ -29,6 +29,7 @@ from app.tenant_slug import generate_unique_subdomain
 from app.audit import logger as audit
 from app.invites import create_invite, get_invite_by_token, list_invites, count_pending, revoke_invite, mark_accepted
 from app.agents.notifications import send_welcome_email, send_invite_email, notify_owners, tenant_admin_emails
+from app.agents.email_delivery import normalize_outbound_email_policy, VALID_OUTBOUND_EMAIL_MODES
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -586,3 +587,47 @@ def update_row_scope(user_id: str, body: RowScopeUpdate, db: Session = Depends(g
     audit.log(db, ctx.tenant_id, "user_row_scope_updated", ctx.user_id,
                detail={"target_user_id": user_id, "row_scope": body.row_scope})
     return UserOut.from_user(user)
+
+
+# ---------- Outbound-email policy (data-exfiltration control) ----------
+
+class OutboundEmailPolicy(BaseModel):
+    mode: str  # "open" | "self_only" | "domain_allowlist"
+    allowed_domains: list[str] = []
+
+
+@router.get("/team/email-policy", response_model=OutboundEmailPolicy)
+def get_email_policy(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_current_user)):
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    p = normalize_outbound_email_policy(tenant.outbound_email_policy if tenant else None)
+    return OutboundEmailPolicy(**p)
+
+
+@router.patch("/team/email-policy", response_model=OutboundEmailPolicy)
+def set_email_policy(body: OutboundEmailPolicy, db: Session = Depends(get_db),
+                      ctx: AuthContext = Depends(require_role("admin"))):
+    """Admin-only. Controls where the 'email me this report' feature is
+    allowed to send (email is a data-exfiltration boundary). 'open' keeps
+    the prior behavior, 'self_only' blocks every non-self recipient,
+    'domain_allowlist' also allows the listed domains."""
+    if body.mode not in VALID_OUTBOUND_EMAIL_MODES:
+        raise HTTPException(400, f"mode must be one of: {', '.join(VALID_OUTBOUND_EMAIL_MODES)}.")
+    domains = []
+    for d in body.allowed_domains:
+        d = d.strip().lower().lstrip("@")
+        if not d:
+            continue
+        if " " in d or "@" in d or "." not in d:
+            raise HTTPException(400, f"'{d}' is not a valid domain (e.g. 'acme.com').")
+        domains.append(d)
+    if body.mode == "domain_allowlist" and not domains:
+        raise HTTPException(400, "domain_allowlist mode needs at least one allowed domain.")
+
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found.")
+    tenant.outbound_email_policy = {"mode": body.mode, "allowed_domains": domains}
+    db.commit()
+    audit.log(db, ctx.tenant_id, "outbound_email_policy_changed", ctx.user_id,
+               detail={"mode": body.mode, "allowed_domains": domains})
+    return OutboundEmailPolicy(mode=body.mode, allowed_domains=domains)

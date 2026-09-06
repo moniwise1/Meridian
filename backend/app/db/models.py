@@ -72,6 +72,17 @@ class Tenant(Base):
     # gets checked alongside.
     require_mfa = Column(Boolean, default=False)
 
+    # Org-wide outbound-email policy for the "email me this report" feature
+    # (app/agents/email_delivery.py) - email is a data-exfiltration
+    # boundary. Admin-controlled. Shape:
+    #   {"mode": "open" | "self_only" | "domain_allowlist",
+    #    "allowed_domains": ["acme.com", ...]}
+    # "open" (default) keeps the prior behavior (a non-self recipient just
+    # needs the caller's explicit confirm). "self_only" blocks every
+    # recipient except the sender's own address. "domain_allowlist" also
+    # allows recipients whose domain is in allowed_domains.
+    outbound_email_policy = Column(JSON, default=lambda: {"mode": "open", "allowed_domains": []})
+
     connections = relationship("DataSourceConnection", back_populates="tenant")
 
     @property
