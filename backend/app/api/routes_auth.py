@@ -171,13 +171,23 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(User).filter_by(email=body.email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
-    tenant = Tenant(name=body.company_name)
+    # Trim before storing: the name is later used as a real login boundary
+    # (subdomain generation) and as the exact string a platform owner must
+    # retype to confirm a tenant deletion (see routes_platform.py's
+    # delete_tenant and the platform Tenants page). A stray leading/trailing
+    # space from the signup form would otherwise make that confirmation
+    # box impossible to satisfy - the delete button just stays disabled.
+    company_name = body.company_name.strip()
+    if not company_name:
+        raise HTTPException(400, "Company name can't be blank.")
+
+    tenant = Tenant(name=company_name)
     # Assigned once, here, and never silently regenerated - this is a real
     # login boundary from this point on (see login() below), so a
     # mid-life change would need a deliberate platform-staff edit
     # (PATCH /platform/tenants/{id}), not happen as a side effect of
     # something else.
-    tenant.subdomain = generate_unique_subdomain(db, body.company_name)
+    tenant.subdomain = generate_unique_subdomain(db, company_name)
     db.add(tenant)
     db.commit()
     db.refresh(tenant)

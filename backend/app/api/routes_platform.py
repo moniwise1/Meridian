@@ -417,8 +417,16 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
 
     changes = {}
     if body.name is not None:
-        changes["name"] = {"from": t.name, "to": body.name}
-        t.name = body.name
+        # Trimmed for the same reason register() trims it: the name is the
+        # exact string delete_tenant's confirmation requires retyping, so a
+        # stored leading/trailing space makes a tenant undeletable from the
+        # UI. Also lets a staffer repair an already-affected row by saving
+        # the visible name back over a whitespace-padded one.
+        new_name = body.name.strip()
+        if not new_name:
+            raise HTTPException(400, "Tenant name can't be blank.")
+        changes["name"] = {"from": t.name, "to": new_name}
+        t.name = new_name
     if body.subdomain is not None:
         import re
         from app.tenant_slug import RESERVED_SUBDOMAINS
