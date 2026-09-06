@@ -193,7 +193,7 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
                                  by_group: list[dict] | None, data_quality: dict,
                                  anomalies: list[dict], query_id: str) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
-    path = os.path.join(settings.artifacts_dir, f"presentation-{uuid.uuid4().hex[:8]}.pptx")
+    path = os.path.join(settings.artifacts_dir, f"presentation-{uuid.uuid4().hex}.pptx")
 
     prs = Presentation()
 

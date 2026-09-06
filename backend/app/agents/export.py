@@ -30,14 +30,18 @@ _PAPER = "F5F6F4"
 
 def export_csv(rows: list[dict], base_name: str) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
-    path = os.path.join(settings.artifacts_dir, f"meridian-{base_name}-{uuid.uuid4().hex[:8]}.csv")
+    # Full uuid4 hex, not a truncated slice: the download route authorizes
+    # by signed token now, but an unguessable on-disk name is still worth
+    # keeping as defence in depth (a path disclosure, a future static
+    # mount added by mistake).
+    path = os.path.join(settings.artifacts_dir, f"meridian-{base_name}-{uuid.uuid4().hex}.csv")
     pd.DataFrame(rows).to_csv(path, index=False)
     return path
 
 
 def export_xlsx(rows: list[dict], base_name: str) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
-    path = os.path.join(settings.artifacts_dir, f"meridian-{base_name}-{uuid.uuid4().hex[:8]}.xlsx")
+    path = os.path.join(settings.artifacts_dir, f"meridian-{base_name}-{uuid.uuid4().hex}.xlsx")
     df = pd.DataFrame(rows)
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Data")

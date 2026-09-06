@@ -8,12 +8,16 @@ authenticated user, never from client input, per section 23.
 """
 import os
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import QueryRecord, GeneratedArtifact, Tenant
-from app.security.auth import get_current_user, AuthContext
+from app.security.auth import (
+    get_current_user, AuthContext,
+    create_artifact_download_token, verify_artifact_download_token,
+)
 from app.agents.export import export_csv, export_xlsx
 from app.agents.report_generator import generate_report_pdf
 from app.agents.presentation_generator import generate_presentation_pptx
@@ -77,12 +81,63 @@ class ArtifactOut(BaseModel):
     id: str
     kind: str
     title: str
+    # A relative path to the authenticated download route below, already
+    # carrying a signed, short-lived token that names this one artifact -
+    # NOT a path into a public static directory (that mount is gone; it
+    # served every tenant's reports to anyone who could guess a filename).
+    # The frontend just prefixes API_BASE and opens it.
     url: str
 
 
+# Content types for the four artifact kinds _record_artifact writes. Used
+# both to set a correct Content-Type on download and, with nosniff, to
+# stop a browser from ever interpreting one as HTML/JS.
+_MEDIA_TYPES = {
+    "report_pdf": "application/pdf",
+    "presentation_pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "export_csv": "text/csv",
+    "export_xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+# A friendly download filename per kind - the on-disk name is a random
+# token and not meaningful to the user.
+_DOWNLOAD_NAMES = {
+    "report_pdf": "meridian-report.pdf",
+    "presentation_pptx": "meridian-presentation.pptx",
+    "export_csv": "meridian-export.csv",
+    "export_xlsx": "meridian-export.xlsx",
+}
+
+
+def artifact_download_url(a: GeneratedArtifact) -> str:
+    return f"/artifacts/file/{a.id}?token={create_artifact_download_token(a.id)}"
+
+
 def _to_out(a: GeneratedArtifact) -> ArtifactOut:
-    return ArtifactOut(id=a.id, kind=a.kind, title=a.title,
-                        url=f"/artifacts/{os.path.basename(a.file_path)}")
+    return ArtifactOut(id=a.id, kind=a.kind, title=a.title, url=artifact_download_url(a))
+
+
+@router.get("/file/{artifact_id}")
+def download_artifact(artifact_id: str, token: str = "", db: Session = Depends(get_db)):
+    """Authenticated artifact download. Auth is the signed `token` query
+    param (see app/security/auth.py's create_artifact_download_token) -
+    minted only by an endpoint that already checked the caller's tenant
+    owns this artifact, valid for one artifact id, short-lived. There is
+    deliberately no unauthenticated path here: the previous
+    StaticFiles("/artifacts") mount had none, and with 8-hex-char
+    filenames that meant any generated report was a guess away from public.
+    """
+    if verify_artifact_download_token(token) != artifact_id:
+        raise HTTPException(403, "This download link is invalid or has expired. Regenerate it from the analysis.")
+    artifact = db.query(GeneratedArtifact).filter_by(id=artifact_id).first()
+    if not artifact or not os.path.isfile(artifact.file_path):
+        raise HTTPException(404, "This artifact is no longer available.")
+    return FileResponse(
+        artifact.file_path,
+        media_type=_MEDIA_TYPES.get(artifact.kind, "application/octet-stream"),
+        filename=_DOWNLOAD_NAMES.get(artifact.kind, os.path.basename(artifact.file_path)),
+        headers={"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"},
+    )
 
 
 def _require_capability(db: Session, ctx: AuthContext, capability: str):
