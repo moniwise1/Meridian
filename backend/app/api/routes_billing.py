@@ -25,7 +25,9 @@ from app.db.models import Tenant, User
 from app.security.auth import get_current_user, require_role, AuthContext
 from app.billing import paystack
 from app.billing.paystack import PaystackError
-from app.billing.plans import PLANS, get_plan, query_limit_for, document_limit_for
+from app.billing.plans import (
+    PLANS, get_plan, query_limit_for, document_limit_for, plan_key_for_paystack_code,
+)
 from app.billing.usage import count_queries_this_month, count_documents_this_month
 from app.audit import logger as audit
 from app.config import settings
@@ -177,7 +179,17 @@ def _activate(db: Session, tenant: Tenant, transaction_data: dict, source: str,
         tenant.paystack_customer_code = customer["customer_code"]
     plan = transaction_data.get("plan")
     if plan:
-        tenant.paystack_plan_code = plan.get("plan_code") if isinstance(plan, dict) else plan
+        plan_code = plan.get("plan_code") if isinstance(plan, dict) else plan
+        tenant.paystack_plan_code = plan_code or tenant.paystack_plan_code
+        # Reconcile our own plan key from what was actually paid for. Both
+        # callers of _activate now pass Paystack-verified data (the webhook
+        # is signature-checked; /verify below is bound to this tenant's own
+        # checkout), so this is authoritative - more so than the value
+        # /subscribe optimistically set before any payment happened. If the
+        # code maps to no known plan, keep whatever /subscribe set.
+        resolved_key = plan_key_for_paystack_code(plan_code)
+        if resolved_key:
+            tenant.plan = resolved_key
     if not tenant.paid_at:
         tenant.paid_at = datetime.utcnow()
     # Unlike paid_at (anchors the refund window - set once, ever), this
@@ -203,6 +215,22 @@ def verify(reference: str, db: Session = Depends(get_db), ctx: AuthContext = Dep
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     if not tenant:
         raise HTTPException(404, "Tenant not found.")
+
+    # Bind the reference to THIS tenant's own checkout. /subscribe records
+    # result["reference"] on the tenant right before redirecting to
+    # Paystack, and the browser comes back to callback_url?reference=<that>
+    # - so in the legitimate flow this always matches. Without the check,
+    # any tenant could pass any *other* successful reference (their own
+    # stale one, one leaked in a URL / server log / analytics) to
+    # /billing/verify and self-activate a paid subscription without paying.
+    # The webhook path (POST /billing/webhook) doesn't need this - it's
+    # already authenticated by Paystack's HMAC signature and attributes the
+    # event by metadata / customer_code.
+    if not tenant.last_transaction_reference or reference != tenant.last_transaction_reference:
+        audit.log(db, ctx.tenant_id, "subscription_verify_reference_mismatch", ctx.user_id,
+                   status="denied", detail={"reference": reference})
+        raise HTTPException(403, "This payment reference doesn't match a checkout started by your organization.")
+
     try:
         data = paystack.verify_transaction(reference)
     except PaystackError as e:
@@ -211,6 +239,17 @@ def verify(reference: str, db: Session = Depends(get_db), ctx: AuthContext = Dep
         audit.log(db, ctx.tenant_id, "subscription_verify_not_successful", ctx.user_id,
                    status="denied", detail={"reference": reference, "paystack_status": data.get("status")})
         raise HTTPException(400, "Payment was not successful.")
+
+    # Defence in depth: if Paystack echoes our own metadata back, it must
+    # name this tenant. (The reference check above already establishes
+    # this; this catches a mismatch if last_transaction_reference were ever
+    # wrong for another reason.)
+    md = data.get("metadata")
+    if isinstance(md, dict) and md.get("tenant_id") and md["tenant_id"] != ctx.tenant_id:
+        audit.log(db, ctx.tenant_id, "subscription_verify_tenant_mismatch", ctx.user_id,
+                   status="denied", detail={"reference": reference})
+        raise HTTPException(403, "This payment was not for your organization.")
+
     _activate(db, tenant, data, source="client_verify", user_id=ctx.user_id)
     return _status_for(db, tenant)
 

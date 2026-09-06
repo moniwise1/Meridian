@@ -121,6 +121,28 @@ billing screens deliberately are not, so an unpaid admin can still see
 their org's status and pay. Every state transition goes through the same
 hash-chained audit log as the rest of the app.
 
+A security-review follow-up hardened the *other* activation path.
+`GET /billing/verify?reference=…` (the browser's post-checkout redirect)
+verified with Paystack that the reference *succeeded*, but never checked
+it was *this tenant's* reference — so a tenant could pass any successful
+reference (their own stale one, one leaked in a URL or a log) and
+self-activate a paid subscription without paying. `/subscribe` already
+records `result["reference"]` on the tenant before redirecting, so
+`/verify` now requires the incoming reference to match that (and,
+defence-in-depth, that any `metadata.tenant_id` Paystack echoes back
+names this tenant); a mismatch is a `403` and an audit-logged
+`subscription_verify_reference_mismatch`. Relatedly, `_activate` now
+sets `Tenant.plan` by mapping the *verified* transaction's `plan_code`
+back to our own plan key (`plan_key_for_paystack_code`), rather than
+trusting the value `/subscribe` optimistically wrote before any payment.
+The webhook path needed no change — it's authenticated by the signature
+check below and attributes events by metadata / customer code. Verified
+end-to-end (real SQLite + FastAPI): replaying another tenant's reference
+is refused and does not activate the attacker; a tenant's own reference
+activates and reconciles the plan; a tenant with no started checkout is
+refused; the signed webhook still activates the right tenant; a bad
+webhook signature is still `401`.
+
 The webhook signature check (`verify_webhook_signature` — HMAC-SHA512 over
 the raw request body, constant-time compared) is the one thing standing
 between "a real payment happened" and "anyone who finds the webhook URL
