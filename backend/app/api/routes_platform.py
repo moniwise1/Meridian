@@ -738,7 +738,7 @@ def list_platform_audit(limit: int = 200, db: Session = Depends(get_db),
         db.query(AuditLog)
         .filter_by(tenant_id="platform")
         .order_by(AuditLog.timestamp.desc())
-        .limit(limit)
+        .limit(min(max(limit, 1), 1000))  # hard ceiling
         .all()
     )
     return [
