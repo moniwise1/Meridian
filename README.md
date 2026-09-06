@@ -26,9 +26,19 @@ route is scoped to the caller's own tenant_id" — everywhere else in this
 codebase, that's an invariant; here, cross-tenant visibility is the
 explicit point, which is exactly why it needed its own identity system
 rather than a role flag on the existing one. First-run bootstraps the one
-and only "owner" account via an unauthenticated `/platform/bootstrap` call
-that permanently disables itself the moment one exists; every account
-after that requires an existing owner to create it.
+and only "owner" account via `POST /platform/bootstrap`; every account
+after that requires an existing owner to create it. That endpoint is
+gated by **two** conditions, not one (a security-review fix): no staff
+account may exist yet, AND the request must carry the correct
+`PLATFORM_BOOTSTRAP_TOKEN`. "No staff yet" alone was never a real guard —
+the source is public, so an attacker knows to race the bootstrap endpoint
+against a fresh deployment, and winning it is a full cross-tenant breach.
+With the token unset (the default) the endpoint is disabled outright
+(`403`); you set it for the single deploy where you create the first
+owner, then unset it. Verified end-to-end: token unset → `403` and no
+account created; token set but wrong/missing in the request → `403`;
+token set and correct → the first owner is created; and once any staff
+account exists it's `403` regardless of the token.
 
 Covers: browsing/editing/deleting tenants (with a cascading delete across
 every tenant-scoped table, including — deliberately — that tenant's own
