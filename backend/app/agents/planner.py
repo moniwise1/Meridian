@@ -558,25 +558,36 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         "preview_rows": _json_safe(df.head(20).to_dict(orient="records")) if allowed_cols is not False else [],
     }
 
+    # Create (and flush) the Conversation BEFORE building the QueryRecord
+    # that references it. Conversation.id's default is a Python-side
+    # uuid.uuid4() callable that SQLAlchemy only resolves at flush time, so
+    # for a brand-new thread (no conversation_id passed in) `conversation`
+    # is still None here - and even once created, conversation.id stays
+    # unset until flush. Building the QueryRecord first therefore stored
+    # conversation_id=NULL permanently on the FIRST question of every
+    # thread; only follow-ups (where the Conversation already existed) got
+    # the real link. Same db.add-then-flush ordering already used in
+    # routes_monitor.py / routes_support.py / routes_platform.py.
+    if not conversation:
+        conversation = Conversation(
+            tenant_id=tenant_id, user_id=user_id, connection_id=connection_id, context={},
+        )
+        db.add(conversation)
+        db.flush()
+    conversation.context = build_context_snapshot(
+        resolved_question, table_hint, value_col, group_col, date_col, metrics.by_group,
+    )
+    conversation.updated_at = datetime.utcnow()
+
     db.add(QueryRecord(
         id=query_id, tenant_id=tenant_id, user_id=user_id, connection_id=connection_id,
-        conversation_id=conversation.id if conversation else None,
+        conversation_id=conversation.id,
         question=question, generated_sql=validation.normalized_sql,
         row_count=len(df), duration_ms=result.duration_ms,
         result_snapshot=snapshot,
     ))
     audit.log(db, tenant_id, "query_executed", user_id, connection_id, query_id,
               {"row_count": len(df), "duration_ms": result.duration_ms, "table": table_hint})
-
-    if not conversation:
-        conversation = Conversation(
-            tenant_id=tenant_id, user_id=user_id, connection_id=connection_id, context={},
-        )
-        db.add(conversation)
-    conversation.context = build_context_snapshot(
-        resolved_question, table_hint, value_col, group_col, date_col, metrics.by_group,
-    )
-    conversation.updated_at = datetime.utcnow()
     db.commit()
 
     if conversation_id is None:
