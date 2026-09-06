@@ -8,7 +8,7 @@ than one being a role flag on the other.
 """
 import hmac
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -25,8 +25,10 @@ from app.security.platform_auth import (
 )
 from app.security.login_cooldown import (
     check_platform_login_cooldown, record_platform_login_failure, record_platform_login_success,
+    check_login_ip_cooldown, record_login_ip_failure, record_login_ip_success,
     LoginCooldownActive,
 )
+from app.security.ip_throttle import client_ip
 import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
@@ -57,18 +59,22 @@ class StaffTokenResponse(BaseModel):
 
 
 @router.post("/login", response_model=StaffTokenResponse)
-def staff_login(body: StaffLoginRequest, db: Session = Depends(get_db)):
+def staff_login(body: StaffLoginRequest, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request)
     try:
         check_platform_login_cooldown(body.email)
+        check_login_ip_cooldown(ip)
     except LoginCooldownActive as e:
         raise HTTPException(429, str(e))
 
     staff = db.query(PlatformStaff).filter_by(email=body.email).first()
     if not staff or not verify_password(body.password, staff.password_hash):
         record_platform_login_failure(body.email)
+        record_login_ip_failure(ip)
         raise HTTPException(401, "Incorrect email or password.")
 
     record_platform_login_success(body.email)
+    record_login_ip_success(ip)
     audit.log(db, "platform", "platform_staff_logged_in", staff.id, detail={"email": staff.email})
     # Owner-activity notification, not just the audit log above - so a
     # platform owner learns about support staff sign-ins (or a co-owner's)

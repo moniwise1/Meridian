@@ -231,54 +231,36 @@ class _RedisLoginCooldownGuard:
             log_redis_failure("login cooldown record_success", e)
 
 
-_redis = get_redis_client()
-if _redis is not None:
-    _tenant_login_guard = _RedisLoginCooldownGuard(
-        namespace="tenant",
-        free_attempts=settings.login_free_attempts,
+def _make_guard(namespace: str, free_attempts: int):
+    """One place the four guards below get built - Redis-backed when
+    REDIS_URL is set, in-process otherwise. All four share the same
+    base/max/reset tuning; only the free-attempt budget and the namespace
+    differ (the per-IP guard gets a much larger budget - see below)."""
+    common = dict(
+        free_attempts=free_attempts,
         base_seconds=settings.login_cooldown_base_seconds,
         max_seconds=settings.login_cooldown_max_seconds,
         reset_after_seconds=settings.login_cooldown_reset_after_seconds,
     )
-    _platform_login_guard = _RedisLoginCooldownGuard(
-        namespace="platform",
-        free_attempts=settings.login_free_attempts,
-        base_seconds=settings.login_cooldown_base_seconds,
-        max_seconds=settings.login_cooldown_max_seconds,
-        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-    )
-    # Same machinery, keyed by user_id instead of email - guards the
-    # login-time TOTP code check (app/api/routes_mfa.py's verify-login)
-    # against brute-forcing a 6-digit code the same way the guards above
-    # already protect passwords. A separate namespace/instance so a
-    # burst of wrong codes never touches (or is touched by) the password
-    # cooldown for the same account.
-    _mfa_login_guard = _RedisLoginCooldownGuard(
-        namespace="mfa",
-        free_attempts=settings.login_free_attempts,
-        base_seconds=settings.login_cooldown_base_seconds,
-        max_seconds=settings.login_cooldown_max_seconds,
-        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-    )
-else:
-    _tenant_login_guard = _LoginCooldownGuard(
-        free_attempts=settings.login_free_attempts,
-        base_seconds=settings.login_cooldown_base_seconds,
-        max_seconds=settings.login_cooldown_max_seconds,
-        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-    )
-    _platform_login_guard = _LoginCooldownGuard(
-        free_attempts=settings.login_free_attempts,
-        base_seconds=settings.login_cooldown_base_seconds,
-        max_seconds=settings.login_cooldown_max_seconds,
-        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-    )
-    _mfa_login_guard = _LoginCooldownGuard(
-        free_attempts=settings.login_free_attempts,
-        base_seconds=settings.login_cooldown_base_seconds,
-        max_seconds=settings.login_cooldown_max_seconds,
-        reset_after_seconds=settings.login_cooldown_reset_after_seconds,
-    )
+    if get_redis_client() is not None:
+        return _RedisLoginCooldownGuard(namespace=namespace, **common)
+    return _LoginCooldownGuard(**common)
+
+
+_tenant_login_guard = _make_guard("tenant", settings.login_free_attempts)
+_platform_login_guard = _make_guard("platform", settings.login_free_attempts)
+# Keyed by user_id, not email - guards the login-time TOTP code check
+# (app/api/routes_mfa.py) against 6-digit-code brute force. Separate
+# namespace so a burst of wrong codes never touches the password cooldown.
+_mfa_login_guard = _make_guard("mfa", settings.login_free_attempts)
+# Keyed by client IP, with a much larger free budget (LOGIN_IP_FREE_ATTEMPTS,
+# default 50) since a shared office / VPN / NAT egress carries many real
+# users. This is the defence against distributed credential stuffing that
+# the per-email guards structurally can't provide: one guess against each
+# of 10,000 different emails from one IP costs nothing under per-email
+# keying, but trips this. Applied to both /auth/login and /platform/login
+# alongside - not instead of - the per-email guard.
+_login_ip_guard = _make_guard("login-ip", settings.login_ip_free_attempts)
 
 
 def check_tenant_login_cooldown(email: str) -> None:
@@ -315,3 +297,15 @@ def record_mfa_login_failure(user_id: str) -> None:
 
 def record_mfa_login_success(user_id: str) -> None:
     _mfa_login_guard.record_success(user_id)
+
+
+def check_login_ip_cooldown(ip: str) -> None:
+    _login_ip_guard.check(ip)
+
+
+def record_login_ip_failure(ip: str) -> None:
+    _login_ip_guard.record_failure(ip)
+
+
+def record_login_ip_success(ip: str) -> None:
+    _login_ip_guard.record_success(ip)

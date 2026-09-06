@@ -135,6 +135,19 @@ class Settings(BaseSettings):
     # Failure history for a key is forgotten after this long of no further
     # failures, so one bad evening months ago never lingers.
     login_cooldown_reset_after_seconds: float = 1800.0  # 30 minutes
+    # A SEPARATE, per-client-IP failed-login budget layered on top of the
+    # per-email one - the defence against distributed credential stuffing
+    # (one password tried against thousands of different emails from one
+    # IP) that per-email keying can't provide. Much larger than the
+    # per-email budget because a shared office / VPN / NAT egress carries
+    # many real users; still small next to a stuffing run.
+    login_ip_free_attempts: int = 50
+
+    # Per-IP sliding-window cap on POST /auth/register (creates a tenant +
+    # user + subdomain, sends a welcome email). Generous for a real signer,
+    # murder for a script. In-process by default / global with REDIS_URL,
+    # same as the other throttles.
+    register_rate_limit_per_ip_per_hour: int = 5
 
     # Fast, cheap model for schema summarization / SQL generation.
     # Reserve a stronger model only for the final insight explanation step (see agents/insight_agent.py).
