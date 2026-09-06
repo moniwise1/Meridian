@@ -1658,6 +1658,27 @@ attempts. Try again in 15s.`, a correct password is also blocked mid-
 cooldown, an unrelated account is unaffected, and the account logs in
 normally the moment the cooldown expires.
 
+A security-review follow-up added the layer the per-email guard
+structurally can't provide: a **per-client-IP** failed-login guard
+(`LOGIN_IP_FREE_ATTEMPTS`, default 50), applied to `/auth/login` and
+`/platform/login` *alongside* the per-email one. Per-email keying is blind
+to distributed credential stuffing — one password tried once against each
+of 10,000 different emails from a single source costs nothing under it.
+The IP guard trips on that. Its budget is much larger because a shared
+office / VPN / NAT egress carries many real users, and it uses the same
+escalating-but-never-hard-locking backoff. The client IP comes from
+`X-Forwarded-For` (`app/security/ip_throttle.py`) — spoofable if the
+front proxy isn't trusted, so this is a defence-in-depth abuse brake, not
+a hard boundary. That module also adds a per-IP hourly cap on
+`POST /auth/register` (`REGISTER_RATE_LIMIT_PER_IP_PER_HOUR`, default 5),
+which previously had no throttle at all — each call creates a tenant, a
+user, a unique subdomain, and a welcome email. Verified end-to-end: the
+4th register from one IP (test cap 3) is a `429`; a different
+`X-Forwarded-For` is a fresh bucket; 3 failed logins across 3 *different*
+emails from one IP followed by a 4th against an untouched email is a
+`429` from the IP guard (not the per-email one); a different IP is
+unaffected; a correct password clears the IP guard.
+
 **Query result cache** (`app/agents/query_cache.py`) — an identical fresh
 (non-follow-up) question skips the SQL-generation LLM call, the live DB
 query, and the insight-explanation LLM call entirely, reusing the prior

@@ -7,7 +7,7 @@ gets an email and accepts it themselves within 24 hours, proving control
 of that inbox and choosing their own password, rather than an admin
 picking a temporary password for them.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -20,8 +20,10 @@ from app.security.auth import (
 )
 from app.security.login_cooldown import (
     check_tenant_login_cooldown, record_tenant_login_failure, record_tenant_login_success,
+    check_login_ip_cooldown, record_login_ip_failure, record_login_ip_success,
     LoginCooldownActive,
 )
+from app.security.ip_throttle import client_ip, check_register_rate_limit, RateLimitExceeded
 from app.billing.plans import seat_limit_for, get_plan
 from app.tenant_slug import generate_unique_subdomain
 from app.audit import logger as audit
@@ -167,7 +169,15 @@ def redeem_handoff(body: HandoffTokenOut, db: Session = Depends(get_db)):
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request)
+    try:
+        check_register_rate_limit(ip)
+    except RateLimitExceeded as e:
+        audit.log(db, "unknown", "register_rate_limited", status="denied",
+                   detail={"ip": ip, "retry_after_seconds": round(e.retry_after_seconds, 1)})
+        raise HTTPException(429, "Too many sign-ups from this network recently. Try again later.")
+
     if db.query(User).filter_by(email=body.email).first():
         raise HTTPException(400, "An account with this email already exists.")
 
@@ -212,15 +222,21 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request)
     try:
+        # Per-email AND per-IP: the per-email guard blunts guessing at one
+        # account, the per-IP guard blunts credential stuffing across many
+        # accounts from one source (which per-email keying can't see).
         check_tenant_login_cooldown(body.email)
+        check_login_ip_cooldown(ip)
     except LoginCooldownActive as e:
         raise HTTPException(429, str(e))
 
     user = db.query(User).filter_by(email=body.email).first()
     if not user or not verify_password(body.password, user.password_hash):
         record_tenant_login_failure(body.email)
+        record_login_ip_failure(ip)
         raise HTTPException(401, "Incorrect email or password.")
 
     # Password is correct — this clears the password-guessing cooldown
@@ -228,6 +244,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     # specifically to blunt password guessing, a fully separate concern
     # from the code check (see app/security/login_cooldown.py's mfa guard).
     record_tenant_login_success(body.email)
+    record_login_ip_success(ip)
 
     tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
 
