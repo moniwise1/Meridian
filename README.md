@@ -623,6 +623,55 @@ text page, one scanned page) correctly used native extraction for one and
 OCR for exactly the other; and the full upload → get → list round trip
 correctly surfaced `ocr_pages_used` throughout.
 
+**Locked and unsafe file detection** (`app/agents/document_intelligence.py`,
+`routes_documents.py`) — before this, a password-protected file just
+failed extraction with a generic, confusing error (or, for some
+malformed cases, silently extracted as empty) — nothing told the user
+the actual, simple fix ("remove the password and re-upload"). Now
+checked explicitly, before any real parsing is attempted:
+- **PDF**: `pypdf`'s own `reader.is_encrypted` flag, with one real
+  nuance handled correctly — a PDF can be "encrypted" only to restrict
+  printing/editing via an owner password, with a genuinely blank user
+  password, which makes it completely readable without ever prompting
+  anyone. A blank-password decrypt is tried first; only a PDF that's
+  still locked after that is rejected as needing a real password.
+- **DOCX/XLSX/PPTX**: these are plain ZIP archives when unprotected: a
+  password-protected one is instead wrapped in the much older OLE2/
+  Compound File Binary Format container (the same one legacy
+  `.doc`/`.xls`/`.ppt` used) — recognizable from its first 8 bytes alone,
+  before ever attempting to unzip it. Same signature-based detection
+  `msoffcrypto-tool` and similar libraries use; no new dependency needed
+  to *detect* it (this app never attempts to decrypt one — a locked file
+  is always rejected with instructions to unlock and re-upload, never
+  guessed at or cracked).
+
+Also checked, and genuinely a safety concern rather than just a UX one:
+DOCX/XLSX/PPTX's zip-archive structure means a maliciously crafted file
+could declare a small compressed size but an enormous uncompressed one (a
+"zip bomb"), aimed at exhausting memory/CPU the moment
+openpyxl/python-docx/python-pptx actually decompresses it. Every entry's
+*declared* compressed/uncompressed size (metadata every zip carries,
+readable without decompressing anything) is checked against a maximum
+compression ratio and a total-uncompressed-size cap before any real
+parsing starts.
+
+A locked or unsafe file now gets a specific 422 with a plain-language
+explanation instead of a generic 400, and is audited as `document_upload_
+locked`/`document_upload_unsafe` (status `"denied"`, not `"error"` — this
+isn't the app failing at anything, it's an expected, correctly-handled
+outcome). Verified against real files, not mocked: a genuinely encrypted
+PDF built with `pypdf.PdfWriter.encrypt()` (real user password) correctly
+rejected; the exact same encryption with a *blank* user password (owner-
+password-only) correctly stays readable; a file starting with the real
+OLE2 signature bytes correctly detected as a locked XLSX; a real ZIP
+archive containing a 50,000,000-byte run of zeros compressed down to
+under 50KB (the actual shape of a zip bomb, without needing gigabytes of
+real disk space to construct one for the test) correctly rejected as
+unsafe; and a perfectly ordinary XLSX confirmed to extract completely
+unaffected by any of the above. Also confirmed through a real HTTP round
+trip against the live FastAPI app (register → upload a real encrypted
+PDF → real `422` with the real message).
+
 **Clean, single-pass insight text** (`app/agents/insight_agent.py`,
 `app/agents/query_generator.py`) — the model is now explicitly instructed
 to never show its own reasoning process (arithmetic, reconsidering an
@@ -1543,6 +1592,7 @@ maintaining the status page; see "Internal admin panel" above.
 | Real lawyer review of `/privacy` and `/terms` | The pages exist and accurately describe what the software actually does (see "Legal pages" below), but they were written by inspecting the codebase, not by a lawyer — both pages say so plainly at the top. Get real legal review before relying on them for actual liability protection or NDPR/GDPR compliance. |
 | Event-level product analytics (PostHog/Mixpanel/similar) | A first-party business-metrics dashboard now exists (see "Product analytics" above) - signups/questions per day, an activation funnel, tenant/plan/artifact breakdowns. What's still missing is per-event, per-screen tracking (which button someone clicked, where they dropped off within a single session, session replay) - that needs a real product-analytics tool, deliberately not wired in yet since it would mean sending user behavioral data to a new third-party sub-processor. |
 | Real PDF table structure detection | XLSX/DOCX/PPTX uploaded as document-only analysis sources now get their real tables parsed as structured data and run through genuine computation (see "Structured-table document analysis" above). PDF deliberately doesn't - reliable table detection there needs actual layout analysis (a new dependency, e.g. `pdfplumber`/`camelot`) and is genuinely unreliable on a visually laid-out page; misreading two adjacent columns as one would silently produce a wrong computed number, worse than the existing honest text-extraction fallback. A PDF still gets full document-only analysis, just not this specific upgrade. |
+| Real antivirus/malware scanning on upload | "Verify if it's safe" (see "Locked and unsafe file detection" above) currently means real, concrete checks - is it actually the file type it claims to be, is it password-protected, does its zip structure show zip-bomb-shaped compression ratios - not a scan for embedded malware/exploits. That needs a real scanning engine (ClamAV, a cloud AV API) as new infrastructure, not something addressable by reading a file's own declared metadata the way the checks above do. Worth adding before this app is trusted with files from parties the tenant doesn't fully control. |
 
 ## Running it
 
