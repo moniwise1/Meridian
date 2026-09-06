@@ -264,7 +264,10 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         audit.log(db, tenant_id, "insight_generation_failed", user_id,
                   connection_id=DOCUMENT_ONLY_SOURCE_ID, query_id=query_id,
                   detail={"reason": str(e)[:500]}, status="error")
-        insight_dict = {"error": f"Insight generation unavailable: {e}"}
+        # Generic message to the user - the real reason (which can be a raw
+        # LLM-client error string) is in the audit log above and the
+        # server log, not the response payload.
+        insight_dict = {"error": "The explanation step is temporarily unavailable for this analysis."}
     yield StepEvent("preparing_insights", "done")
 
     if quality_report:
@@ -535,7 +538,9 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         logger.exception("Insight generation failed for query %s", query_id)
         audit.log(db, tenant_id, "insight_generation_failed", user_id, connection_id=connection_id,
                   query_id=query_id, detail={"reason": str(e)[:500]}, status="error")
-        insight_dict = {"error": f"Insight generation unavailable: {e}"}
+        # Generic message to the user - the real reason is in the audit log
+        # above and the server log, not the response payload.
+        insight_dict = {"error": "The explanation step is temporarily unavailable for this analysis."}
     yield StepEvent("preparing_insights", "done")
 
     # Single snapshot dict, reused for the persisted QueryRecord, the cache

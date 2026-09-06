@@ -550,6 +550,17 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   questions, so "what about Kano?" resolves against the prior analysis.
 - Insight explanation (Claude) — what/where/when/contributors/confidence/
   next-question, using only the numbers it was given.
+- **Error messages to the client are generic** (security-review
+  follow-up). `/ask/stream` and `/scan/stream` used to stream
+  `str(exception)` straight to the browser on an unexpected failure — a
+  SQLAlchemy or connector error string routinely carries the failing
+  query and sometimes connection detail. The unexpected-error path now
+  logs the real exception (with a stack trace) server-side and streams a
+  generic "failed unexpectedly, try again" step; the insight step's
+  fallback message is generic too (its real reason was already going to
+  the audit log, not just the response). App-authored messages that are
+  safe to show — a policy violation naming a scope column, a rate-limit
+  retry time, an "unsupported document type" — are unchanged.
 
 **Forecasting** (`app/agents/forecasting.py`) — the "predictive" half of
 descriptive/diagnostic/predictive/prescriptive (section 15); only the first
