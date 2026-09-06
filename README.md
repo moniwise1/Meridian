@@ -1452,7 +1452,20 @@ independent of the FastAPI/DB/pandas stack.
   same already-computed, already-authorized result snapshot, never a fresh
   unrestricted query.
 - Email delivery: sending to yourself is auto-approved; any other
-  recipient requires explicit confirmation. Two backends behind
+  recipient requires explicit confirmation. **A tenant-level outbound
+  policy** (a security-review fix — the confirm flag was the *only*
+  control, and it's client-asserted) sits above that: an admin sets it on
+  the Security page (`PATCH /auth/team/email-policy`) to `open` (default,
+  unchanged — confirm-per-external-recipient), `self_only` (every
+  recipient except the sender's own address is blocked outright), or
+  `domain_allowlist` (also allows a list of domains). Enforced in
+  `send_report` for real, not just in the UI; a tenant that predates the
+  column reads as `open`. Verified: `open` still confirms-then-sends;
+  `self_only` blocks every external recipient even when confirmed;
+  `domain_allowlist` sends to the listed domains and the sender's own
+  address and blocks the rest (domains normalized — case, leading `@`);
+  a bad mode / empty allowlist / malformed domain is a `400`; a non-admin
+  can read the policy but not change it. Two backends behind
   `EMAIL_PROVIDER`: `console` (default) logs instead of sending; `smtp` is
   a real, generic SMTP backend (stdlib `smtplib`, no vendor SDK) —
   deliberately provider-agnostic rather than committing to one specific

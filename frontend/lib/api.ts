@@ -205,6 +205,33 @@ export async function setMfaPolicy(requireMfa: boolean): Promise<void> {
   if (!res.ok) throw new Error(body.detail ?? "Could not update this setting.");
 }
 
+export type OutboundEmailPolicy = {
+  mode: "open" | "self_only" | "domain_allowlist";
+  allowed_domains: string[];
+};
+
+export async function getEmailPolicy(): Promise<OutboundEmailPolicy> {
+  const res = await fetch(`${API_BASE}/auth/team/email-policy`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load the email policy.");
+  return res.json();
+}
+
+export async function setEmailPolicy(
+  mode: OutboundEmailPolicy["mode"],
+  allowedDomains: string[],
+): Promise<OutboundEmailPolicy> {
+  const res = await fetch(`${API_BASE}/auth/team/email-policy`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ mode, allowed_domains: allowedDomains }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update the email policy.");
+  return body;
+}
+
 // Login-time — no real session yet, redeems the pre_auth_token from login().
 
 export async function verifyMfaLogin(preAuthToken: string, code: string): Promise<AuthResponse> {

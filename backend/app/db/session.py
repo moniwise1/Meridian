@@ -55,6 +55,7 @@ _ADDED_COLUMNS = [
     ("users", "totp_enabled", "BOOLEAN DEFAULT FALSE"),
     ("tenants", "subdomain", "VARCHAR"),
     ("uploaded_documents", "images_described", "INTEGER"),
+    ("tenants", "outbound_email_policy", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),
 ]
 
 

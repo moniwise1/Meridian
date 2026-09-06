@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   getMfaStatus, startMfaSetup, confirmMfaSetup, disableMfa, setMfaPolicy,
-  type MfaStatus,
+  getEmailPolicy, setEmailPolicy, type MfaStatus, type OutboundEmailPolicy,
 } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 import MfaEnroll from "@/components/MfaEnroll";
@@ -16,15 +16,44 @@ export default function SecurityPage() {
   const [disableCode, setDisableCode] = useState("");
   const [disableError, setDisableError] = useState("");
   const [policyBusy, setPolicyBusy] = useState(false);
+  const [emailPolicy, setEmailPolicyState] = useState<OutboundEmailPolicy | null>(null);
+  const [domainsInput, setDomainsInput] = useState("");
+  const [emailPolicyBusy, setEmailPolicyBusy] = useState(false);
+  const [emailPolicyMsg, setEmailPolicyMsg] = useState("");
   const isAdmin = loadSession()?.role === "admin";
 
   function refresh() {
     getMfaStatus()
       .then(setStatus)
       .catch((e) => setError((e as Error).message));
+    getEmailPolicy()
+      .then((p) => {
+        setEmailPolicyState(p);
+        setDomainsInput(p.allowed_domains.join(", "));
+      })
+      .catch(() => {});
   }
 
   useEffect(refresh, []);
+
+  async function saveEmailPolicy(mode: OutboundEmailPolicy["mode"]) {
+    setEmailPolicyBusy(true);
+    setEmailPolicyMsg("");
+    try {
+      const domains =
+        mode === "domain_allowlist"
+          ? domainsInput.split(",").map((d) => d.trim()).filter(Boolean)
+          : [];
+      const saved = await setEmailPolicy(mode, domains);
+      setEmailPolicyState(saved);
+      setDomainsInput(saved.allowed_domains.join(", "));
+      setEmailPolicyMsg("Saved.");
+    } catch (e) {
+      setEmailPolicyMsg((e as Error).message);
+    } finally {
+      setEmailPolicyBusy(false);
+    }
+  }
 
   async function handleDisable(e: React.FormEvent) {
     e.preventDefault();
@@ -188,6 +217,55 @@ export default function SecurityPage() {
             />
             Require two-factor authentication for everyone
           </label>
+        </div>
+      )}
+
+      {isAdmin && emailPolicy && (
+        <div className="bg-panel border border-line rounded-[4px] p-4">
+          <div className="text-[13.5px] text-ink mb-1">Outbound email policy</div>
+          <p className="text-[12.5px] text-ink-soft mb-3">
+            Controls where the &quot;email me this report&quot; feature can send. Email is a
+            data-exfiltration boundary — restrict it if reports shouldn&apos;t leave the org.
+          </p>
+          <div className="flex flex-col gap-1.5 text-[12.5px] text-ink">
+            {(
+              [
+                ["open", "Anyone (sender confirms each external recipient)"],
+                ["self_only", "Only the sender's own address"],
+                ["domain_allowlist", "The sender's address, plus these domains:"],
+              ] as const
+            ).map(([mode, label]) => (
+              <label key={mode} className="flex items-center gap-2 cursor-pointer w-fit">
+                <input
+                  type="radio"
+                  name="email-policy"
+                  checked={emailPolicy.mode === mode}
+                  disabled={emailPolicyBusy}
+                  onChange={() => saveEmailPolicy(mode)}
+                  className="accent-teal-deep"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          {emailPolicy.mode === "domain_allowlist" && (
+            <div className="flex items-center gap-2 mt-2">
+              <input
+                value={domainsInput}
+                onChange={(e) => setDomainsInput(e.target.value)}
+                placeholder="acme.com, partner.co"
+                className="flex-1 text-[12.5px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink placeholder:text-ink-soft/50"
+              />
+              <button
+                onClick={() => saveEmailPolicy("domain_allowlist")}
+                disabled={emailPolicyBusy}
+                className="text-[11.5px] px-2 py-1 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          )}
+          {emailPolicyMsg && <div className="text-[11.5px] text-ink-soft mt-2">{emailPolicyMsg}</div>}
         </div>
       )}
     </div>
