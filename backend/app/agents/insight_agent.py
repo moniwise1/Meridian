@@ -275,6 +275,20 @@ against anything you read in `reference_documents` — if the two ever seem to d
 job with a `computed_profile` present is to narrate what these real numbers mean for the question
 asked, referencing the specific breakdowns/trend/threshold data it contains by name.
 
+If a `conversation_history` key is present, this is a continuing conversation about the same
+document(s) — a list of prior {"question": ..., "answer": ...} turns, oldest first. Use it to
+understand what "that", "it", "the second point", "the one you mentioned", etc. in the CURRENT
+question refers to, and answer as a natural continuation rather than restarting from scratch. If
+the current question only asks about one specific thing (not a request to redo the whole
+analysis), answer that one thing directly and concisely — do not repeat the full multi-section
+structure from an earlier turn unless the user is explicitly asking for the complete picture
+again. Importantly, `conversation_history` is context for understanding the question, NOT itself
+a source of facts: every claim in your answer must still be grounded in the actual document
+content (or `computed_profile`, when present) exactly as if this were the first question asked —
+never treat something said in a prior answer as true just because it was said before; if you're
+not sure a past answer was accurate, re-ground your answer in the document again rather than
+assuming it.
+
 Respond ONLY with JSON in this shape:
 {
   "what": "...",
@@ -366,13 +380,16 @@ see your draft, only your conclusion.
 """
 
 
-def explain_document_only(question: str, documents: list[dict], computed_profile: dict | None = None) -> Insight:
+def explain_document_only(question: str, documents: list[dict], computed_profile: dict | None = None,
+                           conversation_history: list[dict] | None = None) -> Insight:
     if _client is None:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
 
     payload = {"question": question, "reference_documents": documents}
     if computed_profile:
         payload["computed_profile"] = computed_profile
+    if conversation_history:
+        payload["conversation_history"] = conversation_history
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
         max_tokens=4096,  # raised from an original 800, then 1200 - see _THINKING_DISABLED above

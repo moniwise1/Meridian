@@ -126,16 +126,38 @@ def _sanitize_by_group(raw: list | None) -> list[dict]:
     return cleaned
 
 
+MAX_DOCUMENT_CONVERSATION_TURNS = 10  # bounds how much history a follow-up drags along, matching
+# the general shape of every other bound in this app (row limits, sheet caps, image caps) - a real
+# back-and-forth analysis session rarely needs more than the last few turns of context to stay
+# coherent, and an unbounded transcript would keep growing every prompt's size (and cost) forever.
+
+
 def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
-                                 question: str, documents: list[UploadedDocument], query_id: str):
+                                 question: str, documents: list[UploadedDocument], query_id: str,
+                                 conversation_id: str | None = None):
     """The document-only path: no DataSourceConnection at all, one or more
     uploaded documents selected as the thing being analysed directly (as
     opposed to attached as supplementary context to a database-backed
-    question - see the other branch in run_analysis). Always a fresh
-    question, never a follow-up: the same reason document-attached
-    questions already opt out of the result cache and conversation
-    chaining (see the comment where run_analysis checks document_ids for
-    that) applies even more directly when the document IS the source.
+    question - see the other branch in run_analysis).
+
+    Now supports real follow-up conversations, the same way the database
+    path already does via context_resolver.py - a direct, explicit user
+    request ("make it interactive like an active chat... the attached
+    document is the memory used to analyse") after seeing this app's
+    document analysis improve through several rounds. The two paths'
+    "memory" needs are genuinely different in shape, though: the database
+    path re-runs a fresh SQL query every turn and only needs to remember
+    which table/columns a pronoun refers to (context_resolver.resolve()
+    rewrites the follow-up into a standalone question first). A document
+    never changes and there's no query to regenerate - what's actually
+    useful is the real conversation transcript itself, so the model can
+    reference "the second point" or "what you said about June" naturally,
+    the way a real back-and-forth with an analyst works. See
+    insight_agent.py's SYSTEM_PROMPT_DOCUMENT_ONLY for how that history is
+    explicitly scoped as context for understanding the question, never
+    itself a source of facts - every answer is still grounded in the
+    actual document/computed_profile, exactly as if it were the first
+    question asked.
 
     Emits the same StepEvent step names as the database path so the
     frontend's progress trace needs no document-only special-casing.
@@ -148,6 +170,29 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     Multiple documents, an unparseable/oversized table, or a PDF (see
     tabular_analysis.py's docstring for why PDF tables aren't attempted)
     all fall back to the original text-based behavior unchanged."""
+    conversation = None
+    if conversation_id:
+        conversation = (
+            db.query(Conversation)
+            .filter_by(id=conversation_id, tenant_id=tenant_id, user_id=user_id)
+            .first()
+        )
+
+    # A follow-up naturally omits document_ids, mirroring the database
+    # path's own follow-up convention (routes_ask.py's AskRequest defaults
+    # document_ids to [] and the frontend sends it that way for a
+    # follow-up) - the conversation itself remembers which document(s)
+    # this thread is about, so they don't need to be re-selected every
+    # turn any more than a database connection does.
+    if conversation and not documents:
+        stored_ids = (conversation.context or {}).get("document_ids") or []
+        if stored_ids:
+            documents = (
+                db.query(UploadedDocument)
+                .filter(UploadedDocument.id.in_(stored_ids), UploadedDocument.tenant_id == tenant_id)
+                .all()
+            )
+
     yield StepEvent("understanding", "done", question)
 
     if not documents:
@@ -168,7 +213,12 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
         table = tabular_analysis.pick_best_table(tables)
         if table is not None:
-            profile = tabular_analysis.build_profile(table, question)
+            sticky = (conversation.context or {}) if conversation else {}
+            profile = tabular_analysis.build_profile(
+                table, question,
+                sticky_value_col=sticky.get("last_primary_value_column"),
+                sticky_group_col=sticky.get("last_primary_group_column"),
+            )
             quality_report, detected_anomalies = tabular_analysis.compute_data_quality_and_anomalies(table, profile)
             # As specific as the manual, by-hand version of this analysis
             # would narrate out loud: exactly which columns were picked
@@ -243,8 +293,14 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     document_payload = [{"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents]
     by_group: list[dict] = []
     profile_dict = tabular_analysis.profile_to_dict(profile) if profile else None
+    history = [
+        {"question": t["question"], "answer": t.get("answer_body") or t.get("answer_what", "")}
+        for t in ((conversation.context or {}).get("turns") or [])
+    ] if conversation else []
     try:
-        insight = explain_document_only(question, document_payload, computed_profile=profile_dict)
+        insight = explain_document_only(
+            question, document_payload, computed_profile=profile_dict, conversation_history=history,
+        )
         insight_dict = asdict(insight)
         if profile_dict and profile.primary_group_column:
             # The real, deterministically-computed breakdown (see
@@ -306,9 +362,48 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "preview_rows": [],
     }
 
+    # Created/updated regardless of whether insight generation succeeded
+    # this turn - mirrors the database path's own Conversation handling
+    # (a failed insight there still updates conversation.context, since
+    # the SQL itself already ran) - remembering which document(s) and
+    # which columns this thread is about shouldn't be undone by one bad
+    # turn, so a retry doesn't lose the ability to skip re-selecting the
+    # document. Only a genuinely successful turn gets appended to the
+    # visible "turns" transcript below, though - an error message isn't
+    # useful conversational memory, and could confuse a later turn if the
+    # model saw it as something someone actually said.
+    if not conversation:
+        conversation = Conversation(
+            tenant_id=tenant_id, user_id=user_id, connection_id=DOCUMENT_ONLY_SOURCE_ID, context={},
+        )
+        db.add(conversation)
+        # id's Column default (a Python-side UUID callable) isn't
+        # actually resolved until the object is flushed - caught directly
+        # by a real test that found the first turn's QueryRecord.
+        # conversation_id landing as null, since conversation.id read
+        # right after construction, with no flush in between, is still
+        # None at that point. Flushing here (not deferring to the
+        # db.commit() below) guarantees conversation.id is a real value
+        # before the QueryRecord referencing it is built next.
+        db.flush()
+    turns = list((conversation.context or {}).get("turns") or [])
+    if "error" not in insight_dict:
+        turns.append({
+            "question": question,
+            "answer_what": insight_dict.get("what", ""),
+            "answer_body": insight_dict.get("body", ""),
+        })
+    conversation.context = {
+        "document_ids": [d.id for d in documents],
+        "turns": turns[-MAX_DOCUMENT_CONVERSATION_TURNS:],
+        "last_primary_value_column": profile.primary_value_column if profile else None,
+        "last_primary_group_column": profile.primary_group_column if profile else None,
+    }
+    conversation.updated_at = datetime.utcnow()
+
     db.add(QueryRecord(
         id=query_id, tenant_id=tenant_id, user_id=user_id, connection_id=DOCUMENT_ONLY_SOURCE_ID,
-        conversation_id=None, question=question, generated_sql=snapshot["sql"],
+        conversation_id=conversation.id, question=question, generated_sql=snapshot["sql"],
         row_count=0, duration_ms=0, result_snapshot=snapshot,
     ))
     # Whether real structured data was actually used is exactly the
@@ -321,13 +416,14 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     audit.log(db, tenant_id, "document_only_query_executed", user_id, DOCUMENT_ONLY_SOURCE_ID, query_id,
               {"documents": [d.filename for d in documents],
                "structured_table_used": profile is not None,
-               "table_shape": [profile.row_count, len(profile.columns)] if profile else None})
+               "table_shape": [profile.row_count, len(profile.columns)] if profile else None,
+               "conversation_id": conversation.id, "is_follow_up": bool(conversation_id)})
     db.commit()
 
     yield {
         "final": True,
         "query_id": query_id,
-        "conversation_id": None,
+        "conversation_id": conversation.id,
         "resolved_question": question,
         **snapshot,
     }
@@ -353,9 +449,13 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     if not connection_id:
         # A document IS the data source here, not a database - see
         # _run_document_only_analysis above. routes_ask.py already
-        # rejects a request with neither connection_id nor document_ids
-        # before this is ever called.
-        yield from _run_document_only_analysis(db, tenant_id, user_id, question, documents, query_id)
+        # rejects a request with neither connection_id, document_ids, nor
+        # conversation_id before this is ever called (a follow-up
+        # legitimately has none of the first two set - it relies on
+        # conversation_id alone to recall which document(s) to use).
+        yield from _run_document_only_analysis(
+            db, tenant_id, user_id, question, documents, query_id, conversation_id,
+        )
         return
 
     conn_row = db.query(DataSourceConnection).filter_by(id=connection_id, tenant_id=tenant_id).first()

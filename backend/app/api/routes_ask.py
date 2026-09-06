@@ -55,13 +55,28 @@ def ask_stream(body: AskRequest, db: Session = Depends(get_db),
                         "detail": "Your account does not have querying enabled."})
         return StreamingResponse(_denied(), media_type="text/event-stream")
 
-    if body.document_ids and "document_retrieval" not in (user.capabilities or []):
+    # A document-only follow-up omits document_ids (see below) and relies
+    # on the conversation to recall them - but it's still fundamentally a
+    # document-retrieval operation, so the capability still needs
+    # checking on that turn too, the same defense-in-depth "check every
+    # time, not just once" discipline "querying" above already gets. A
+    # request with conversation_id set but no connection_id can only be
+    # a document conversation continuing: a database follow-up always
+    # still carries its connection_id (see AskDashboard.tsx), so this
+    # can't misfire on one of those.
+    is_document_operation = bool(body.document_ids) or (body.conversation_id and not body.connection_id)
+    if is_document_operation and "document_retrieval" not in (user.capabilities or []):
         def _denied_docs():
             yield _sse({"type": "step", "step": "policy", "status": "error",
                         "detail": "Your account does not have document retrieval enabled."})
         return StreamingResponse(_denied_docs(), media_type="text/event-stream")
 
-    if not body.connection_id and not body.document_ids:
+    # A document-only follow-up legitimately has neither set - the same
+    # way a database follow-up already omits connection_id and relies on
+    # conversation_id alone (planner.py resolves which document(s) from
+    # the conversation's own remembered context, the same as
+    # context_resolver.py already does for a database connection).
+    if not body.connection_id and not body.document_ids and not body.conversation_id:
         def _denied_no_source():
             yield _sse({"type": "step", "step": "policy", "status": "error",
                         "detail": "Select a data source or a document to analyse."})
