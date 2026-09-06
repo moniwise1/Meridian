@@ -96,6 +96,44 @@ def create_pre_auth_token(user_id: str, tenant_id: str, purpose: str, ttl_second
     return jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
 
 
+# Signed, short-lived URL token for downloading a generated artifact
+# (report/presentation/export). Generated artifacts used to be served by a
+# plain unauthenticated StaticFiles mount at /artifacts/<filename>, so any
+# report - one tenant's business data - was downloadable by anyone who
+# guessed the (only 8-hex-char) filename. Downloads now go through an
+# authenticated route that takes one of these instead: minted only by a
+# tenant-authenticated endpoint that has already checked the caller's
+# tenant owns the artifact, it names exactly one artifact id and expires
+# quickly. Same HS256 machinery / secret as the session tokens above.
+ARTIFACT_DOWNLOAD_TTL_SECONDS = 60 * 60  # 1h - long enough to click a link on the Library page
+
+
+def create_artifact_download_token(artifact_id: str) -> str:
+    return jwt.encode(
+        {
+            "purpose": "artifact_download",
+            "aid": artifact_id,
+            "exp": int(time.time()) + ARTIFACT_DOWNLOAD_TTL_SECONDS,
+        },
+        _JWT_SECRET,
+        algorithm="HS256",
+    )
+
+
+def verify_artifact_download_token(token: str) -> str | None:
+    """Returns the artifact id the token authorizes, or None if the token
+    is missing, malformed, expired, or not an artifact-download token."""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("purpose") != "artifact_download":
+        return None
+    return payload.get("aid")
+
+
 def decode_pre_auth_token(token: str, expected_purpose: str) -> dict:
     """Returns {"sub": user_id, "tenant_id": tenant_id} or raises
     HTTPException(401) - used by the login-time MFA endpoints and by the

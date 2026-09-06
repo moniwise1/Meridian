@@ -1436,6 +1436,32 @@ independent of the FastAPI/DB/pandas stack.
   tabs, bookmarks, and OS-level icon caches that still request the legacy
   format directly.
 
+  **Downloads are authenticated now, not a public static mount**
+  (`app/main.py`, `app/api/routes_artifacts.py`, `app/security/auth.py`) —
+  a security-review finding, fixed. Generated reports/presentations/
+  exports were served by a plain `app.mount("/artifacts",
+  StaticFiles(...))` with **no authentication at all**, and the on-disk
+  filenames were only `uuid4().hex[:8]` — 32 bits. Any tenant's report
+  (its business data, generated SQL, metrics, anomalies) was a guessable
+  URL away from anyone on the internet, with no expiry and no `Referer`
+  protection. That mount is gone. Downloads now go through
+  `GET /artifacts/file/{id}?token=…`, where the token is a signed,
+  1-hour, single-artifact JWT (`create_artifact_download_token`,
+  HS256, same secret as session tokens) minted only by the generate/
+  list endpoints *after* they've confirmed the caller's tenant owns the
+  artifact. The download route serves the file with the correct
+  `Content-Type`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, and a `Content-Disposition: attachment`.
+  On-disk names are now the full `uuid4().hex` too, as defence in depth.
+  The frontend needed no change — the `url` field it already prefixes
+  with `API_BASE` just carries the token now. Object storage + signed
+  URLs is still the right end state; this closes the hole without it.
+  Verified end-to-end against a real SQLite DB + FastAPI: generating a
+  report returns an authenticated URL that downloads the real PDF
+  (correct headers), a missing/garbage/wrong-artifact/expired token each
+  gets a 403, the old `/artifacts/<filename>` path now 404s, and the
+  Library (`/history/artifacts`) listing uses the same authenticated URL.
+
 **Legal pages** (`frontend/app/privacy/page.tsx`, `frontend/app/terms/page.tsx`)
 — a real Privacy Policy and Terms of Service, linked from the marketing
 footer and referenced in the registration form's consent line ("By

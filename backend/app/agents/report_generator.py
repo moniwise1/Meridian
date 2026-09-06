@@ -84,7 +84,7 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
                           by_group: list[dict] | None, data_quality: dict,
                           anomalies: list[dict], sql: str, query_id: str) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
-    path = os.path.join(settings.artifacts_dir, f"report-{uuid.uuid4().hex[:8]}.pdf")
+    path = os.path.join(settings.artifacts_dir, f"report-{uuid.uuid4().hex}.pdf")
 
     pdf = MeridianPDF()
     pdf.set_auto_page_break(auto=True, margin=15)

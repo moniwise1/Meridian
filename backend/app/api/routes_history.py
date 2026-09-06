@@ -7,13 +7,13 @@ when it was first created. Tenant-scoped rather than user-scoped, matching
 the audit log's convention — a team sees each other's analyses and
 artifacts, same as it already sees each other's audit trail.
 """
-import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import QueryRecord, GeneratedArtifact, PinnedAnalysis
 from app.security.auth import get_current_user, AuthContext
+from app.api.routes_artifacts import artifact_download_url
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -134,7 +134,11 @@ def list_artifacts(kind: str | None = None, limit: int = 50, db: Session = Depen
             "kind": a.kind,
             "title": a.title,
             "source_query_id": a.source_query_id,
-            "url": f"/artifacts/{os.path.basename(a.file_path)}",
+            # Authenticated download route + a fresh signed token, same as
+            # routes_artifacts.py's create endpoints - not a public static
+            # path. Minted per response; the Library page re-fetches this
+            # list on load, so the token is always well within its TTL.
+            "url": artifact_download_url(a),
             "created_at": a.created_at.isoformat(),
         }
         for a in rows

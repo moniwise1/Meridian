@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import os
 
 from app.config import settings
@@ -60,8 +59,12 @@ app.include_router(routes_support.router)
 app.include_router(routes_status.router)
 app.include_router(routes_monitor.router)
 
-# Generated reports/presentations/exports. In production these should be
-# short-lived signed URLs from object storage (S3/GCS) behind the same
-# tenant-authorization check as everything else, not a public static mount -
-# this local mount is an MVP stand-in, called out in the README.
-app.mount("/artifacts", StaticFiles(directory=settings.artifacts_dir), name="artifacts")
+# Generated reports/presentations/exports are served ONLY through the
+# authenticated GET /artifacts/file/{id} route in routes_artifacts.py
+# (signed short-lived token, one artifact per token, minted after a
+# tenant-ownership check). There is deliberately no StaticFiles mount:
+# the old one had no auth at all, so any generated report was readable by
+# anyone who guessed its 8-hex-char filename. Object storage + signed URLs
+# is still the right production end state; this closes the hole without
+# it. The files themselves live under settings.artifacts_dir on the
+# server's own disk and are never in the web root.
