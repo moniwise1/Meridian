@@ -82,18 +82,20 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
         filename=file.filename or safe_name, kind=kind, file_path=path,
         extracted_text=extraction.text, extraction_truncated=extraction.truncated,
         char_count=len(extraction.text), ocr_pages_used=extraction.ocr_pages_used,
+        images_described=extraction.images_described,
     )
     db.add(doc)
     audit.log(db, ctx.tenant_id, "document_uploaded", ctx.user_id,
                detail={"filename": doc.filename, "kind": kind, "char_count": doc.char_count,
-                       "ocr_pages_used": doc.ocr_pages_used})
+                       "ocr_pages_used": doc.ocr_pages_used, "images_described": doc.images_described})
     db.commit()
     db.refresh(doc)
 
     return {
         "id": doc.id, "filename": doc.filename, "kind": doc.kind,
         "char_count": doc.char_count, "truncated": doc.extraction_truncated,
-        "ocr_pages_used": doc.ocr_pages_used, "created_at": doc.created_at.isoformat(),
+        "ocr_pages_used": doc.ocr_pages_used, "images_described": doc.images_described,
+        "created_at": doc.created_at.isoformat(),
     }
 
 
@@ -109,7 +111,8 @@ def list_documents(db: Session = Depends(get_db), ctx: AuthContext = Depends(get
         {
             "id": r.id, "filename": r.filename, "kind": r.kind,
             "char_count": r.char_count, "truncated": r.extraction_truncated,
-            "ocr_pages_used": r.ocr_pages_used, "created_at": r.created_at.isoformat(),
+            "ocr_pages_used": r.ocr_pages_used, "images_described": r.images_described,
+            "created_at": r.created_at.isoformat(),
         }
         for r in rows
     ]
@@ -124,7 +127,7 @@ def get_document(document_id: str, db: Session = Depends(get_db),
     return {
         "id": doc.id, "filename": doc.filename, "kind": doc.kind,
         "char_count": doc.char_count, "truncated": doc.extraction_truncated,
-        "ocr_pages_used": doc.ocr_pages_used,
+        "ocr_pages_used": doc.ocr_pages_used, "images_described": doc.images_described,
         "created_at": doc.created_at.isoformat(), "extracted_text": doc.extracted_text,
     }
 

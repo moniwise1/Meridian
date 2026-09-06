@@ -341,6 +341,7 @@ export type DocumentSummary = {
   char_count: number;
   truncated: boolean;
   ocr_pages_used: number;
+  images_described: number;
   created_at: string;
 };
 

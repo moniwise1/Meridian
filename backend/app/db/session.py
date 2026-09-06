@@ -54,6 +54,7 @@ _ADDED_COLUMNS = [
     ("users", "totp_secret", "TEXT"),
     ("users", "totp_enabled", "BOOLEAN DEFAULT FALSE"),
     ("tenants", "subdomain", "VARCHAR"),
+    ("uploaded_documents", "images_described", "INTEGER"),
 ]
 
 

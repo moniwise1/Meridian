@@ -623,6 +623,61 @@ text page, one scanned page) correctly used native extraction for one and
 OCR for exactly the other; and the full upload → get → list round trip
 correctly surfaced `ocr_pages_used` throughout.
 
+**Real embedded pictures, described by AI vision** (`app/agents/
+document_intelligence.py`) — phase 2 of the analysis-engine work the same
+user asked for after seeing the structured-spreadsheet fixes above: "if
+it's a PDF, read every word, table, text, format, pictures... same for
+PPTX." Text and tables were already covered; a real embedded photo,
+chart-as-image, or diagram had no text form at all before this, so it was
+completely invisible to any analysis regardless of how good the text
+extraction got. `_describe_images()` is a small, deliberately narrow
+exception to this module's "extraction, not comprehension" rule (see its
+docstring) — there's no way to "extract" a picture as text without
+actually looking at it, so a batched vision call (every image in one
+request, not one call per image — far cheaper and faster) describes what
+each one factually shows, explicitly told never to invent a number or
+word it can't actually read in the image, the same anti-hallucination
+discipline this app applies everywhere else. Descriptions are folded into
+the same `extracted_text` every other extraction already produces,
+clearly labelled (`[Image on page 3]: ...` / `[Image on slide 5]: ...`)
+so it's obvious in the text which parts are native content vs. an AI's
+read of a picture — same spirit as how OCR'd text is already labelled
+apart from a native text layer.
+
+Bounded and defensive throughout: capped at 20 images per document (a
+heavily-illustrated deck doesn't turn into 40 vision calls' worth of
+latency and cost); an image under roughly 80×80px is skipped as almost
+certainly a decorative icon/bullet/logo rather than real content; each
+image is downsized to fit within 1024px before sending (keeps the
+request small without losing the kind of detail a factual description
+actually needs); embedded images sharing the same underlying picture (a
+logo reused on every page of a PDF) are deduplicated so the same picture
+isn't billed and described once per page it appears on. Fails open at
+every stage, matching the same discipline Tesseract's optional OCR
+dependency already established: no Anthropic key configured, the vision
+call itself failing, or the model returning something that isn't a clean
+JSON array all degrade to "no descriptions," never a failed or degraded-
+looking upload. A new `images_described` count is surfaced everywhere
+`ocr_pages_used` already is (upload response, list, detail, the Documents
+page's file line, the audit log) — real, but a different kind of "real"
+than a native text extraction, worth flagging the same way OCR'd text
+already is rather than presenting identically to a clean extraction.
+
+Verified with real files and a mocked vision call (this dev environment
+has no live Anthropic key — the same constraint every LLM-touching test
+in this codebase works around): a real PDF built with `pymupdf`,
+containing one genuine embedded picture, correctly extracted, described,
+and labelled with its real page number; a 20×20 test image correctly
+filtered out by the minimum-dimension check; a real PPTX built with
+`python-pptx` with a real embedded picture, same result labelled by slide
+number; the vision call raising an exception, and the model returning
+non-JSON prose, both confirmed to degrade to zero descriptions without
+crashing the extraction; a plain text-only PDF confirmed to never even
+attempt a vision call (nothing to describe, no wasted request); and the
+full real HTTP round trip (register → upload a real PDF with a real
+embedded image → list → get) confirming `images_described` and the
+actual description text reach every layer correctly.
+
 **Locked and unsafe file detection** (`app/agents/document_intelligence.py`,
 `routes_documents.py`) — before this, a password-protected file just
 failed extraction with a generic, confusing error (or, for some
