@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
@@ -11,7 +11,42 @@ from app.api import (
     routes_platform, routes_support, routes_status, routes_mfa, routes_monitor,
 )
 
-app = FastAPI(title="Secure AI Enterprise Analytics Agent", version="0.1.0")
+_IS_PRODUCTION = settings.environment == "production"
+
+app = FastAPI(
+    title="Secure AI Enterprise Analytics Agent",
+    version="0.1.0",
+    # The interactive docs publish the full API surface. Off in production
+    # (a security-review finding); still on in development, where they're
+    # genuinely useful. openapi_url must go too or /docs can be rebuilt
+    # from it.
+    docs_url=None if _IS_PRODUCTION else "/docs",
+    redoc_url=None if _IS_PRODUCTION else "/redoc",
+    openapi_url=None if _IS_PRODUCTION else "/openapi.json",
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """A small, safe set of response headers on every response (a
+    security-review finding - there were none). This API returns JSON and
+    file downloads, never attacker-controlled HTML, so a full CSP isn't
+    needed; these cover clickjacking, MIME sniffing, and Referer leakage
+    (which mattered specifically for the signed artifact-download URLs)."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    # HSTS only over a genuinely-HTTPS request - behind Railway's proxy the
+    # scheme arrives in X-Forwarded-Proto. Never send it on plain-http dev.
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    if forwarded_proto == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
+        )
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
