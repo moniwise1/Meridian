@@ -7,6 +7,7 @@ User row - never from the request body - so a client cannot claim a wider
 scope than an admin granted them.
 """
 import json
+import logging
 from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -26,6 +27,7 @@ from app.billing.plans import query_limit_for
 from app.billing.usage import count_queries_this_month
 
 router = APIRouter(prefix="/ask", tags=["ask"])
+logger = logging.getLogger("meridian.ask")
 
 
 class AskRequest(BaseModel):
@@ -109,9 +111,19 @@ def ask_stream(body: AskRequest, db: Session = Depends(get_db),
                 else:
                     yield _sse({"type": "result", **event})
         except PolicyViolation as e:
+            # PolicyViolation messages are written by this app (see
+            # planner.py) and are safe to show - they name a scope column,
+            # not internal state.
             yield _sse({"type": "step", "step": "policy", "status": "error", "detail": str(e)})
-        except Exception as e:
-            yield _sse({"type": "step", "step": "error", "status": "error", "detail": str(e)})
+        except Exception:
+            # Never surface the raw exception to the client: a SQLAlchemy /
+            # connector error string routinely carries the failing query
+            # and sometimes connection detail. Log it server-side (with a
+            # stack trace) and return a generic message.
+            logger.exception("run_analysis failed (tenant=%s, user=%s)", ctx.tenant_id, ctx.user_id)
+            yield _sse({"type": "step", "step": "error", "status": "error",
+                        "detail": "The analysis failed unexpectedly. Please try again; "
+                                  "if it keeps happening, contact support."})
         finally:
             # Guaranteed to run if run_analysis raises or completes
             # normally. An early client disconnect also triggers this in

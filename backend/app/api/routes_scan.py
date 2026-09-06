@@ -10,6 +10,7 @@ a single question (it runs one query per table, up to MAX_TABLES_SCANNED),
 so it shouldn't get a free pass around the same limits.
 """
 import json
+import logging
 from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -30,6 +31,7 @@ from app.audit import logger as audit
 from app.config import settings
 
 router = APIRouter(prefix="/scan", tags=["scan"])
+logger = logging.getLogger("meridian.scan")
 
 
 class ScanRequest(BaseModel):
@@ -118,8 +120,14 @@ def scan_stream(body: ScanRequest, db: Session = Depends(get_db),
                     {"table": sa.table, **asdict(sa.anomaly)} for sa in result.scanned_anomalies
                 ],
             })
-        except Exception as e:
-            yield _sse({"type": "step", "step": "error", "status": "error", "detail": str(e)})
+        except Exception:
+            # Don't leak the raw exception (a connector / SQLAlchemy error
+            # can carry the query and connection detail) - log it with a
+            # stack trace server-side, return a generic message.
+            logger.exception("risk scan failed (tenant=%s, user=%s)", ctx.tenant_id, ctx.user_id)
+            yield _sse({"type": "step", "step": "error", "status": "error",
+                        "detail": "The risk scan failed unexpectedly. Please try again; "
+                                  "if it keeps happening, contact support."})
         finally:
             release_concurrency_slot(ctx.tenant_id)
 
