@@ -291,8 +291,15 @@ already-added 2nd account → a 3rd account is blocked again post-downgrade).
   authenticated route — so it instead returns a short-lived "pre-auth"
   token, redeemable only at the two dedicated MFA endpoints, that
   `get_current_user` explicitly refuses to accept anywhere else. Code
-  guessing at login is rate-limited the same way password guessing
-  already is (a third `login_cooldown.py` guard, keyed by user id).
+  guessing is rate-limited the same way password guessing already is (a
+  third `login_cooldown.py` guard, keyed by user id) — at the login-time
+  checks (`/verify-login`, `/confirm-login`) and, since a security-review
+  follow-up, at the **self-service** `/confirm` and `/disable` too. Those
+  two verify a 6-digit code with a real session but had no throttle, so a
+  stolen session token could have brute-forced the code (10⁶ space) to
+  turn MFA off; they now share the same escalating-but-never-hard-locking
+  cooldown as the login path (5 free attempts, then a doubling delay
+  capped at 15 min, a correct code always clears it).
   Verified end-to-end against the real app (28 checks: enroll → confirm →
   disable, wrong-code rejection, the login-time code prompt AND the
   login-time enrollment path for a teammate who joined before the org

@@ -181,8 +181,19 @@ def confirm(body: ConfirmRequest, db: Session = Depends(get_db), ctx: AuthContex
     user = db.query(User).filter_by(id=ctx.user_id).first()
     if not user.totp_secret:
         raise HTTPException(400, "Start setup first.")
+    # Same escalating cooldown the login-time code checks use (keyed by
+    # user id) - a 6-digit code is a 10^6 space, so these self-service
+    # checks must be rate-limited too, not just /verify-login. Without it,
+    # an attacker holding a stolen session could brute-force a code here
+    # or at /disable with no throttle at all.
+    try:
+        check_mfa_login_cooldown(user.id)
+    except LoginCooldownActive as e:
+        raise HTTPException(429, str(e))
     if not _verify_code(user.totp_secret, body.code):
+        record_mfa_login_failure(user.id)
         raise HTTPException(400, "Incorrect code. Check your authenticator app and try again.")
+    record_mfa_login_success(user.id)
     user.totp_enabled = True
     audit.log(db, ctx.tenant_id, "mfa_enabled", ctx.user_id)
     db.commit()
@@ -200,9 +211,17 @@ def disable(body: DisableRequest, db: Session = Depends(get_db), ctx: AuthContex
     # Requires a currently-valid code, not just a click - the same reason
     # /connections requires the DB password again to change a live
     # connection, this is a security-reducing action and shouldn't be one
-    # accidental click (or one XSS'd request) away with nothing else needed.
+    # accidental click (or one XSS'd request) away with nothing else
+    # needed. Rate-limited on the same guard as the login-time code checks
+    # so a stolen session can't just brute-force the code to turn MFA off.
+    try:
+        check_mfa_login_cooldown(user.id)
+    except LoginCooldownActive as e:
+        raise HTTPException(429, str(e))
     if not _verify_code(user.totp_secret, body.code):
+        record_mfa_login_failure(user.id)
         raise HTTPException(400, "Incorrect code.")
+    record_mfa_login_success(user.id)
     user.totp_enabled = False
     user.totp_secret = None
     audit.log(db, ctx.tenant_id, "mfa_disabled", ctx.user_id)
