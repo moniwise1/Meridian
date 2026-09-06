@@ -111,6 +111,21 @@ def get_plan(key: str) -> Plan | None:
     return PLANS.get(key)
 
 
+def plan_key_for_paystack_code(code: str | None) -> str | None:
+    """The reverse of Plan.paystack_plan_code: which of our own plan keys
+    ("basic"/"pro"/"premium") a Paystack plan_code corresponds to, or None
+    if it matches none. Used by billing activation to set Tenant.plan from
+    what a verified transaction actually paid for, rather than trusting the
+    value /subscribe optimistically wrote before payment. An unconfigured
+    plan's code is "" and must never match, hence the truthiness guard."""
+    if not code:
+        return None
+    for plan in PLANS.values():
+        if plan.paystack_plan_code and plan.paystack_plan_code == code:
+            return plan.key
+    return None
+
+
 def seat_limit_for(plan_key: str | None) -> int | None:
     """1 for no plan (free tier - matches the cap already enforced before
     this module existed), else that plan's seat_limit (None = unlimited)."""
