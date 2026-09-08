@@ -54,6 +54,16 @@ class Tenant(Base):
     # (setting subscription_status="active" by hand, no real payment) sets
     # this the same way - see update_tenant in routes_platform.py.
     subscription_expires_at = Column(DateTime, nullable=True)
+    # Idempotency anchor for the "your subscription renews in N days"
+    # reminder (app/api/routes_notifications.py's reminders/run endpoint,
+    # driven by an external cron - this app has no in-process scheduler,
+    # same constraint as the uptime monitor and audit anchor). Holds the
+    # exact subscription_expires_at value a reminder has already been sent
+    # for; the daily job skips a tenant whose current expiry matches this,
+    # so it fires once per period, not once per day for the whole window.
+    # A renewal advances subscription_expires_at, which re-arms the
+    # reminder automatically (the values no longer match).
+    expiry_reminder_sent_for = Column(DateTime, nullable=True)
     # Which of the three plans (see app/billing/plans.py) this tenant
     # picked - "basic" | "pro" | "premium" | None. Set at
     # /billing/subscribe time (before checkout even completes, same as
@@ -288,6 +298,41 @@ class EmailDeliveryLog(Base):
     status = Column(String, nullable=False)  # "sent" | "blocked" | "pending_confirmation"
     reason = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Notification(Base):
+    """An in-app notice shown in the dashboard's notification bell
+    (frontend/components/NotificationBell.tsx). Deliberately per-USER, not
+    per-tenant: read state is a personal fact ("have *I* seen this"), and
+    fanning one event out to a row per recipient keeps that trivial - no
+    separate per-user read-tracking table. The platform events worth a
+    notice (subscription activated, renewing soon, cancelled, a renewal
+    payment failing, a teammate joining) already compute a "who are this
+    tenant's admins" recipient list for their owner-activity emails
+    (app/agents/notifications.py) - the same list is reused here, so the
+    bell and those emails always agree on who gets told.
+
+    No FK to users/tenants, matching QueryRecord / AuditLog's own
+    plain-string convention in this file; a stray notification outliving
+    its user is harmless (the list query is always scoped by the live
+    caller's own user_id) and never worth a cascade.
+    """
+    __tablename__ = "notifications"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    # "subscription_activated" | "subscription_expiring" |
+    # "subscription_cancelled" | "subscription_renewal_failed" |
+    # "teammate_joined" - a short stable slug the frontend maps to an icon.
+    kind = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=False, default="")
+    # An in-app path the notice links to, e.g. "/billing". Nullable - not
+    # every notice has a natural destination.
+    link = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    # NULL until the user opens the bell / marks it read.
+    read_at = Column(DateTime, nullable=True)
 
 
 class PlatformStaff(Base):

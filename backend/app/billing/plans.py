@@ -111,6 +111,13 @@ def get_plan(key: str) -> Plan | None:
     return PLANS.get(key)
 
 
+def format_naira(kobo: int) -> str:
+    """kobo (the smallest NGN unit, what `amount` is stored in everywhere)
+    -> a human "₦9,999" string for emails / notices. Whole naira only -
+    every plan price here is a round naira figure."""
+    return f"₦{kobo // 100:,}"
+
+
 def plan_key_for_paystack_code(code: str | None) -> str | None:
     """The reverse of Plan.paystack_plan_code: which of our own plan keys
     ("basic"/"pro"/"premium") a Paystack plan_code corresponds to, or None

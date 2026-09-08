@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { loadSession, clearSession, type Session } from "@/lib/auth";
+import NotificationBell from "@/components/NotificationBell";
 
 const NAV = [
   { href: "/home", label: "Home" },
@@ -56,9 +57,12 @@ export default function Sidebar() {
 
   return (
     <aside className="w-56 shrink-0 border-r border-line bg-panel px-5 py-6 flex flex-col gap-8">
-      <div>
-        <div className="text-[15px] font-semibold tracking-tight text-ink">Meridian</div>
-        <div className="text-[11px] text-ink-soft mt-0.5">Enterprise analytics</div>
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="text-[15px] font-semibold tracking-tight text-ink">Meridian</div>
+          <div className="text-[11px] text-ink-soft mt-0.5">Enterprise analytics</div>
+        </div>
+        {session && <NotificationBell />}
       </div>
 
       <nav className="flex flex-col gap-1">

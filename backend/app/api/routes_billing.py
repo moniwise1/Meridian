@@ -27,10 +27,15 @@ from app.billing import paystack
 from app.billing.paystack import PaystackError
 from app.billing.plans import (
     PLANS, get_plan, query_limit_for, document_limit_for, plan_key_for_paystack_code,
+    format_naira,
 )
 from app.billing.usage import count_queries_this_month, count_documents_this_month
 from app.audit import logger as audit
 from app.config import settings
+from app.agents.notifications import (
+    tenant_admin_emails, send_subscription_confirmation, notify_owners,
+)
+from app.user_notifications import create_notification
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -203,11 +208,43 @@ def _activate(db: Session, tenant: Tenant, transaction_data: dict, source: str,
     # instead read the actual next-charge date off the
     # subscription.create / invoice events Paystack sends.
     tenant.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+    # A fresh activation re-arms the expiry reminder (a previous period's
+    # "already reminded" marker must not suppress the reminder for this
+    # new one) - see app/api/routes_notifications.py's run_expiry_reminders.
+    tenant.expiry_reminder_sent_for = None
     db.commit()
     if not already_active:
         audit.log(db, tenant.id, "subscription_activated", user_id, detail={
             "source": source, "reference": transaction_data.get("reference"),
         })
+        _announce_activation(db, tenant)
+
+
+def _announce_activation(db: Session, tenant: Tenant) -> None:
+    """In-app notice + confirmation email to the tenant's admins, on a
+    genuine first activation only (the caller guards on `not
+    already_active`, so a replayed webhook / a second /verify never
+    re-sends this). Best-effort - a mail or notification hiccup must never
+    turn a successful payment into a failed request."""
+    plan = get_plan(tenant.plan) if tenant.plan else None
+    plan_label = plan.label if plan else "your plan"
+    amount = format_naira(plan.amount) if plan else ""
+    renews_on = (
+        tenant.subscription_expires_at.strftime("%d %B %Y")
+        if tenant.subscription_expires_at else "the next billing date"
+    )
+    create_notification(
+        db, tenant.id, "subscription_activated",
+        title="Subscription active",
+        body=(
+            f"{plan_label} is now active"
+            + (f" at {amount}/month" if amount else "")
+            + f". Renews on {renews_on}."
+        ),
+        link="/billing",
+    )
+    for email in tenant_admin_emails(db, tenant.id):
+        send_subscription_confirmation(email, tenant.name, plan_label, amount or "-", renews_on)
 
 
 @router.get("/verify")
@@ -308,8 +345,29 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         tenant.plan = None
         db.commit()
         audit.log(db, tenant.id, "subscription_disabled_by_paystack", detail={"event": event})
+        create_notification(
+            db, tenant.id, "subscription_cancelled",
+            title="Subscription ended",
+            body="Your Meridian subscription has been cancelled. Re-subscribe any time from Billing.",
+            link="/billing",
+        )
     elif event == "invoice.payment_failed":
         audit.log(db, tenant.id, "subscription_renewal_failed", status="denied", detail={"event": event})
+        create_notification(
+            db, tenant.id, "subscription_renewal_failed",
+            title="Renewal payment failed",
+            body=(
+                "We couldn't charge your card for this month's renewal. Update your "
+                "payment method in Billing to avoid losing access."
+            ),
+            link="/billing",
+        )
+        notify_owners(
+            tenant_admin_emails(db, tenant.id),
+            "Action needed: your Meridian renewal payment failed",
+            "We couldn't charge your card for this month's Meridian renewal. Please "
+            "update your payment method in Billing to avoid an interruption.",
+        )
     else:
         audit.log(db, tenant.id, "webhook_unhandled_event", detail={"event": event})
 
@@ -359,8 +417,19 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
 
     tenant.subscription_status = "refunded" if refunded else "cancelled"
     tenant.subscription_expires_at = None
+    tenant.expiry_reminder_sent_for = None
     tenant.plan = None
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_cancelled", ctx.user_id,
                detail={"refunded": refunded, "within_refund_window": within_refund_window})
+    create_notification(
+        db, tenant.id, "subscription_cancelled",
+        title="Subscription cancelled",
+        body=(
+            ("Your subscription was cancelled and the last payment refunded. "
+             if refunded else "Your subscription has been cancelled. ")
+            + "You can re-subscribe any time from Billing."
+        ),
+        link="/billing",
+    )
     return _status_for(db, tenant)

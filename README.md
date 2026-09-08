@@ -245,6 +245,36 @@ verified: `GET /billing/plans`' pricing/limits are exactly right, subscribe
 rejects both an unknown plan key and a valid-but-unconfigured one with
 distinct, clear messages, and cancelling clears the plan.
 
+**In-app notifications + subscription notices** (`app/db/models.py`'s
+`Notification`, `app/api/routes_notifications.py`,
+`app/user_notifications.py`, `frontend/components/NotificationBell.tsx`) —
+a notification bell in the dashboard sidebar with an unread badge and a
+dropdown of recent activity, polled every 60s. `Notification` rows are
+per-user (read state is a personal fact), fanned out to a tenant's admins
+using the same recipient list as the owner-activity emails, so the bell
+and those emails always tell the same people. Events wired in so far:
+**subscription activated** (also sends a confirmation email — the billing
+flow previously sent nothing at all on a successful payment), **renews in
+7 days**, **cancelled**, **renewal payment failed** (in-app + email), and
+**a teammate accepted their invite**.
+
+The "renews in 7 days" reminder needs a timer, and this app has no
+in-process scheduler by design (same constraint as the uptime monitor and
+audit-anchor checkpoints). So it's the same shape as the uptime monitor:
+`POST /notifications/reminders/run` does the real work (find every active
+subscription inside the window, send each one notice + email, record it so
+the next day's run doesn't re-send), authenticated by a shared secret
+(`SUBSCRIPTION_REMINDER_SECRET`, `503` until set), and
+`backend/scripts/subscription_reminders.py` + a daily Railway Cron Job
+calls it — see `docs/SUBSCRIPTION_REMINDERS.md`. Idempotent per renewal
+period via `Tenant.expiry_reminder_sent_for` (a renewal advancing
+`subscription_expires_at` re-arms it automatically). Lead time is
+`SUBSCRIPTION_EXPIRY_REMINDER_DAYS` (default 7). Verified end-to-end
+against a real SQLite DB (9 checks: activation drops a notice, per-tenant
+isolation, mark-all-read, the sweep needs its secret, one reminder inside
+the window and none outside it, a second same-period sweep is a no-op, a
+renewal re-arms it, and a cross-tenant mark-read is a silent no-op).
+
 **Free/Pro tiers & sub-accounts** — `Tenant.tier` (`app/db/models.py`) is
 deliberately *derived*, not a stored column: `"pro"` means "currently has
 an active subscription" and nothing else, so it can never drift out of
@@ -2058,13 +2088,19 @@ DB + real FastAPI `TestClient`, DB layer never mocked — see
 cd backend && python tests/run_regressions.py
 ```
 
-`.github/workflows/ci.yml` runs that suite plus an import/route smoke
-test, `pip-audit` (blocking — `pip-audit -r backend/requirements.txt`
-reports **no known vulnerabilities**), the frontend `build` (blocking),
-and `lint` + `npm audit` (advisory), on every PR; Dependabot
-(`.github/dependabot.yml`) opens weekly dependency PRs. The FastAPI /
-Starlette line is on 0.141 / 1.x (`@app.on_event` → the `lifespan`
-context manager in `app/main.py`).
+`.github/workflows/ci.yml` runs that suite (15 checks) plus an
+import/route smoke test, `pip-audit` (blocking — `pip-audit -r
+backend/requirements.txt` reports **no known vulnerabilities**), the
+frontend `build` (blocking), and `lint` + `npm audit` (advisory), on every
+PR; Dependabot (`.github/dependabot.yml`) opens weekly dependency PRs. The
+FastAPI / Starlette line is on 0.141 / 1.x (`@app.on_event` → the
+`lifespan` context manager in `app/main.py`).
+
+Two features need an external timer because this app runs no in-process
+scheduler: automated uptime monitoring (`docs/UPTIME_MONITORING.md`) and
+the subscription-renewal reminder (`docs/SUBSCRIPTION_REMINDERS.md`). Each
+is a small script under `backend/scripts/` that a daily/5-minutely Railway
+Cron Job runs against a shared-secret HTTP endpoint.
 
 ## Architecture
 
