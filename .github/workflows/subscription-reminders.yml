@@ -1,0 +1,44 @@
+name: Subscription reminders
+
+# Sends the "your subscription renews in N days" notice + email. The app
+# has no in-process scheduler by design (see docs/SUBSCRIPTION_REMINDERS.md),
+# so something external has to call the endpoint on a timer. This is the
+# no-extra-infrastructure option: GitHub runs this workflow daily and it
+# just POSTs to the backend's reminder endpoint. All the real work
+# (who's due, sending, once-per-period idempotency) happens server-side.
+#
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   MERIDIAN_API_BASE_URL         e.g. https://<your-backend>.up.railway.app
+#   SUBSCRIPTION_REMINDER_SECRET  the same value set on the backend service
+#
+# The alternative (a Railway Cron Job running
+# backend/scripts/subscription_reminders.py) is also documented - use
+# whichever is less hassle for you; they hit the exact same endpoint.
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # 09:00 UTC daily; the exact time doesn't matter
+  workflow_dispatch: {}    # adds a "Run workflow" button for a manual test
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the daily reminder sweep
+        env:
+          API_BASE: ${{ secrets.MERIDIAN_API_BASE_URL }}
+          SECRET: ${{ secrets.SUBSCRIPTION_REMINDER_SECRET }}
+        run: |
+          if [ -z "$API_BASE" ] || [ -z "$SECRET" ]; then
+            echo "::error::Set MERIDIAN_API_BASE_URL and SUBSCRIPTION_REMINDER_SECRET as repository secrets."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST \
+            -H "X-Reminder-Secret: $SECRET" \
+            "${API_BASE%/}/notifications/reminders/run")
+          echo "HTTP $code"
+          cat /tmp/resp; echo
+          # 503 = the backend doesn't have SUBSCRIPTION_REMINDER_SECRET set yet;
+          # 401 = the two secret values don't match. Both are setup problems
+          # worth failing on so they're visible in the Actions tab.
+          test "$code" = "200"
