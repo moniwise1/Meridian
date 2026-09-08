@@ -264,9 +264,12 @@ audit-anchor checkpoints). So it's the same shape as the uptime monitor:
 `POST /notifications/reminders/run` does the real work (find every active
 subscription inside the window, send each one notice + email, record it so
 the next day's run doesn't re-send), authenticated by a shared secret
-(`SUBSCRIPTION_REMINDER_SECRET`, `503` until set), and
-`backend/scripts/subscription_reminders.py` + a daily Railway Cron Job
-calls it — see `docs/SUBSCRIPTION_REMINDERS.md`. Idempotent per renewal
+(`SUBSCRIPTION_REMINDER_SECRET`, `503` until set), and something external
+calls it once a day: either the bundled GitHub Action
+(`.github/workflows/subscription-reminders.yml`, no extra infrastructure —
+just two repo secrets) or a Railway Cron Job running
+`backend/scripts/subscription_reminders.py`. Setup for both is in
+`docs/SUBSCRIPTION_REMINDERS.md`. Idempotent per renewal
 period via `Tenant.expiry_reminder_sent_for` (a renewal advancing
 `subscription_expires_at` re-arms it automatically). Lead time is
 `SUBSCRIPTION_EXPIRY_REMINDER_DAYS` (default 7). Verified end-to-end
@@ -2098,9 +2101,11 @@ FastAPI / Starlette line is on 0.141 / 1.x (`@app.on_event` → the
 
 Two features need an external timer because this app runs no in-process
 scheduler: automated uptime monitoring (`docs/UPTIME_MONITORING.md`) and
-the subscription-renewal reminder (`docs/SUBSCRIPTION_REMINDERS.md`). Each
-is a small script under `backend/scripts/` that a daily/5-minutely Railway
-Cron Job runs against a shared-secret HTTP endpoint.
+the subscription-renewal reminder (`docs/SUBSCRIPTION_REMINDERS.md`). Both
+come down to "call a shared-secret HTTP endpoint on a schedule" — the
+renewal reminder ships a GitHub Action that does it with no extra
+infrastructure; both also have a `backend/scripts/` script for the Railway
+Cron Job route.
 
 ## Architecture
 
