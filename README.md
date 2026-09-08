@@ -2058,9 +2058,13 @@ DB + real FastAPI `TestClient`, DB layer never mocked — see
 cd backend && python tests/run_regressions.py
 ```
 
-`.github/workflows/ci.yml` runs that suite plus an import smoke test,
-`pip-audit`, and the frontend `lint` + `build` on every PR; Dependabot
-(`.github/dependabot.yml`) opens weekly dependency PRs.
+`.github/workflows/ci.yml` runs that suite plus an import/route smoke
+test, `pip-audit` (blocking — `pip-audit -r backend/requirements.txt`
+reports **no known vulnerabilities**), the frontend `build` (blocking),
+and `lint` + `npm audit` (advisory), on every PR; Dependabot
+(`.github/dependabot.yml`) opens weekly dependency PRs. The FastAPI /
+Starlette line is on 0.141 / 1.x (`@app.on_event` → the `lifespan`
+context manager in `app/main.py`).
 
 ## Architecture
 
