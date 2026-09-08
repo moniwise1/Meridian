@@ -102,6 +102,21 @@ class Settings(BaseSettings):
     # deleted document frees a slot). Bounds disk growth - there was no
     # cap before.
     max_documents_per_tenant: int = 200
+
+    # Malware scanning on document upload (app/security/malware_scan.py).
+    # The existing upload checks (document_intelligence.py) are structural
+    # - real file-type, password-protection, zip-bomb ratios - not a scan
+    # for known malware. Same pattern as email_provider / kms_provider: a
+    # pluggable backend, "off" by default (no behaviour change), "clamav"
+    # for a real clamd daemon reached over its INSTREAM protocol. See
+    # docs/MALWARE_SCANNING.md. When "clamav" and clamd can't be reached,
+    # an upload is refused (503) rather than passed unscanned - flip
+    # malware_scan_fail_open to trade that for availability.
+    malware_scan_provider: str = "off"  # "off" | "clamav"
+    clamav_host: str = ""
+    clamav_port: int = 3310
+    clamav_timeout_seconds: float = 30.0
+    malware_scan_fail_open: bool = False
     # Override for pytesseract's path to the Tesseract binary - needed
     # only where it isn't already resolvable on PATH (e.g. local Windows
     # dev, if its installer didn't add itself to PATH for an already-open

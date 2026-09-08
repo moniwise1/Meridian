@@ -22,6 +22,7 @@ from app.security.auth import get_current_user, AuthContext
 from app.agents.document_intelligence import (
     extract, UnsupportedDocumentType, LockedDocumentError, UnsafeDocumentError,
 )
+from app.security.malware_scan import get_scan_backend
 from app.audit import logger as audit
 from app.config import settings
 
@@ -66,6 +67,25 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
             400, f"File too large ({len(file_bytes)} bytes) — "
                  f"limit is {settings.max_document_upload_bytes} bytes.",
         )
+
+    # Optional malware scan (app/security/malware_scan.py) - a no-op unless
+    # MALWARE_SCAN_PROVIDER=clamav. Runs on the raw bytes before anything
+    # parses them.
+    scan = get_scan_backend().scan(file_bytes)
+    if not scan.clean and scan.signature:
+        audit.log(db, ctx.tenant_id, "document_upload_malware", ctx.user_id, status="denied",
+                   detail={"filename": file.filename, "signature": scan.signature})
+        raise HTTPException(422, "This file was flagged by malware scanning and was not accepted.")
+    if scan.error:
+        if settings.malware_scan_fail_open:
+            audit.log(db, ctx.tenant_id, "document_upload_scan_skipped", ctx.user_id, status="error",
+                       detail={"filename": file.filename, "reason": scan.error})
+        else:
+            audit.log(db, ctx.tenant_id, "document_upload_scan_unavailable", ctx.user_id, status="error",
+                       detail={"filename": file.filename, "reason": scan.error})
+            raise HTTPException(
+                503, "Couldn't scan this file for malware right now. Please try again shortly.",
+            )
 
     try:
         kind, extraction = extract(file.filename or "", file_bytes)
