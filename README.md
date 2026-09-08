@@ -939,6 +939,23 @@ unaffected by any of the above. Also confirmed through a real HTTP round
 trip against the live FastAPI app (register → upload a real encrypted
 PDF → real `422` with the real message).
 
+These are all *structural* checks - they read a file's own declared
+metadata, they don't scan its contents for known malware. An optional
+signature scan on top is available: set `MALWARE_SCAN_PROVIDER=clamav` and
+`app/security/malware_scan.py` runs every upload's raw bytes through a
+ClamAV daemon (`clamd`) over its INSTREAM protocol - a stdlib socket, no
+vendor client library, the same "no SDK" approach as the SMTP backend -
+before anything parses the file. A flagged file is rejected with `422` and
+audited as `document_upload_malware`. Off by default (`"off"` - no extra
+infrastructure, the structural checks still run); when on, a `clamd`
+outage refuses uploads (`503`, `document_upload_scan_unavailable`) rather
+than passing them unscanned, unless `MALWARE_SCAN_FAIL_OPEN=true`.
+Verified with a stub `clamd` speaking the real INSTREAM framing
+(`tests/verify_malware_scan.py`): the wire protocol for a clean stream and
+a `FOUND` verdict, an unreachable daemon surfacing as an error not a
+crash, and the upload route returning `200` / `422` / `503` for
+clean / flagged / unavailable. Setup in `docs/MALWARE_SCANNING.md`.
+
 **Clean, single-pass insight text** (`app/agents/insight_agent.py`,
 `app/agents/query_generator.py`) — the model is now explicitly instructed
 to never show its own reasoning process (arithmetic, reconsidering an
@@ -1981,7 +1998,7 @@ maintaining the status page; see "Internal admin panel" above.
 | Real lawyer review of `/privacy` and `/terms` | The pages exist and accurately describe what the software actually does (see "Legal pages" below), but they were written by inspecting the codebase, not by a lawyer — both pages say so plainly at the top. Get real legal review before relying on them for actual liability protection or NDPR/GDPR compliance. |
 | Event-level product analytics (PostHog/Mixpanel/similar) | A first-party business-metrics dashboard now exists (see "Product analytics" above) - signups/questions per day, an activation funnel, tenant/plan/artifact breakdowns. What's still missing is per-event, per-screen tracking (which button someone clicked, where they dropped off within a single session, session replay) - that needs a real product-analytics tool, deliberately not wired in yet since it would mean sending user behavioral data to a new third-party sub-processor. |
 | Real PDF table structure detection | XLSX/DOCX/PPTX uploaded as document-only analysis sources now get their real tables parsed as structured data and run through genuine computation (see "Structured-table document analysis" above). PDF deliberately doesn't - reliable table detection there needs actual layout analysis (a new dependency, e.g. `pdfplumber`/`camelot`) and is genuinely unreliable on a visually laid-out page; misreading two adjacent columns as one would silently produce a wrong computed number, worse than the existing honest text-extraction fallback. A PDF still gets full document-only analysis, just not this specific upgrade. |
-| Real antivirus/malware scanning on upload | "Verify if it's safe" (see "Locked and unsafe file detection" above) currently means real, concrete checks - is it actually the file type it claims to be, is it password-protected, does its zip structure show zip-bomb-shaped compression ratios - not a scan for embedded malware/exploits. That needs a real scanning engine (ClamAV, a cloud AV API) as new infrastructure, not something addressable by reading a file's own declared metadata the way the checks above do. Worth adding before this app is trusted with files from parties the tenant doesn't fully control. |
+| Malware scanning always-on | The structural upload checks (real file-type, password-protection, zip-bomb ratios - see "Locked and unsafe file detection" above) always run. A real signature scan is now available too but **opt-in**: `MALWARE_SCAN_PROVIDER=clamav` points `app/security/malware_scan.py` at a ClamAV daemon over its INSTREAM protocol (stdlib socket, no vendor SDK), off by default so it needs no extra infrastructure until you want it. Fail-closed (a `clamd` outage refuses uploads) unless `MALWARE_SCAN_FAIL_OPEN=true`. Verified end-to-end with a stub `clamd` (`tests/verify_malware_scan.py`, 8 checks). See `docs/MALWARE_SCANNING.md`. What's still not built: re-scanning on download, and sandbox detonation. |
 
 ## Running it
 
