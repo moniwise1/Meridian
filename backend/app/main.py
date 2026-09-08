@@ -10,6 +10,7 @@ from app.api import (
     routes_connections, routes_ask, routes_audit, routes_auth, routes_artifacts,
     routes_history, routes_scan, routes_documents, routes_billing,
     routes_platform, routes_support, routes_status, routes_mfa, routes_monitor,
+    routes_notifications,
 )
 
 _IS_PRODUCTION = settings.environment == "production"
@@ -104,6 +105,7 @@ app.include_router(routes_platform.router)
 app.include_router(routes_support.router)
 app.include_router(routes_status.router)
 app.include_router(routes_monitor.router)
+app.include_router(routes_notifications.router)
 
 # Generated reports/presentations/exports are served ONLY through the
 # authenticated GET /artifacts/file/{id} route in routes_artifacts.py

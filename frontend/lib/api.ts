@@ -630,6 +630,45 @@ export async function cancelSubscription(): Promise<BillingStatus> {
   return body;
 }
 
+// ---------- Notifications ----------
+
+export type AppNotification = {
+  id: string;
+  // "subscription_activated" | "subscription_expiring" |
+  // "subscription_cancelled" | "subscription_renewal_failed" |
+  // "teammate_joined" — the bell maps this to an icon/accent.
+  kind: string;
+  title: string;
+  body: string;
+  link: string | null;
+  created_at: string;
+  read: boolean;
+};
+
+export type NotificationList = {
+  notifications: AppNotification[];
+  unread_count: number;
+};
+
+export async function listNotifications(): Promise<NotificationList> {
+  const res = await fetch(`${API_BASE}/notifications`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load notifications.");
+  return res.json();
+}
+
+// ids omitted → mark every unread notification read.
+export async function markNotificationsRead(ids?: string[]): Promise<NotificationList> {
+  const res = await fetch(`${API_BASE}/notifications/read`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(ids ? { ids } : { all: true }),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not update notifications.");
+  return res.json();
+}
+
 // ---------- Ask ----------
 
 export type StepEvent = {

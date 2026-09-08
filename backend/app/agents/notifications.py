@@ -108,6 +108,42 @@ def send_invite_email(to_email: str, org_label: str, inviter_email: str, role: s
     _send_best_effort(to_email, subject, body)
 
 
+def send_subscription_confirmation(
+    to_email: str, company_name: str, plan_label: str, amount_naira: str, renews_on: str
+) -> None:
+    subject = "Your Meridian subscription is active"
+    body = (
+        f"Hi,\n\n"
+        f"{company_name}'s Meridian subscription is now active.\n\n"
+        f"Plan: {plan_label}\n"
+        f"Amount: {amount_naira} / month\n"
+        f"Renews on: {renews_on}\n\n"
+        f"You can review or cancel your plan any time from Billing in the app. "
+        f"A cancellation within the first {7} days is a full self-serve refund.\n\n"
+        f"Thanks for choosing Meridian.\n\n"
+        f"{FOUNDER_NAME}\n"
+        f"Founder, Meridian"
+    )
+    _send_best_effort(to_email, subject, body)
+
+
+def send_subscription_expiring(
+    to_email: str, company_name: str, renews_on: str, days_left: int
+) -> None:
+    day_word = "day" if days_left == 1 else "days"
+    subject = f"Your Meridian subscription renews in {days_left} {day_word}"
+    body = (
+        f"Hi,\n\n"
+        f"A heads-up: {company_name}'s Meridian subscription is due to renew on "
+        f"{renews_on} ({days_left} {day_word} from now).\n\n"
+        f"You don't need to do anything - the renewal is automatic as long as your "
+        f"card on file is valid. If you want to change or cancel the plan, or update "
+        f"the payment method, do it from Billing in the app before the renewal date.\n\n"
+        f"Meridian"
+    )
+    _send_best_effort(to_email, subject, body)
+
+
 def notify_owners(recipients: list[str], subject: str, message: str) -> None:
     """Emails every given "account owner" address about a critical
     activity - a sign-in, a teammate/staff invite going out, an invite

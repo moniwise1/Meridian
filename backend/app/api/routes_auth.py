@@ -32,6 +32,7 @@ from app.audit import logger as audit
 from app.invites import create_invite, get_invite_by_token, list_invites, count_pending, revoke_invite, mark_accepted
 from app.agents.notifications import send_welcome_email, send_invite_email, notify_owners, tenant_admin_emails
 from app.agents.email_delivery import normalize_outbound_email_policy, VALID_OUTBOUND_EMAIL_MODES
+from app.user_notifications import create_notification, tenant_admin_user_ids
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -478,6 +479,16 @@ def accept_team_invite(body: AcceptInviteRequest, db: Session = Depends(get_db))
         tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
         f"{user.email} joined {tenant.name if tenant else 'your workspace'} on Meridian",
         f"{user.email} accepted their invite and joined as a {user.role}.",
+    )
+    create_notification(
+        db, user.tenant_id, "teammate_joined",
+        title="New teammate joined",
+        body=f"{user.email} accepted their invite and joined as a {user.role}.",
+        link="/team",
+        # Existing admins only - not the person who just joined, even if
+        # they were invited straight in as an admin (mirrors the
+        # exclude_user_id on the owner-activity email just above).
+        user_ids=[uid for uid in tenant_admin_user_ids(db, user.tenant_id) if uid != user.id],
     )
     audit.log(db, user.tenant_id, "team_invite_accepted", user.id, detail={"email": user.email, "role": user.role})
 

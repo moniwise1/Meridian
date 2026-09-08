@@ -56,6 +56,7 @@ _ADDED_COLUMNS = [
     ("tenants", "subdomain", "VARCHAR"),
     ("uploaded_documents", "images_described", "INTEGER"),
     ("tenants", "outbound_email_policy", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),
+    ("tenants", "expiry_reminder_sent_for", "TIMESTAMP"),
 ]
 
 

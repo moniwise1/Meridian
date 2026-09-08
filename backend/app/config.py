@@ -182,6 +182,21 @@ class Settings(BaseSettings):
     paystack_plan_code_premium: str = ""
     paystack_plan_amount_premium: int = 2_500_000  # NGN 25,000
 
+    # "Your subscription renews in N days" reminder (in-app notification +
+    # email). How many days before subscription_expires_at the reminder
+    # goes out.
+    subscription_expiry_reminder_days: int = 7
+    # Shared secret authenticating the external cron that drives the
+    # reminder run (POST /notifications/reminders/run) - same "machine, not
+    # human" auth as uptime_monitor_secret / the Paystack webhook HMAC,
+    # since a scheduled job has no human to log in as. This app has no
+    # in-process scheduler by design (see uptime_monitor_secret above and
+    # app/audit/anchor.py); pair this with a Railway Cron Job or a
+    # scheduled GitHub Action - see docs/SUBSCRIPTION_REMINDERS.md. Unset
+    # (default) makes that endpoint return 503, so a deployment that hasn't
+    # set the cron up can't have a stray request trigger a reminder sweep.
+    subscription_reminder_secret: str = ""
+
     # Email delivery (app/agents/email_delivery.py). "console" (default):
     # logs instead of sending - the original MVP stand-in, still what a
     # fresh dev environment gets with zero config. "smtp": a real generic
