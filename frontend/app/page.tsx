@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { loadSession, type Session } from "@/lib/auth";
+import { useSession, useHydrated } from "@/lib/useSession";
 import { getTenantSubdomain } from "@/lib/subdomain";
 import LandingPage from "@/components/LandingPage";
 import AskDashboard from "@/components/AskDashboard";
@@ -25,18 +25,15 @@ import OnboardingIntro from "@/components/OnboardingIntro";
 // is yet actually lands.
 export default function RootPage() {
   const router = useRouter();
-  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const hydrated = useHydrated();
+  const session = useSession();
 
   useEffect(() => {
-    setSession(loadSession());
-  }, []);
-
-  useEffect(() => {
-    if (session === undefined || session) return; // only redirect once we know there's no session
+    if (!hydrated || session) return; // only redirect once we know there's no session
     if (getTenantSubdomain()) router.replace("/login");
-  }, [session, router]);
+  }, [hydrated, session, router]);
 
-  if (session === undefined) return null; // avoid a flash of the wrong page before this resolves
+  if (!hydrated) return null; // avoid a flash of the wrong page before the client reads the session
   if (!session) return getTenantSubdomain() ? null : <LandingPage />;
 
   return (

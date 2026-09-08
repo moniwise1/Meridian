@@ -76,11 +76,7 @@ jobs:
           NEXT_PUBLIC_API_BASE: http://localhost:8000
         run: npm run build
 
-      - name: Lint (advisory)
-        # 13 pre-existing errors from eslint-config-next 16's newer
-        # react-hooks rules on code written against older ones - fix them
-        # incrementally, then drop continue-on-error to make this blocking.
-        continue-on-error: true
+      - name: Lint
         run: npm run lint
 
       - name: npm audit (advisory)

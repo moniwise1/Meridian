@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { loadPlatformSession, clearPlatformSession, type PlatformSession } from "@/lib/platformAuth";
+import { clearPlatformSession } from "@/lib/platformAuth";
+import { usePlatformSession, useHydrated } from "@/lib/useSession";
 
 const NAV = [
   { href: "/platform", label: "Dashboard" },
@@ -18,7 +19,8 @@ const NAV = [
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [session, setSession] = useState<PlatformSession | null | undefined>(undefined);
+  const hydrated = useHydrated();
+  const session = usePlatformSession();
 
   // /platform/accept-invite is the staff-invite acceptance page (see
   // lib/platformApi.ts's acceptStaffInvite) - visited by someone with no
@@ -26,14 +28,12 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   const isPublicRoute = pathname === "/platform/login" || pathname === "/platform/accept-invite";
 
   useEffect(() => {
-    if (isPublicRoute) return;
-    const s = loadPlatformSession();
-    setSession(s);
-    if (!s) router.replace("/platform/login");
-  }, [pathname, router, isPublicRoute]);
+    if (isPublicRoute || !hydrated) return;
+    if (!session) router.replace("/platform/login");
+  }, [pathname, router, isPublicRoute, hydrated, session]);
 
   if (isPublicRoute) return <>{children}</>;
-  if (session === undefined || !session) return null; // avoid a flash / mid-redirect
+  if (!hydrated || !session) return null; // avoid a flash / mid-redirect
 
   function handleLogout() {
     clearPlatformSession();

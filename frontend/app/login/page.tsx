@@ -60,8 +60,11 @@ function LoginPageInner() {
   // the wrong screen" pattern AuthGate already uses elsewhere.
   const [tenantContext, setTenantContext] = useState<TenantContext>(undefined);
   useEffect(() => {
+    // getTenantSubdomain() reads window.location.hostname - browser-only,
+    // so this resolution can only happen after mount.
     const sub = getTenantSubdomain();
     if (!sub) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronous branch of the above browser-only read; no render-time source
       setTenantContext("none");
       return;
     }

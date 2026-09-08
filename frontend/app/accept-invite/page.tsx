@@ -16,20 +16,21 @@ function AcceptInvitePageInner() {
   const token = searchParams.get("token") ?? "";
 
   const [invite, setInvite] = useState<TeamInviteLookup | null>(null);
-  const [lookupError, setLookupError] = useState("");
+  const [fetchError, setFetchError] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
 
+  // A missing token is knowable at render time (it's a URL param) - no
+  // need to route it through an effect + setState.
+  const lookupError = !token ? "This invite link is missing its token." : fetchError;
+
   useEffect(() => {
-    if (!token) {
-      setLookupError("This invite link is missing its token.");
-      return;
-    }
+    if (!token) return;
     lookupTeamInvite(token)
       .then(setInvite)
-      .catch((e) => setLookupError((e as Error).message));
+      .catch((e) => setFetchError((e as Error).message));
   }, [token]);
 
   async function handleSubmit(e: React.FormEvent) {

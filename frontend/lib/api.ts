@@ -13,7 +13,12 @@ function authHeaders(): Record<string, string> {
 async function handleAuthFailure(res: Response) {
   if (res.status === 401) {
     clearSession();
-    if (typeof window !== "undefined") window.location.href = "/login";
+    // A hard navigation on purpose - a 401 means the session is gone, and
+    // a full reload is the cleanest way to drop any stale in-memory state
+    // that assumed one. This is a plain module function, not a component,
+    // so useRouter()/redirect() aren't available here.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate hard reload on session loss, outside React
+    if (typeof window !== "undefined") window.location.assign("/login");
     throw new AuthError("Session expired. Please sign in again.");
   }
 }
