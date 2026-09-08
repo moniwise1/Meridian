@@ -1,13 +1,14 @@
 name: Subscription reminders
 
-# Sends the "your subscription renews in N days" notice + email. The app
-# has no in-process scheduler by design (see docs/SUBSCRIPTION_REMINDERS.md),
-# so something external has to call the endpoint on a timer. This is the
-# no-extra-infrastructure option: GitHub runs this workflow daily and it
-# just POSTs to the backend's reminder endpoint. All the real work
-# (who's due, sending, once-per-period idempotency) happens server-side.
+# OPTIONAL. The "renews in N days" reminder already fires on its own
+# whenever the team opens the dashboard (the notification bell checks for
+# it) - see docs/SUBSCRIPTION_REMINDERS.md. This workflow only adds a
+# guaranteed daily trigger for a team that might not log in during the
+# window. It just POSTs the backend's reminder endpoint; all the real work
+# (who's due, sending, once-per-period idempotency) is server-side and
+# shared with the on-poll path, so the two can't double-send.
 #
-# Needs two repository secrets (Settings > Secrets and variables > Actions):
+# To enable it, add two repository secrets (Settings > Secrets and variables > Actions):
 #   MERIDIAN_API_BASE_URL         e.g. https://<your-backend>.up.railway.app
 #   SUBSCRIPTION_REMINDER_SECRET  the same value set on the backend service
 #

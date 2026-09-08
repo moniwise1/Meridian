@@ -260,23 +260,28 @@ flow previously sent nothing at all on a successful payment), **renews in
 
 The "renews in 7 days" reminder needs a timer, and this app has no
 in-process scheduler by design (same constraint as the uptime monitor and
-audit-anchor checkpoints). So it's the same shape as the uptime monitor:
-`POST /notifications/reminders/run` does the real work (find every active
-subscription inside the window, send each one notice + email, record it so
-the next day's run doesn't re-send), authenticated by a shared secret
-(`SUBSCRIPTION_REMINDER_SECRET`, `503` until set), and something external
-calls it once a day: either the bundled GitHub Action
-(`.github/workflows/subscription-reminders.yml`, no extra infrastructure —
-just two repo secrets) or a Railway Cron Job running
-`backend/scripts/subscription_reminders.py`. Setup for both is in
-`docs/SUBSCRIPTION_REMINDERS.md`. Idempotent per renewal
-period via `Tenant.expiry_reminder_sent_for` (a renewal advancing
-`subscription_expires_at` re-arms it automatically). Lead time is
-`SUBSCRIPTION_EXPIRY_REMINDER_DAYS` (default 7). Verified end-to-end
-against a real SQLite DB (9 checks: activation drops a notice, per-tenant
-isolation, mark-all-read, the sweep needs its secret, one reminder inside
-the window and none outside it, a second same-period sweep is a no-op, a
-renewal re-arms it, and a cross-tenant mark-read is a silent no-op).
+audit-anchor checkpoints) — so it does what the monthly usage caps do:
+compute on read. `GET /notifications` (the bell, polled while anyone on the
+team has the app open) calls `maybe_send_expiry_reminder` for the caller's
+tenant — a couple of date comparisons on each poll, a DB write + email
+only the one time per period it actually fires. So reminders flow with
+**zero configuration** for any team that logs in during the window.
+`POST /notifications/reminders/run` runs the same per-tenant helper across
+every active subscription, gated by a shared secret
+(`SUBSCRIPTION_REMINDER_SECRET`, `503` until set); it's **optional**, for
+guaranteed timing even for a team that doesn't open the app — driven by
+the bundled GitHub Action (`.github/workflows/subscription-reminders.yml`,
+just two repo secrets) or a Railway Cron Job
+(`backend/scripts/subscription_reminders.py`). Both paths share the
+once-per-renewal guard (`Tenant.expiry_reminder_sent_for`, which a renewal
+advancing `subscription_expires_at` re-arms automatically), so they can't
+double-send. Lead time is `SUBSCRIPTION_EXPIRY_REMINDER_DAYS` (default 7).
+Setup (only if you want the cron) is in `docs/SUBSCRIPTION_REMINDERS.md`.
+Verified end-to-end against a real SQLite DB (10 checks: activation drops a
+notice, per-tenant isolation, mark-all-read, the sweep needs its secret,
+one reminder inside the window and none outside it, a second sweep is a
+no-op, a renewal re-arms it, a bare bell poll fires a due reminder on its
+own without any cron, and a cross-tenant mark-read is a silent no-op).
 
 **Free/Pro tiers & sub-accounts** — `Tenant.tier` (`app/db/models.py`) is
 deliberately *derived*, not a stored column: `"pro"` means "currently has
@@ -2099,13 +2104,12 @@ PR; Dependabot (`.github/dependabot.yml`) opens weekly dependency PRs. The
 FastAPI / Starlette line is on 0.141 / 1.x (`@app.on_event` → the
 `lifespan` context manager in `app/main.py`).
 
-Two features need an external timer because this app runs no in-process
-scheduler: automated uptime monitoring (`docs/UPTIME_MONITORING.md`) and
-the subscription-renewal reminder (`docs/SUBSCRIPTION_REMINDERS.md`). Both
-come down to "call a shared-secret HTTP endpoint on a schedule" — the
-renewal reminder ships a GitHub Action that does it with no extra
-infrastructure; both also have a `backend/scripts/` script for the Railway
-Cron Job route.
+This app runs no in-process scheduler by design. Automated uptime
+monitoring (`docs/UPTIME_MONITORING.md`) therefore needs an external timer
+(a script + a shared-secret endpoint). The subscription-renewal reminder
+(`docs/SUBSCRIPTION_REMINDERS.md`) does not — it computes on read off the
+notification-bell poll — but ships a GitHub Action / cron script anyway for
+teams that want the timing guaranteed regardless of who's logged in.
 
 ## Architecture
 

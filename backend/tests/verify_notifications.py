@@ -128,6 +128,21 @@ assert r.json() == {"checked": 2, "reminded": 1}, r.json()
 assert client.get("/notifications", headers=acmeH).json()["unread_count"] == 2, "renewal reminder not added"
 print("8. OK  expiry date moved (renewal) -> reminder re-armed and sent once for the new period")
 
+# --- H2. polling the bell (GET /notifications) fires a due reminder itself,
+#         with no cron / sweep involved at all ---
+acme_row = db.query(Tenant).filter_by(id=acme.id).one()
+acme_row.subscription_expires_at = datetime.utcnow() + timedelta(days=2)  # another renewal
+db.commit()
+poll = client.get("/notifications", headers=acmeH).json()   # this GET does the work
+assert poll["unread_count"] == 3, poll                      # F + H + this one, all unread
+assert poll["notifications"][0]["kind"] == "subscription_expiring", poll["notifications"][0]
+db.expire_all()
+assert db.query(Tenant).filter_by(id=acme.id).one().expiry_reminder_sent_for is not None
+# a second poll the same period does NOT double-send
+assert client.get("/notifications", headers=acmeH).json()["unread_count"] == 3, "bell poll double-sent"
+assert client.get("/notifications", headers=otherH).json()["unread_count"] == 0, "Other Co reminded by a poll"
+print("9. OK  a bell poll fires a due reminder on its own - no cron needed - and won't repeat it")
+
 # --- I. cross-tenant write guard on mark-read ---
 db.expire_all()
 acme_unread = (
@@ -141,7 +156,7 @@ assert r.status_code == 200 and r.json()["unread_count"] == 0, r.json()
 db.expire_all()
 assert db.query(Notification).filter_by(id=acme_unread.id).one().read_at is None, \
     "Other Co marked Acme's notification read across the tenant boundary"
-assert client.get("/notifications", headers=acmeH).json()["unread_count"] == 2
-print("9. OK  marking another tenant's notification id read is a silent no-op")
+assert client.get("/notifications", headers=acmeH).json()["unread_count"] == 3
+print("10. OK  marking another tenant's notification id read is a silent no-op")
 
 print("\nALL CHECKS PASSED")

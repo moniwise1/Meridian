@@ -15,14 +15,16 @@ Two audiences, two auth models:
     so it is NOT a human route - it's authenticated by a shared secret
     (SUBSCRIPTION_REMINDER_SECRET), the same "machine, not human" auth as
     /monitor/heartbeat and the Paystack webhook. This app has no
-    in-process scheduler by design; an external cron calls this daily -
-    see docs/SUBSCRIPTION_REMINDERS.md. Idempotent: each tenant is
-    reminded once per billing period, tracked by
-    Tenant.expiry_reminder_sent_for, not once per day for the whole window.
+    in-process scheduler by design; an external cron MAY call this daily
+    for guaranteed timing - see docs/SUBSCRIPTION_REMINDERS.md. It is not
+    required: GET /notifications also fires any due reminder
+    opportunistically (see maybe_send_expiry_reminder), so normal team
+    activity keeps reminders flowing even with no cron wired up. Both
+    paths share the same once-per-period guard
+    (Tenant.expiry_reminder_sent_for), so they can't double-send.
 """
 import hmac
-import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
@@ -30,11 +32,9 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.session import get_db
-from app.db.models import Notification, Tenant, User
+from app.db.models import Notification, Tenant
 from app.security.auth import get_current_user, AuthContext
-from app.agents.notifications import send_subscription_expiring
-from app.user_notifications import create_notification, tenant_admin_user_ids
-from app.audit import logger as audit
+from app.user_notifications import maybe_send_expiry_reminder
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -56,12 +56,7 @@ class NotificationList(BaseModel):
     unread_count: int
 
 
-@router.get("", response_model=NotificationList)
-def list_notifications(
-    limit: int = 30,
-    db: Session = Depends(get_db),
-    ctx: AuthContext = Depends(get_current_user),
-):
+def _list_for(db: Session, ctx: AuthContext, limit: int = 30) -> NotificationList:
     rows = (
         db.query(Notification)
         .filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
@@ -88,6 +83,23 @@ def list_notifications(
     )
 
 
+@router.get("", response_model=NotificationList)
+def list_notifications(
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    ctx: AuthContext = Depends(get_current_user),
+):
+    # The bell polls this endpoint while anyone on the team has the app
+    # open - so it doubles as the "is a renewal reminder due?" tick that a
+    # deployment without an external cron would otherwise never get. Cheap
+    # (a couple of date comparisons); only touches the DB the one time per
+    # period it actually fires. Best-effort inside the helper - a hiccup
+    # here never breaks loading the bell.
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    maybe_send_expiry_reminder(db, tenant)
+    return _list_for(db, ctx, limit)
+
+
 class MarkReadRequest(BaseModel):
     # Specific ids to mark read, or all=True for "mark everything read".
     # Exactly one is expected; all=True wins if both are sent.
@@ -112,7 +124,7 @@ def mark_read(
     for row in q.all():
         row.read_at = now
     db.commit()
-    return list_notifications(limit=30, db=db, ctx=ctx)
+    return _list_for(db, ctx)
 
 
 # --------------------------------------------------------------------------
@@ -140,21 +152,13 @@ class ReminderRunResult(BaseModel):
 )
 def run_expiry_reminders(db: Session = Depends(get_db)) -> ReminderRunResult:
     """Called on a daily schedule by an external cron (a Railway Cron Job
-    or a scheduled GitHub Action - see docs/SUBSCRIPTION_REMINDERS.md).
-    Sends the "your subscription renews in N days" notice - in-app and by
-    email - to every tenant whose active subscription expires within the
-    reminder window and that hasn't already been reminded for this exact
-    expiry date. Safe to run more than once a day: a second run the same
-    day is a near-total no-op (every match already has
-    expiry_reminder_sent_for set to the current expiry)."""
-    window_days = settings.subscription_expiry_reminder_days
-    now = datetime.utcnow()
-    cutoff = now + timedelta(days=window_days)
-
-    # Every active subscription with a known renewal date - `checked` in
-    # the result is this whole count (a stable "how many I'm tracking"
-    # number for the cron's own logs), the reminder itself only fires
-    # inside the window.
+    or the bundled GitHub Action - see docs/SUBSCRIPTION_REMINDERS.md) for
+    guaranteed timing. Not required for reminders to work at all -
+    GET /notifications fires due reminders opportunistically too - but a
+    cron catches a tenant whose team simply hasn't opened the app during
+    the window. Idempotent: shares Tenant.expiry_reminder_sent_for with
+    that opportunistic path, so a reminder is sent once per renewal period
+    no matter which trigger gets there first."""
     tenants = (
         db.query(Tenant)
         .filter(
@@ -163,36 +167,5 @@ def run_expiry_reminders(db: Session = Depends(get_db)) -> ReminderRunResult:
         )
         .all()
     )
-
-    reminded = 0
-    for tenant in tenants:
-        expires_at = tenant.subscription_expires_at
-        if not (now < expires_at <= cutoff):
-            continue  # not inside the reminder window (yet, or already past)
-        if tenant.expiry_reminder_sent_for == expires_at:
-            continue  # already reminded for this exact period
-
-        # Whole days, rounded UP - an expiry 4 days and 20 hours out is
-        # "5 days", not "4" (a plain .days attribute truncates).
-        days_left = max(1, math.ceil((expires_at - now).total_seconds() / 86400))
-        renews_on = expires_at.strftime("%d %B %Y")
-
-        create_notification(
-            db, tenant.id, "subscription_expiring",
-            title=f"Subscription renews in {days_left} day{'s' if days_left != 1 else ''}",
-            body=(
-                f"Your Meridian subscription is due to renew on {renews_on}. "
-                f"No action needed unless you want to change or cancel the plan."
-            ),
-            link="/billing",
-        )
-        for email in (u.email for u in db.query(User).filter_by(tenant_id=tenant.id, role="admin")):
-            send_subscription_expiring(email, tenant.name, renews_on, days_left)
-
-        tenant.expiry_reminder_sent_for = expires_at
-        db.commit()
-        audit.log(db, tenant.id, "subscription_expiry_reminder_sent", None,
-                  detail={"renews_on": renews_on, "days_left": days_left})
-        reminded += 1
-
+    reminded = sum(1 for t in tenants if maybe_send_expiry_reminder(db, t))
     return ReminderRunResult(checked=len(tenants), reminded=reminded)
