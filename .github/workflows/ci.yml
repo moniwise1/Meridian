@@ -31,24 +31,27 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pip-audit
 
-      - name: Import smoke test
+      - name: Import + route smoke test
         working-directory: backend
         env:
           APP_SECRET_KEY: dGVzdC1vbmx5LWZlcm5ldC1rZXktMzJieXRlcy0wMDA=
-        run: python -c "import app.main; print(len(app.main.app.routes), 'routes')"
+        run: |
+          python -c "
+          from fastapi.testclient import TestClient
+          import app.main as m
+          c = TestClient(m.app)
+          assert c.get('/health').json() == {'status': 'ok'}
+          assert c.get('/billing/plans').status_code == 200
+          assert c.get('/status').status_code == 200
+          print('smoke ok')
+          "
 
       - name: Security regression checks
         working-directory: backend
         run: python tests/run_regressions.py
 
-      - name: Dependency audit (advisory - does not block the merge)
-        continue-on-error: true
-        run: |
-          # PYSEC-2026-1942 (FileResponse Range O(n^2)) is triaged as
-          # low-severity and needs the FastAPI 0.141 / Starlette 1.x
-          # migration to clear - see PR #54. Drop the --ignore once that
-          # lands, and make this step blocking.
-          pip-audit -r backend/requirements.txt --ignore-vuln PYSEC-2026-1942
+      - name: Dependency audit
+        run: pip-audit -r backend/requirements.txt
 
   frontend:
     runs-on: ubuntu-latest

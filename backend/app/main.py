@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -13,9 +14,23 @@ from app.api import (
 
 _IS_PRODUCTION = settings.environment == "production"
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Runs once at startup (replaces the deprecated @app.on_event("startup")).
+    # Hard-fails the process in a production / real-KMS deployment if the
+    # signing secrets aren't set and distinct, or KMS isn't real - see
+    # app/config.py. Non-production (the default) is unaffected.
+    for warning in validate_startup_config():
+        logging.getLogger("meridian.config").warning("startup config: %s", warning)
+    init_db()
+    yield
+
+
 app = FastAPI(
     title="Secure AI Enterprise Analytics Agent",
     version="0.1.0",
+    lifespan=lifespan,
     # The interactive docs publish the full API surface. Off in production
     # (a security-review finding); still on in development, where they're
     # genuinely useful. openapi_url must go too or /docs can be rebuilt
@@ -68,16 +83,6 @@ app.add_middleware(
 
 os.makedirs(settings.artifacts_dir, exist_ok=True)
 os.makedirs(settings.documents_dir, exist_ok=True)
-
-
-@app.on_event("startup")
-def on_startup():
-    # Hard-fails the process in a production / real-KMS deployment if the
-    # signing secrets aren't set and distinct, or KMS isn't real - see
-    # app/config.py. Non-production (the default) is unaffected.
-    for warning in validate_startup_config():
-        logging.getLogger("meridian.config").warning("startup config: %s", warning)
-    init_db()
 
 
 @app.get("/health")
