@@ -13,7 +13,9 @@ function authHeaders(): Record<string, string> {
 async function handleAuthFailure(res: Response) {
   if (res.status === 401) {
     clearPlatformSession();
-    if (typeof window !== "undefined") window.location.href = "/platform/login";
+    // Hard navigation on purpose - see the matching note in lib/api.ts.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate hard reload on session loss, outside React
+    if (typeof window !== "undefined") window.location.assign("/platform/login");
     throw new PlatformAuthError("Session expired. Please sign in again.");
   }
 }

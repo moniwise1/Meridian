@@ -50,7 +50,9 @@ export default function BillingPage() {
     try {
       const callbackUrl = `${window.location.origin}/billing/callback`;
       const result = await subscribe(planKey, callbackUrl);
-      window.location.href = result.authorization_url;
+      // Off to Paystack's hosted checkout (an external origin) - a full
+      // navigation, not a client-side route change.
+      window.location.assign(result.authorization_url);
     } catch (e) {
       setError((e as Error).message);
       setBusy(null);

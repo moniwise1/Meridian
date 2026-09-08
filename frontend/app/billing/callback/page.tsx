@@ -7,28 +7,32 @@ import { verifyPayment } from "@/lib/api";
 
 function CallbackContent() {
   const searchParams = useSearchParams();
-  const [state, setState] = useState<"verifying" | "success" | "error">("verifying");
-  const [error, setError] = useState("");
+  // Paystack redirects back with ?reference=... (sometimes also ?trxref=...).
+  const reference = searchParams.get("reference") ?? searchParams.get("trxref");
+  // A missing reference is knowable at render - only the server-verify
+  // result needs state.
+  const [verify, setVerify] = useState<"verifying" | "success" | { error: string }>("verifying");
 
   useEffect(() => {
-    // Paystack redirects back with ?reference=... (sometimes also
-    // ?trxref=...) - never trust that the redirect itself means the
-    // payment succeeded, always re-verify server-side (the frontend
-    // equivalent of the backend's own "never trust the client's claim"
-    // rule for this exact step).
-    const reference = searchParams.get("reference") ?? searchParams.get("trxref");
-    if (!reference) {
-      setState("error");
-      setError("No payment reference in the redirect — if you completed checkout, check Billing directly.");
-      return;
-    }
+    if (!reference) return;
+    // Never trust that the redirect itself means the payment succeeded -
+    // always re-verify server-side (the frontend equivalent of the
+    // backend's own "never trust the client's claim" rule for this step).
     verifyPayment(reference)
-      .then(() => setState("success"))
-      .catch((e) => {
-        setState("error");
-        setError(e.message);
-      });
-  }, [searchParams]);
+      .then(() => setVerify("success"))
+      .catch((e) => setVerify({ error: (e as Error).message }));
+  }, [reference]);
+
+  const state: "verifying" | "success" | "error" = !reference
+    ? "error"
+    : typeof verify === "string"
+      ? verify
+      : "error";
+  const error = !reference
+    ? "No payment reference in the redirect — if you completed checkout, check Billing directly."
+    : typeof verify === "object"
+      ? verify.error
+      : "";
 
   return (
     <div className="bg-panel border border-line rounded-[4px] p-5 text-center">

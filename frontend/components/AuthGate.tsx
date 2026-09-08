@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { loadSession, type Session } from "@/lib/auth";
+import { useSession, useHydrated } from "@/lib/useSession";
 import InactivityWatcher from "@/components/InactivityWatcher";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const hydrated = useHydrated();
+  const session = useSession();
 
   // /platform/* is a completely separate app surface with its own
   // session/auth (app/platform/layout.tsx, lib/platformAuth.ts) - the
@@ -47,14 +48,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const isRoot = pathname === "/";
 
   useEffect(() => {
-    if (skipGate) return;
-    const s = loadSession();
-    setSession(s);
-    if (!s && pathname !== "/login" && !isRoot) router.replace("/login");
-  }, [pathname, router, skipGate, isRoot]);
+    if (skipGate || !hydrated) return;
+    if (!session && pathname !== "/login" && !isRoot) router.replace("/login");
+  }, [pathname, router, skipGate, isRoot, hydrated, session]);
 
   if (pathname === "/login" || skipGate) return <>{children}</>;
-  if (session === undefined) return null; // avoid a flash before session check resolves
+  if (!hydrated) return null; // avoid a flash before the client reads the session
   if (!session) return isRoot ? <>{children}</> : null; // "/" renders (the landing page); everything else waits on its redirect
 
   return (

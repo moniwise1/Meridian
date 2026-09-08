@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { loadSession } from "@/lib/auth";
+import { useSession } from "@/lib/useSession";
 
 const STEPS = [
   {
@@ -31,28 +31,30 @@ function storageKey(userId: string) {
 }
 
 export default function OnboardingIntro() {
+  const session = useSession();
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
 
   useEffect(() => {
-    const session = loadSession();
     if (!session) return;
     // Per-user, client-side only — a lightweight "have they seen this"
     // flag, not anything security- or billing-relevant, so localStorage is
     // the right tool here rather than a backend field (see CLAUDE.md's
     // browser-storage guidance: fine for per-viewer UX convenience, never
-    // for state that must be shared or reliably persisted).
+    // for state that must be shared or reliably persisted). localStorage
+    // is browser-only, so this "should the intro show" read can only
+    // happen post-mount - exactly what an effect is for.
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- gated on a browser-only localStorage read that has no render-time equivalent
       if (!localStorage.getItem(storageKey(session.userId))) setVisible(true);
     } catch {
       // localStorage unavailable (private window, blocked site data) -
       // just skip the intro rather than risk it reappearing every visit.
     }
-  }, []);
+  }, [session]);
 
   function dismiss() {
     setVisible(false);
-    const session = loadSession();
     if (!session) return;
     try {
       localStorage.setItem(storageKey(session.userId), "1");

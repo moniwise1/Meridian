@@ -2099,10 +2099,12 @@ cd backend && python tests/run_regressions.py
 `.github/workflows/ci.yml` runs that suite (15 checks) plus an
 import/route smoke test, `pip-audit` (blocking — `pip-audit -r
 backend/requirements.txt` reports **no known vulnerabilities**), the
-frontend `build` (blocking), and `lint` + `npm audit` (advisory), on every
-PR; Dependabot (`.github/dependabot.yml`) opens weekly dependency PRs. The
-FastAPI / Starlette line is on 0.141 / 1.x (`@app.on_event` → the
-`lifespan` context manager in `app/main.py`).
+frontend `build` and `lint` (both blocking — the `eslint-config-next` 16
+`react-hooks` backlog is cleared, mostly by moving session reads onto a
+`useSyncExternalStore` hook, `lib/useSession.ts`), and `npm audit`
+(advisory), on every PR; Dependabot (`.github/dependabot.yml`) opens
+weekly dependency PRs. The FastAPI / Starlette line is on 0.141 / 1.x
+(`@app.on_event` → the `lifespan` context manager in `app/main.py`).
 
 This app runs no in-process scheduler by design. Automated uptime
 monitoring (`docs/UPTIME_MONITORING.md`) therefore needs an external timer

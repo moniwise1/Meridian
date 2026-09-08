@@ -19,9 +19,13 @@ export default function HandoffPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    // The token lives in the URL fragment, which is browser-only and not
+    // available until this runs - reading it and exchanging it for a
+    // session is exactly what an effect is for.
     const hash = window.location.hash; // "#token=..."
     const token = new URLSearchParams(hash.replace(/^#/, "")).get("token");
     if (!token) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronous failure of the above URL read; no render-time source for it
       setError("Missing handoff token.");
       return;
     }

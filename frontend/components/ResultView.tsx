@@ -56,11 +56,14 @@ function PieChart({ data }: { data: { group: string; total: number }[] }) {
   const total = slices.reduce((sum, d) => sum + Math.max(0, d.total), 0);
   if (total <= 0) return null;
 
-  let cursor = 0;
+  // Cumulative slice totals (bounds[i] = sum of slices 0..i), built by
+  // pushing to a local array rather than reassigning a `let` across
+  // .map() calls - the latter is flagged by React's render-purity rule.
+  const bounds: number[] = [];
+  slices.forEach((d) => bounds.push((bounds[bounds.length - 1] ?? 0) + Math.max(0, d.total)));
   const stops = slices.map((d, i) => {
-    const start = (cursor / total) * 360;
-    cursor += Math.max(0, d.total);
-    const end = (cursor / total) * 360;
+    const start = ((i === 0 ? 0 : bounds[i - 1]) / total) * 360;
+    const end = (bounds[i] / total) * 360;
     return `${PIE_COLORS[i % PIE_COLORS.length]} ${start}deg ${end}deg`;
   });
 

@@ -12,7 +12,6 @@ export default function PlatformTenantsPage() {
   const [tenants, setTenants] = useState<PlatformTenant[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { loadSession, clearSession, type Session } from "@/lib/auth";
+import { clearSession } from "@/lib/auth";
+import { useSession } from "@/lib/useSession";
 import NotificationBell from "@/components/NotificationBell";
 
 const NAV = [
@@ -24,11 +24,7 @@ const NAV = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [session, setSession] = useState<Session | null>(null);
-
-  useEffect(() => {
-    setSession(loadSession());
-  }, [pathname]);
+  const session = useSession();
 
   // /platform/* has its own nav (app/platform/layout.tsx); /status is the
   // public status page (no session at all) - this sidebar is tenant-scoped

@@ -14,10 +14,15 @@ const ACTIVITY_EVENTS = ["mousemove", "mousedown", "keydown", "scroll", "touchst
 export default function InactivityWatcher() {
   const router = useRouter();
   const [warning, setWarning] = useState(false);
-  const lastActivityRef = useRef(Date.now());
+  // Seeded in the effect below rather than `useRef(Date.now())` - calling
+  // an impure function (Date.now) during render is flagged by React's
+  // purity rule, and the value is only ever read inside the effect anyway.
+  const lastActivityRef = useRef(0);
   const warningShownAtRef = useRef<number | null>(null);
 
   useEffect(() => {
+    lastActivityRef.current = Date.now();
+
     function onActivity() {
       lastActivityRef.current = Date.now();
       // Activity BEFORE the warning is showing resets the idle clock as

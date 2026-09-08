@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { loadSession } from "@/lib/auth";
+import { useSession } from "@/lib/useSession";
 import { getMfaStatus } from "@/lib/api";
 
 // A slim, persistent warning across the top of the authenticated app
@@ -17,7 +17,7 @@ export default function MfaWarningBanner() {
 
   const isPlatformRoute = pathname.startsWith("/platform");
   const isPublicRoute = pathname === "/status" || pathname === "/login";
-  const session = loadSession();
+  const session = useSession();
   const skip = isPlatformRoute || isPublicRoute || !session;
 
   useEffect(() => {
@@ -29,10 +29,9 @@ export default function MfaWarningBanner() {
            (e.g. a session that's about to be redirected to /login anyway
            by handleAuthFailure elsewhere on the page). */
       });
-    // Re-check on route change — covers the case where the user just
-    // enabled MFA on /security and navigated away, without needing a
+    // pathname is in the deps so this re-checks on route change — covers
+    // the user enabling MFA on /security and navigating away, without a
     // full page reload for the banner to disappear.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, skip]);
 
   if (skip || enabled !== false || pathname === "/security") return null;
