@@ -21,6 +21,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.agents.email_delivery import get_backend
+from app.config import settings
 from app.db.models import User, PlatformStaff
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,8 @@ def send_subscription_confirmation(
         f"Amount: {amount_naira} / month\n"
         f"Renews on: {renews_on}\n\n"
         f"You can review or cancel your plan any time from Billing in the app. "
-        f"A cancellation within the first {7} days is a full self-serve refund.\n\n"
+        f"A cancellation within the first {settings.billing_refund_window_days} "
+        f"days is a full self-serve refund.\n\n"
         f"Thanks for choosing Meridian.\n\n"
         f"{FOUNDER_NAME}\n"
         f"Founder, Meridian"
