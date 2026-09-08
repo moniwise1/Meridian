@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One run per branch/PR; a new push cancels the previous.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: System deps (match backend/Dockerfile)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pip-audit
+
+      - name: Import smoke test
+        working-directory: backend
+        env:
+          APP_SECRET_KEY: dGVzdC1vbmx5LWZlcm5ldC1rZXktMzJieXRlcy0wMDA=
+        run: python -c "import app.main; print(len(app.main.app.routes), 'routes')"
+
+      - name: Security regression checks
+        working-directory: backend
+        run: python tests/run_regressions.py
+
+      - name: Dependency audit (advisory - does not block the merge)
+        continue-on-error: true
+        run: |
+          # PYSEC-2026-1942 (FileResponse Range O(n^2)) is triaged as
+          # low-severity and needs the FastAPI 0.141 / Starlette 1.x
+          # migration to clear - see PR #54. Drop the --ignore once that
+          # lands, and make this step blocking.
+          pip-audit -r backend/requirements.txt --ignore-vuln PYSEC-2026-1942
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_BASE: http://localhost:8000
+        run: npm run build
+
+      - name: npm audit (advisory)
+        continue-on-error: true
+        run: npm audit --audit-level=high

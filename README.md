@@ -2048,6 +2048,20 @@ one and only "owner" account; that path then closes itself (a second
 attempt is rejected). No signup form is ever shown for this anywhere else
 in the app on purpose.
 
+### 5. Tests / CI
+
+`backend/tests/` holds one standalone check per security fix (real SQLite
+DB + real FastAPI `TestClient`, DB layer never mocked — see
+`backend/tests/README.md`). Run them all:
+
+```bash
+cd backend && python tests/run_regressions.py
+```
+
+`.github/workflows/ci.yml` runs that suite plus an import smoke test,
+`pip-audit`, and the frontend `lint` + `build` on every PR; Dependabot
+(`.github/dependabot.yml`) opens weekly dependency PRs.
+
 ## Architecture
 
 ```
