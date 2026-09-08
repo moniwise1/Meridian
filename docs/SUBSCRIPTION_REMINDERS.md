@@ -1,133 +1,76 @@
-# Subscription reminders (setup)
+# Subscription reminders
 
-When a tenant subscribes, they get a confirmation right away — an in-app
-notice in the dashboard's notification bell, plus an email. **That part is
-automatic and needs no setup.**
+## The short version
 
-This page is only about the other half: the **"your subscription renews in
-7 days"** reminder that goes out before each renewal date.
+**There is nothing you have to set up.**
 
-## Why this needs setup at all
+- When someone subscribes, they get a confirmation straight away — a notice
+  in the dashboard's notification bell and an email.
+- Before each renewal, they get a "renews in 7 days" heads-up — same notice
+  + email. This fires automatically whenever anyone on that team has the
+  dashboard open during the 7-day window (the notification bell checks for
+  it on its own).
 
-Sending that reminder needs something running on a timer, once a day. This
-app deliberately has no built-in scheduler (same reasoning as the uptime
-monitor). So one external thing has to call a single endpoint —
-`POST /notifications/reminders/run` — once a day. Everything else (working
-out who is due, sending the notice and email, making sure nobody gets
-reminded twice for the same renewal) happens inside the app.
+For a small team that logs in regularly, that's enough and needs zero
+configuration.
 
-Two ways to do the daily call. **Pick one.** They hit the exact same
-endpoint; the GitHub Action is less setup.
+## Optional: guarantee the daily timing with a cron
 
----
+The automatic path above only fires when someone opens the app. If a
+customer's whole team goes a week without logging in right before their
+renewal, they'd miss the heads-up. If you want a hard guarantee, add a
+once-a-day trigger that calls `POST /notifications/reminders/run` — it does
+the same thing on a fixed schedule regardless of who's logged in. It shares
+the same once-per-renewal guard, so it can never double-send with the
+automatic path.
 
-## Step 1 (both options): make a secret and give it to the backend
-
-The secret is what stops a random person from triggering a reminder sweep.
-Nobody types it by hand — generate one:
+### Step 1 — make a secret and give it to the backend
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Copy the output. In **Railway → your backend service → Variables**, add:
+Copy the output. **Railway → your backend service → Variables**, add:
 
 ```
 SUBSCRIPTION_REMINDER_SECRET=<the value you just generated>
 ```
 
-Optional, same place, if you ever want a different lead time than 7 days:
+Redeploy the backend. (Optional, same place: `SUBSCRIPTION_EXPIRY_REMINDER_DAYS=7`
+to change the lead time.)
 
-```
-SUBSCRIPTION_EXPIRY_REMINDER_DAYS=7
-```
+Until this is set the endpoint returns `503`, so a stray request can't
+trigger a sweep.
 
-Until `SUBSCRIPTION_REMINDER_SECRET` is set on the backend, the endpoint
-returns `503` and no reminder can fire — including by accident.
+### Step 2 — pick ONE way to call it daily
 
-Redeploy the backend so it picks up the new variable.
-
----
-
-## Step 2, Option A — GitHub Action (recommended, no new infrastructure)
-
-The repo already has the workflow file
-(`.github/workflows/subscription-reminders.yml`). You just give GitHub the
-two values it needs.
-
-**GitHub → your repo → Settings → Secrets and variables → Actions → New
-repository secret.** Add two:
+**Option A — GitHub Action (no new infrastructure).** The workflow file is
+already in the repo (`.github/workflows/subscription-reminders.yml`). Give
+GitHub the two values it needs: **repo → Settings → Secrets and variables →
+Actions → New repository secret**, twice:
 
 | Name | Value |
 |---|---|
 | `SUBSCRIPTION_REMINDER_SECRET` | the same value from Step 1 |
-| `MERIDIAN_API_BASE_URL` | your backend's URL, e.g. `https://<your-backend>.up.railway.app` (no trailing slash) |
+| `MERIDIAN_API_BASE_URL` | your backend URL, e.g. `https://<backend>.up.railway.app` (no trailing slash) |
 
-That's it. GitHub runs it every day at 09:00 UTC.
+GitHub then runs it daily at 09:00 UTC. Test it: **Actions tab →
+Subscription reminders → Run workflow**; a green run ending in `HTTP 200`
+and `{"checked":n,"reminded":m}` means it works (`reminded: 0` is normal —
+it only sends inside the 7-day window).
 
-**Test it now:** GitHub → **Actions** tab → **Subscription reminders** (left
-side) → **Run workflow** → **Run workflow**. Open the run; the log should
-end with:
-
-```
-HTTP 200
-{"checked":<n>,"reminded":<m>}
-```
-
-`checked` = how many active subscriptions have a renewal date. `reminded`
-= how many got a reminder this run. **`reminded: 0` is completely normal** —
-it only sends in the last 7 days before a renewal, and only once per
-renewal.
-
-> Note: GitHub disables scheduled workflows in a repo with no activity for
-> 60 days. Not a concern while the repo is being worked on; if it ever goes
-> fully idle, a single push (or a manual "Run workflow") re-enables it.
-
----
-
-## Step 2, Option B — Railway Cron Job
-
-Use this instead if you'd rather keep everything on Railway.
-
-**Railway → your project → + New → Cron Job.** (This is a small scheduled
-container, separate from your always-on backend service — it wakes up,
-runs one command, exits.) Point it at the same GitHub repo and branch as
-your backend, and set:
-
-- **Root Directory:** `backend`
-- **Start Command:** `python scripts/subscription_reminders.py`
-- **Cron Schedule:** `0 9 * * *`
-
-Then on **that Cron Job service** (not the backend service) → Variables:
-
-```
-MERIDIAN_API_BASE_URL=https://<your-backend>.up.railway.app
-SUBSCRIPTION_REMINDER_SECRET=<the same value from Step 1>
-```
-
-**Test it:** trigger a manual run from the Cron Job's page. Its logs should
-show:
-
-```
-[subscription_reminders] ok: checked=<n> reminded=<m>
-```
-
----
-
-## Seeing the whole thing work end to end (optional)
-
-If you want to watch a real reminder go out rather than trust it blind:
-take a test tenant, set its `subscription_status` to `active` and its
-`subscription_expires_at` to 3 days from now, then run the job manually
-(either option). The tenant's admin should get the email and see the notice
-in the bell. Run it a second time the same day — it should report
-`reminded: 0`, because it won't send the same reminder twice.
+**Option B — Railway Cron Job.** Railway → project → **+ New → Cron Job**,
+same repo/branch, Root Directory `backend`, Start Command
+`python scripts/subscription_reminders.py`, Cron Schedule `0 9 * * *`. On
+that Cron Job service's Variables, set `MERIDIAN_API_BASE_URL` and
+`SUBSCRIPTION_REMINDER_SECRET` (same value as Step 1). Its logs should show
+`[subscription_reminders] ok: checked=n reminded=m`.
 
 ## What this doesn't do
 
-- It's not dunning. A *failed* renewal payment is handled separately —
-  Paystack does its own retry cadence, and the app surfaces the
-  `invoice.payment_failed` webhook as its own in-app notice + email.
-- If the scheduler is down for a day, that day's reminders are skipped, not
-  queued and caught up. The next day's run still catches anyone who has
-  since moved into the 7-day window.
+- It's not dunning. A *failed* renewal payment is separate — Paystack runs
+  its own retry cadence, and the app surfaces the `invoice.payment_failed`
+  webhook as its own notice + email.
+- The cron, if you add one, doesn't queue-and-catch-up. A day the job
+  doesn't run is a day skipped; the next run still catches anyone who has
+  since moved into the window.
