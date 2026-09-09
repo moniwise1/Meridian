@@ -45,25 +45,25 @@ trigger a sweep.
 ### Step 2 — pick ONE way to call it daily
 
 **Option A — GitHub Action (no new infrastructure).** The workflow file is
-already in the repo (`.github/workflows/subscription-reminders.yml`). Give
-GitHub the two values it needs: **repo → Settings → Secrets and variables →
-Actions → New repository secret**, twice:
+already in the repo (`.github/workflows/subscription-reminders.yml`), and
+the backend URL is baked into it (the API is public, so it isn't a
+secret). You add **one** repository secret:
+
+**repo → Settings → Secrets and variables → Actions → New repository
+secret**
 
 | Name | Value |
 |---|---|
-| `SUBSCRIPTION_REMINDER_SECRET` | the same value from Step 1 |
-| `MERIDIAN_API_BASE_URL` | your backend URL, e.g. `https://<backend>.up.railway.app` (no trailing slash) |
+| `SUBSCRIPTION_REMINDER_SECRET` | the same value you set on Railway in Step 1 |
 
-GitHub then runs it daily at 09:00 UTC. Test it: **Actions tab →
+GitHub then runs it daily at 09:00 UTC. Test it now: **Actions tab →
 Subscription reminders → Run workflow**; a green run ending in `HTTP 200`
 and `{"checked":n,"reminded":m}` means it works (`reminded: 0` is normal —
-it only sends inside the 7-day window).
+it only sends inside the 7-day window). A red run means the GitHub secret
+and the Railway secret don't match (`401`) or the secret is missing.
 
-Before you add the two secrets, the daily run **skips cleanly** (green,
-with a "Skipped - … not set" notice) rather than failing — this workflow
-is optional, so an unconfigured repo shouldn't collect a red X and a
-failure email every day. Once you opt in, a wrong URL or mismatched secret
-*does* fail the run so you can see it.
+If the backend URL ever changes, add a repository **variable** (not
+secret) named `MERIDIAN_API_BASE_URL` to override it.
 
 **Option B — Railway Cron Job.** Railway → project → **+ New → Cron Job**,
 same repo/branch, Root Directory `backend`, Start Command

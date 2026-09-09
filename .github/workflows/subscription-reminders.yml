@@ -1,20 +1,20 @@
 name: Subscription reminders
 
-# OPTIONAL. The "renews in N days" reminder already fires on its own
-# whenever the team opens the dashboard (the notification bell checks for
-# it) - see docs/SUBSCRIPTION_REMINDERS.md. This workflow only adds a
-# guaranteed daily trigger for a team that might not log in during the
-# window. It just POSTs the backend's reminder endpoint; all the real work
-# (who's due, sending, once-per-period idempotency) is server-side and
-# shared with the on-poll path, so the two can't double-send.
+# Guaranteed daily trigger for the "renews in N days" reminder. It's a
+# backstop: the reminder already fires on its own whenever the team opens
+# the dashboard (the notification bell checks for it) - this just makes
+# sure it also goes out for a team that doesn't log in during the window.
+# All the real work (who's due, sending, once-per-period idempotency) is
+# server-side and shared with the on-poll path, so the two can't
+# double-send. See docs/SUBSCRIPTION_REMINDERS.md.
 #
-# To enable it, add two repository secrets (Settings > Secrets and variables > Actions):
-#   MERIDIAN_API_BASE_URL         e.g. https://<your-backend>.up.railway.app
-#   SUBSCRIPTION_REMINDER_SECRET  the same value set on the backend service
-#
-# The alternative (a Railway Cron Job running
-# backend/scripts/subscription_reminders.py) is also documented - use
-# whichever is less hassle for you; they hit the exact same endpoint.
+# Setup: add ONE repository secret (Settings > Secrets and variables >
+# Actions > New repository secret):
+#   SUBSCRIPTION_REMINDER_SECRET  - the same value set on the Railway
+#                                   backend service
+# The backend URL is not secret (the API is public) so it's set below,
+# not as a secret. Override it with a repo VARIABLE named
+# MERIDIAN_API_BASE_URL if the backend ever moves.
 
 on:
   schedule:
@@ -27,23 +27,19 @@ jobs:
     steps:
       - name: Trigger the daily reminder sweep
         env:
-          API_BASE: ${{ secrets.MERIDIAN_API_BASE_URL }}
+          API_BASE: ${{ vars.MERIDIAN_API_BASE_URL || 'https://meridian-production-5e3f.up.railway.app' }}
           SECRET: ${{ secrets.SUBSCRIPTION_REMINDER_SECRET }}
         run: |
-          # Not configured -> skip cleanly, don't fail. This workflow is
-          # optional (the notification-bell poll already fires due
-          # reminders), so an unconfigured repo should not get a red X and
-          # a failure email every day. Add the two secrets to switch it on.
-          if [ -z "$API_BASE" ] || [ -z "$SECRET" ]; then
-            echo "::notice::Skipped - MERIDIAN_API_BASE_URL / SUBSCRIPTION_REMINDER_SECRET not set. This workflow is optional; reminders still fire via the dashboard. See docs/SUBSCRIPTION_REMINDERS.md to enable it."
-            exit 0
+          if [ -z "$SECRET" ]; then
+            echo "::error::Add the SUBSCRIPTION_REMINDER_SECRET repository secret (Settings > Secrets and variables > Actions) - same value as on the Railway backend. See docs/SUBSCRIPTION_REMINDERS.md."
+            exit 1
           fi
           code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST \
             -H "X-Reminder-Secret: $SECRET" \
             "${API_BASE%/}/notifications/reminders/run")
           echo "HTTP $code"
           cat /tmp/resp; echo
-          # A wrong URL or mismatched/absent backend secret is a real setup
-          # bug once you've opted in (403/404/503) - fail on it so it's
-          # visible in the Actions tab rather than silently doing nothing.
+          # 200 = ok. 401 = the GitHub secret and the Railway secret don't
+          # match. 503 = the backend doesn't have SUBSCRIPTION_REMINDER_SECRET
+          # set. 404 = wrong URL. All are real setup bugs - fail on them.
           test "$code" = "200"
