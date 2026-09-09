@@ -59,6 +59,12 @@ Subscription reminders → Run workflow**; a green run ending in `HTTP 200`
 and `{"checked":n,"reminded":m}` means it works (`reminded: 0` is normal —
 it only sends inside the 7-day window).
 
+Before you add the two secrets, the daily run **skips cleanly** (green,
+with a "Skipped - … not set" notice) rather than failing — this workflow
+is optional, so an unconfigured repo shouldn't collect a red X and a
+failure email every day. Once you opt in, a wrong URL or mismatched secret
+*does* fail the run so you can see it.
+
 **Option B — Railway Cron Job.** Railway → project → **+ New → Cron Job**,
 same repo/branch, Root Directory `backend`, Start Command
 `python scripts/subscription_reminders.py`, Cron Schedule `0 9 * * *`. On

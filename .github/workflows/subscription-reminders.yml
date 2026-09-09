@@ -30,16 +30,20 @@ jobs:
           API_BASE: ${{ secrets.MERIDIAN_API_BASE_URL }}
           SECRET: ${{ secrets.SUBSCRIPTION_REMINDER_SECRET }}
         run: |
+          # Not configured -> skip cleanly, don't fail. This workflow is
+          # optional (the notification-bell poll already fires due
+          # reminders), so an unconfigured repo should not get a red X and
+          # a failure email every day. Add the two secrets to switch it on.
           if [ -z "$API_BASE" ] || [ -z "$SECRET" ]; then
-            echo "::error::Set MERIDIAN_API_BASE_URL and SUBSCRIPTION_REMINDER_SECRET as repository secrets."
-            exit 1
+            echo "::notice::Skipped - MERIDIAN_API_BASE_URL / SUBSCRIPTION_REMINDER_SECRET not set. This workflow is optional; reminders still fire via the dashboard. See docs/SUBSCRIPTION_REMINDERS.md to enable it."
+            exit 0
           fi
           code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST \
             -H "X-Reminder-Secret: $SECRET" \
             "${API_BASE%/}/notifications/reminders/run")
           echo "HTTP $code"
           cat /tmp/resp; echo
-          # 503 = the backend doesn't have SUBSCRIPTION_REMINDER_SECRET set yet;
-          # 401 = the two secret values don't match. Both are setup problems
-          # worth failing on so they're visible in the Actions tab.
+          # A wrong URL or mismatched/absent backend secret is a real setup
+          # bug once you've opted in (403/404/503) - fail on it so it's
+          # visible in the Actions tab rather than silently doing nothing.
           test "$code" = "200"
