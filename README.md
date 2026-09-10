@@ -2118,7 +2118,7 @@ DB + real FastAPI `TestClient`, DB layer never mocked — see
 cd backend && python tests/run_regressions.py
 ```
 
-`.github/workflows/ci.yml` runs that suite (15 checks) plus an
+`.github/workflows/ci.yml` runs that suite (17 checks) plus an
 import/route smoke test, `pip-audit` (blocking — `pip-audit -r
 backend/requirements.txt` reports **no known vulnerabilities**), the
 frontend `build` and `lint` (both blocking — the `eslint-config-next` 16
@@ -2134,6 +2134,12 @@ monitoring (`docs/UPTIME_MONITORING.md`) therefore needs an external timer
 (`docs/SUBSCRIPTION_REMINDERS.md`) does not — it computes on read off the
 notification-bell poll — but ships a GitHub Action / cron script anyway for
 teams that want the timing guaranteed regardless of who's logged in.
+
+Other operational scripts in `backend/scripts/`: `paystack_plans.py`
+(create/verify the three subscription plans on a Paystack account —
+`docs/BILLING_GO_LIVE.md`) and `migrate_metadata_db.py` (SQLite → Postgres
+metadata-store migration with per-table and audit-hash-chain verification —
+`docs/POSTGRES_MIGRATION.md`).
 
 ## Architecture
 

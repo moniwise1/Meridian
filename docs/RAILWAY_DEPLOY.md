@@ -60,6 +60,11 @@ mount path `/app/data`. This is exactly what the Dockerfile already
 defaults `METADATA_DB_URL` to, so no extra env var is needed for this
 path.
 
+**Already live on option B and want to move to Postgres without losing
+data?** `docs/POSTGRES_MIGRATION.md` + `backend/scripts/migrate_metadata_db.py`
+copy the SQLite DB into a new Railway Postgres, row for row, and verify
+the audit hash chains before you cut over.
+
 ## 2. Backend environment variables
 
 Backend service → **Variables**. Add these (values in `<>` are yours to
