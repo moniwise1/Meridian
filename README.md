@@ -180,6 +180,11 @@ numbers that could quietly drift from what's actually enforced. A plan
 whose Paystack code isn't set yet reports `configured: false` and the
 card shows "Not yet available" instead of a Subscribe button that would
 fail confusingly deep into a real checkout attempt.
+`backend/scripts/paystack_plans.py` creates the three plans on a Paystack
+account (test or live) and prints the env vars; the full subscribe →
+checkout → verify → webhook → cancel + refund lifecycle was exercised
+end to end against the real Paystack test API on a live deploy. Going
+from test to live is an env-var swap — `docs/BILLING_GO_LIVE.md`.
 
 Deliberately honest about what differentiates the tiers: every paid plan
 unlocks the identical product (Ask, Risk scan, document intelligence, row/
