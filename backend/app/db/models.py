@@ -283,7 +283,7 @@ class UploadedDocument(Base):
     tenant_id = Column(String, nullable=False)
     user_id = Column(String, nullable=True)
     filename = Column(String, nullable=False)
-    kind = Column(String, nullable=False)  # "pdf" | "docx" | "xlsx"
+    kind = Column(String, nullable=False)  # "pdf" | "docx" | "xlsx" | "pptx" | "csv"
     file_path = Column(String, nullable=False)
     extracted_text = Column(Text, nullable=False, default="")
     extraction_truncated = Column(Boolean, default=False)

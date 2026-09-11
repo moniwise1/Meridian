@@ -58,6 +58,7 @@ native, flattens tables into reading-order text, which reads poorly for
 anything but simple layouts - a known, unfixed limitation, not a bug).
 """
 import base64
+import csv
 import io
 import json
 import logging
@@ -190,6 +191,7 @@ MAX_EXTRACTED_CHARS = 50_000  # bounds LLM context cost the same way row limits 
 MAX_XLSX_ROWS_PER_SHEET = 200
 MAX_XLSX_SHEETS = 10
 MAX_PPTX_SLIDES = 200
+MAX_CSV_ROWS = 500  # generous relative to MAX_XLSX_ROWS_PER_SHEET - a CSV has only the one "sheet"
 MAX_OCR_PAGES_PER_DOCUMENT = 15
 OCR_RENDER_DPI = 200  # balance of accuracy vs. render+recognition time
 # A page's native extraction shorter than this is treated as "probably
@@ -200,7 +202,7 @@ OCR_RENDER_DPI = 200  # balance of accuracy vs. render+recognition time
 # elements, never a real sentence).
 NATIVE_TEXT_MIN_CHARS = 20
 
-SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx"}
+SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx", ".csv": "csv"}
 
 # DOCX/XLSX/PPTX (Office Open XML) are plain ZIP archives when unprotected.
 # A password-protected one is instead wrapped in the much older OLE2/
@@ -600,13 +602,67 @@ def extract_pptx(file_bytes: bytes) -> ExtractionResult:
     )
 
 
+# A CSV's own decoding gotcha, distinct from OOXML's zip-container ones
+# above: it's plain text, so there's no zip-bomb or password-protection
+# risk at all (both are checked below only for docx/xlsx/pptx) - but a
+# real-world CSV (especially one exported from Excel) is very often NOT
+# valid UTF-8. utf-8-sig strips a leading BOM (Excel's own habit) when
+# present and otherwise behaves like plain utf-8; latin-1 never raises
+# (every byte value 0-255 is a valid latin-1 codepoint), so it's the
+# fallback of last resort rather than letting an unusual encoding crash
+# the whole upload.
+def _decode_csv_bytes(file_bytes: bytes) -> str:
+    try:
+        return file_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return file_bytes.decode("latin-1")
+
+
+def extract_csv(file_bytes: bytes) -> ExtractionResult:
+    text_str = _decode_csv_bytes(file_bytes)
+    rows = list(csv.reader(io.StringIO(text_str)))
+    if not rows:
+        return ExtractionResult(text="", truncated=False, source_unit_count=0)
+
+    headers = rows[0]
+    data_rows = rows[1:]
+    row_truncated = len(data_rows) > MAX_CSV_ROWS
+    included = data_rows[:MAX_CSV_ROWS]
+
+    # A row whose column count doesn't match the header is a common
+    # silent-data-loss source in a hand-edited or badly-exported CSV
+    # (an extra/missing comma partway through). Same "surface it as a
+    # visible marker inline in the extracted text, let the model read
+    # and report it" convention extract_xlsx's own truncation marker and
+    # document_intelligence's OCR/image-description counts already use,
+    # rather than a new ExtractionResult field just for this one format.
+    mismatched = sum(1 for row in included if len(row) != len(headers))
+
+    parts = [" | ".join(headers)]
+    if mismatched:
+        parts.append(
+            f"[{mismatched} row(s) below have a different column count than the header - "
+            f"possible malformed row(s)]"
+        )
+    parts.extend(" | ".join(row) for row in included)
+    if row_truncated:
+        parts.append(f"... (more rows omitted, showing first {MAX_CSV_ROWS})")
+
+    text, char_truncated = _truncate("\n".join(parts))
+    return ExtractionResult(text=text, truncated=char_truncated or row_truncated, source_unit_count=len(data_rows))
+
+
 def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
     """Dispatches on file extension. Returns (kind, ExtractionResult).
     Safety/lock checks run BEFORE any real parsing, in the same spirit as
     this app's other upfront gates (the size cap in routes_documents.py
     runs before this function is even called) - a locked or unsafe file
     is rejected with a specific, actionable reason, not a generic parse
-    failure or, worse, silently extracted as empty."""
+    failure or, worse, silently extracted as empty. CSV gets neither
+    check - it's plain text, not a zip container, so there's no
+    zip-bomb/password-protection risk to check for at all; its own
+    resource bound is the per-tenant upload size cap already enforced
+    before this function is ever called, same as every other format."""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     kind = SUPPORTED_EXTENSIONS.get(ext)
     if kind is None:
@@ -623,4 +679,6 @@ def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
         return kind, extract_docx(file_bytes)
     if kind == "pptx":
         return kind, extract_pptx(file_bytes)
+    if kind == "csv":
+        return kind, extract_csv(file_bytes)
     return kind, extract_xlsx(file_bytes)

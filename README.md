@@ -1300,6 +1300,11 @@ Now it does, for the cases where doing it safely is actually possible.
 exact same treatment a connected database's query result already gets:
 - **XLSX**: each sheet read as real structured data (pandas/openpyxl),
   not flattened text.
+- **CSV**: a document kind added alongside PDF/DOCX/XLSX/PPTX
+  specifically to get this same treatment — `pandas.read_csv` already
+  does header detection and dtype inference natively, so there's exactly
+  as little guessing involved as reading a spreadsheet, none of the
+  visually-laid-out ambiguity the PDF case below has.
 - **DOCX/PPTX**: python-docx/python-pptx already expose an embedded
   table's real cells directly (`table.rows` → `row.cells`, or
   `shape.table`) — no guessing, so pulling one out as a real DataFrame is
@@ -1362,6 +1367,44 @@ actual real-world 5,232-column workbook that started this whole feature
 re-run through `extract_tables()` directly, confirming it's correctly
 *rejected* by the cleanliness checks (zero usable tables found) rather
 than silently misparsed into wrong numbers.
+
+**CSV document support** (`app/agents/document_intelligence.py`'s
+`extract_csv`, `app/agents/tabular_analysis.py`'s `_extract_csv_tables`)
+— a new uploadable document kind alongside PDF/DOCX/XLSX/PPTX, added
+after evaluating a contractor-drafted extraction script Joel shared. A
+CSV is unambiguously tabular (no header-row guessing, no visually-laid-
+out ambiguity a real spreadsheet layout or a scanned PDF page can have),
+so it gets the full treatment end to end for free through the existing
+dispatch architecture: `extract_csv` produces the same `ExtractionResult`
+shape every other format does (decodes `utf-8-sig` with a `latin-1`
+fallback for a non-UTF-8 export, a row-count-mismatch note and a row-cap
+truncation marker both surfaced inline the same way `extract_xlsx`'s own
+truncation marker already is), and `_extract_csv_tables` slots into
+`extract_tables()`'s existing dispatch, so a CSV gets the exact same
+`computed_profile`-backed deterministic chart XLSX/DOCX/PPTX already get
+— zero changes needed in `planner.py` to wire this up.
+
+The same contractor script also reconstructs PDF tables via `pdfplumber`
+— deliberately **not** adopted. `tabular_analysis.py`'s own docstring
+already explains why real PDF table detection is excluded: it needs
+actual layout analysis and is genuinely unreliable on a visually laid-
+out page, and since `computed_profile` is the one thing this app tells
+the AI to trust without ever double-checking, a misread PDF table could
+silently become a wrong number stated with false confidence — worse than
+the existing honest text-extraction fallback. `verify_csv_documents.py`
+includes a dedicated regression guard for this: `extract_tables(path,
+"pdf")` must keep returning `([], [diagnostic])` unconditionally, so this
+specific decision can't quietly regress later without a test noticing.
+
+Verified with `verify_csv_documents.py` (9 checks): basic extraction,
+mismatched-column-count flagging, row-count truncation, the `latin-1`
+encoding fallback, `extract()`'s dispatch, a real CSV's numeric columns
+correctly coerced by `tabular_analysis.py`, a too-small/non-tabular CSV
+correctly rejected (not silently accepted), the PDF-trust regression
+guard above, and a full end-to-end check (a real uploaded CSV through
+`_run_document_only_analysis`, confirming the deterministic chart it
+produces matches XLSX's). Full backend regression suite green; frontend
+lint and `next build` clean.
 
 **Structured-table analysis, round two: recovering the file that started
 it all, and making every step genuinely visible** — the same real user
@@ -2059,7 +2102,7 @@ composition of existing endpoints — no new backend surface), Ask screen
 with live step trace, anomaly panel with drill-down chart, evidence panel,
 report/presentation/export/email action bar, a Risks screen for on-demand
 scans across every authorized table, a Documents screen for uploading/
-previewing/deleting PDFs/DOCX/XLSX with an inline attach-to-question picker
+previewing/deleting PDF/DOCX/XLSX/PPTX/CSV files with an inline attach-to-question picker
 on Ask, Data Sources screen with per-connection table- and column-policy
 editor (admin only), Team screen for setting per-user row-level access
 scope (admin only), Billing screen (subscribe/cancel, refund-window

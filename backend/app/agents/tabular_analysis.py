@@ -28,6 +28,11 @@ pipeline in planner.py, with "parse a real table" standing in for
 Scope, and why it stops where it does:
 - XLSX: a real spreadsheet's own sheet(s), read with pandas/openpyxl -
   the most natural fit, since a spreadsheet already IS tabular data.
+- CSV: exactly as safe as XLSX, and for the same reason - pandas'
+  own read_csv already does header detection and dtype inference
+  natively (there's no visually-laid-out ambiguity a CSV's plain
+  comma/row structure could hide), so there's no guessing involved
+  here either.
 - DOCX/PPTX: python-docx/python-pptx already expose an embedded table's
   real cells directly (table.rows -> row.cells, or shape.table) - no
   guessing involved, so extracting those as a real DataFrame is exactly
@@ -392,6 +397,27 @@ def _extract_pptx_tables(file_path: str) -> tuple[list[pd.DataFrame], list[str]]
     return tables, diagnostics
 
 
+def _extract_csv_tables(file_path: str) -> tuple[list[pd.DataFrame], list[str]]:
+    """A CSV is unambiguously tabular already - no header-row guessing or
+    wide-block reshaping needed the way a raw XLSX sheet does, since
+    pandas' own CSV parser already handles header detection and dtype
+    inference. Still runs through the same _coerce_numeric_columns /
+    _rejection_reason checks every other format's extractor uses (a
+    thousands-separated number like "1,234" stays object dtype even
+    after pandas' own inference) - the usability bar is identical
+    regardless of which format the table came from."""
+    try:
+        df = pd.read_csv(file_path)
+    except Exception as e:
+        return [], [f"couldn't parse this file as a CSV table at all ({e})"]
+    df = df.dropna(axis=1, how="all").dropna(axis=0, how="all")
+    df = _coerce_numeric_columns(df)
+    reason = _rejection_reason(df)
+    if reason is not None:
+        return [], [reason]
+    return [df], []
+
+
 def extract_tables(file_path: str, kind: str) -> tuple[list[pd.DataFrame], list[str]]:
     """Dispatches on the document's kind (see document_intelligence.py's
     SUPPORTED_EXTENSIONS). Returns (usable_tables, diagnostics) -
@@ -401,9 +427,14 @@ def extract_tables(file_path: str, kind: str) -> tuple[list[pd.DataFrame], list[
     verbatim in the Ask screen's step trace (see planner.py) so "why
     didn't this get the structured treatment" is never a mystery. Always
     ([], ["PDF tables aren't ..."]) for "pdf" - see this module's
-    docstring for why."""
+    docstring for why. This is deliberate and NOT something to "fix" by
+    adding a PDF-table library later without re-reading that docstring
+    first - see verify_csv_documents.py's dedicated regression check for
+    this exact behavior."""
     if kind == "xlsx":
         return _extract_xlsx_tables(file_path)
+    if kind == "csv":
+        return _extract_csv_tables(file_path)
     if kind == "docx":
         return _extract_docx_tables(file_path)
     if kind == "pptx":

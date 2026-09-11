@@ -10,7 +10,7 @@ import {
 } from "@/lib/api";
 
 const KIND_LABEL: Record<string, string> = {
-  pdf: "PDF", docx: "Word document", xlsx: "Spreadsheet", pptx: "PowerPoint",
+  pdf: "PDF", docx: "Word document", xlsx: "Spreadsheet", pptx: "PowerPoint", csv: "CSV",
 };
 
 export default function DocumentsPage() {
@@ -76,11 +76,11 @@ export default function DocumentsPage() {
     <div className="max-w-3xl mx-auto px-8 py-12">
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Documents</h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
-        Upload a PDF, Word, PowerPoint, or Excel file to attach its content to a question on the Ask
-        screen — the agent will reference it alongside the database analysis. Text and table content
-        only (PowerPoint slide text, tables, and speaker notes). Scanned/image-only PDF pages are read
-        via OCR automatically, up to 15 pages per document. Only the first 50,000 characters of a
-        document are used.
+        Upload a PDF, Word, PowerPoint, Excel, or CSV file to attach its content to a question on
+        the Ask screen — the agent will reference it alongside the database analysis. Text and
+        table content only (PowerPoint slide text, tables, and speaker notes). Scanned/image-only
+        PDF pages are read via OCR automatically, up to 15 pages per document. Only the first
+        50,000 characters of a document are used.
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
@@ -89,7 +89,7 @@ export default function DocumentsPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.docx,.pptx,.xlsx"
+          accept=".pdf,.docx,.pptx,.xlsx,.csv"
           onChange={handleFileSelected}
           disabled={uploading}
           className="text-[13px] text-ink file:mr-3 file:text-[12.5px] file:px-3 file:py-1.5 file:rounded-[3px] file:border file:border-line file:bg-panel file:text-ink hover:file:border-teal hover:file:text-teal file:cursor-pointer disabled:opacity-40"
