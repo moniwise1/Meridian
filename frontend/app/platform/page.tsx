@@ -4,15 +4,36 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getHealthSnapshot, type HealthSnapshot } from "@/lib/platformApi";
 
-function StatCard({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
-  return (
-    <div className="bg-panel border border-line rounded-[4px] px-4 py-3.5">
+function StatCard({
+  label, value, warn, href,
+}: {
+  label: string;
+  value: number;
+  warn?: boolean;
+  // Optional drill-down - a plain <div> stays non-interactive (most
+  // cards here are just counts with nowhere to go); passing href makes
+  // it a real link, e.g. "Errors, last hour" -> the actual error rows.
+  href?: string;
+}) {
+  const content = (
+    <>
       <div className={`text-[22px] font-medium tracking-tight tabular-nums ${warn && value > 0 ? "text-red" : "text-ink"}`}>
         {value}
       </div>
       <div className="text-[12px] text-ink-soft mt-0.5">{label}</div>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="bg-panel border border-line rounded-[4px] px-4 py-3.5 hover:border-teal transition-colors"
+      >
+        {content}
+      </Link>
+    );
+  }
+  return <div className="bg-panel border border-line rounded-[4px] px-4 py-3.5">{content}</div>;
 }
 
 export default function PlatformDashboardPage() {
@@ -39,7 +60,7 @@ export default function PlatformDashboardPage() {
         <div className="grid grid-cols-3 gap-3 mb-10">
           <StatCard label="Active tenants" value={snapshot.active_tenants} />
           <StatCard label="Total tenants" value={snapshot.total_tenants} />
-          <StatCard label="Errors, last hour" value={snapshot.recent_errors_last_hour} warn />
+          <StatCard label="Errors, last hour" value={snapshot.recent_errors_last_hour} warn href="/platform/errors" />
           <StatCard label="Open tickets" value={snapshot.open_tickets} warn />
           <StatCard label="Open incidents" value={snapshot.open_incidents} warn />
         </div>

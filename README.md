@@ -1653,6 +1653,19 @@ sufficient/NDPR-compliant" gap, which needs an actual lawyer, not more
 code. Public routes (`AuthGate.tsx`), no sidebar chrome (`Sidebar.tsx`),
 same treatment as `/status`.
 
+**Platform Dashboard drill-down** (`GET /platform/errors` in
+`routes_platform.py`, `frontend/app/platform/errors/page.tsx`) — the
+Dashboard's "Errors, last hour" stat card is now a link, not just a
+number staff had to take on faith. It opens the actual audit-log rows
+behind that count — timestamp, which tenant (or "Platform" for a
+staff-side action, or "Deleted tenant" if that tenant's since been
+removed), the action, and its `detail` — with 1h/24h/7-day window toggles
+and a search box, cross-tenant by nature (an error can come from any
+tenant's query/connector/artifact work) using the same "seeing isn't as
+sensitive as changing" reasoning as the tenant-facing and platform audit
+logs. `detail` is safe to show as-is — the audit logger already strips
+password/token/secret/credential keys before a row is ever written.
+
 **Product analytics** (`GET /platform/analytics` in `routes_platform.py`,
 `frontend/app/platform/analytics/page.tsx`) — a business-metrics dashboard
 in the internal admin panel: total/active tenant counts, signups and

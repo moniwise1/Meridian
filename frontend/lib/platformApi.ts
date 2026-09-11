@@ -410,6 +410,27 @@ export async function getHealthSnapshot(): Promise<HealthSnapshot> {
   return res.json();
 }
 
+// The actual rows behind the Dashboard's "Errors, last hour" count - a
+// drill-down, not just a number.
+export type PlatformErrorEntry = {
+  id: string;
+  timestamp: string;
+  tenant_id: string;
+  tenant_name: string;
+  user_id: string | null;
+  action: string;
+  connection_id: string | null;
+  query_id: string | null;
+  detail: Record<string, unknown>;
+};
+
+export async function listRecentErrors(hours = 1): Promise<PlatformErrorEntry[]> {
+  const res = await fetch(`${API_BASE}/platform/errors?hours=${hours}`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load recent errors.");
+  return res.json();
+}
+
 // ---------- Product analytics ----------
 
 export type DailyCount = { date: string; count: number };

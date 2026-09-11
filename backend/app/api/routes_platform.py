@@ -795,7 +795,8 @@ def health_snapshot(db: Session = Depends(get_db), ctx: PlatformAuthContext = De
     third-party status/monitoring tool for actual multi-region probing and
     alerting. This just counts recent audit-log entries with status='error'
     as a rough proxy for how much is currently going wrong, plus basic
-    tenant/ticket/incident counts."""
+    tenant/ticket/incident counts. See list_recent_errors() below for the
+    actual rows behind recent_errors_last_hour."""
     one_hour_ago = datetime.utcnow() - timedelta(hours=1)
     recent_errors = (
         db.query(AuditLog)
@@ -809,6 +810,51 @@ def health_snapshot(db: Session = Depends(get_db), ctx: PlatformAuthContext = De
         "open_tickets": db.query(SupportTicket).filter(SupportTicket.status.in_(["open", "in_progress"])).count(),
         "open_incidents": db.query(SystemIncident).filter(SystemIncident.status != "resolved").count(),
     }
+
+
+@router.get("/errors")
+def list_recent_errors(hours: int = 1, limit: int = 200, db: Session = Depends(get_db),
+                        ctx: PlatformAuthContext = Depends(get_current_staff)):
+    """The actual rows behind the Dashboard's "Errors, last hour" count
+    above - a drill-down, not just a number staff have to take on faith.
+    Cross-tenant by nature (an error can come from any tenant's query/
+    connector/artifact work), same "seeing isn't as sensitive as
+    changing" reasoning as /audit and /platform/audit. `detail` is safe to
+    show as-is - the audit logger already strips password/token/secret/
+    credential keys from it before a row is ever written."""
+    since = datetime.utcnow() - timedelta(hours=min(max(hours, 1), 168))  # cap at a week
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.status == "error", AuditLog.timestamp >= since)
+        .order_by(AuditLog.timestamp.desc())
+        .limit(min(max(limit, 1), 500))
+        .all()
+    )
+    tenant_ids = {r.tenant_id for r in rows if r.tenant_id != "platform"}
+    tenant_names = (
+        {t.id: t.name for t in db.query(Tenant).filter(Tenant.id.in_(tenant_ids)).all()}
+        if tenant_ids else {}
+    )
+    return [
+        {
+            "id": r.id,
+            "timestamp": r.timestamp.isoformat(),
+            "tenant_id": r.tenant_id,
+            # A tenant since deleted still has an id on the old row but no
+            # matching Tenant anymore - "Deleted tenant" rather than a
+            # blank/confusing cell.
+            "tenant_name": (
+                "Platform" if r.tenant_id == "platform"
+                else tenant_names.get(r.tenant_id, "Deleted tenant")
+            ),
+            "user_id": r.user_id,
+            "action": r.action,
+            "connection_id": r.connection_id,
+            "query_id": r.query_id,
+            "detail": r.detail,
+        }
+        for r in rows
+    ]
 
 
 # ---------- Product analytics (aggregated, cross-tenant business metrics) ----------
