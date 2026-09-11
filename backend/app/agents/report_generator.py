@@ -82,7 +82,8 @@ def _mc(pdf: FPDF, h: float, text: str) -> None:
 
 def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
                           by_group: list[dict] | None, data_quality: dict,
-                          anomalies: list[dict], sql: str, query_id: str) -> str:
+                          anomalies: list[dict], sql: str, query_id: str,
+                          charts: list[dict] | None = None) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
     path = os.path.join(settings.artifacts_dir, f"report-{uuid.uuid4().hex}.pdf")
 
@@ -122,16 +123,48 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
         _mc(pdf, 6, _safe(insight.get("what", "")))
         pdf.ln(1)
 
-        # "body" (document-only questions only - see Insight.body's
-        # docstring in insight_agent.py) is the actual answer, already
-        # organized however the question itself called for. The
-        # Where/When/Contributors boxes below are a template built for
-        # explaining a single computed database metric - forcing an
-        # open-ended document answer into them is what produced a real,
-        # reported "gibberish" report, so they're skipped here in favor
-        # of just printing the real answer.
+        # Three possible shapes for the rest of the answer, checked in this
+        # order: the current document-only shape (extraction_summary is
+        # only ever set by explain_document_only_v2 - see
+        # insight_agent.py), then the OLD document-only shape ("body",
+        # from the now-superseded explain_document_only - kept working
+        # here purely so a QueryRecord written before v2 shipped can still
+        # be re-exported correctly), then the database-metric shape
+        # (where/when/contributors) every other analysis uses.
+        extraction_summary = insight.get("extraction_summary")
         body = insight.get("body")
-        if body:
+        if extraction_summary:
+            section("Extraction summary")
+            conf = extraction_summary.get("extraction_confidence", "")
+            _mc(pdf, 6, _safe(
+                f"{extraction_summary.get('total_rows_or_items', 0)} row(s)/item(s) across "
+                f"{extraction_summary.get('sheets_or_pages_or_slides', 0)} sheet(s)/page(s)/"
+                f"slide(s) - extraction confidence: {conf}."
+            ))
+            for flag in extraction_summary.get("flags", []):
+                _mc(pdf, 6, _safe(f"- {flag}"))
+
+            section("Key findings")
+            for kf in insight.get("key_findings", []):
+                _mc(pdf, 6, _safe(
+                    f"- {kf.get('finding', '')} [{kf.get('location', '')} - "
+                    f"{kf.get('confidence', '')} confidence]"
+                ))
+
+            flagged = insight.get("flagged_items") or []
+            if flagged:
+                section("Flagged items")
+                for item in flagged:
+                    _mc(pdf, 6, _safe(f"- {item}"))
+        elif body:
+            # "body" (the old document-only shape - see the comment above)
+            # is the actual answer, already organized however the
+            # question itself called for. The Where/When/Contributors
+            # boxes below are a template built for explaining a single
+            # computed database metric - forcing an open-ended document
+            # answer into them is what produced a real, reported
+            # "gibberish" report, so they're skipped here in favor of just
+            # printing the real answer.
             section("Analysis")
             _mc(pdf, 6, _safe(body))
         else:
@@ -152,8 +185,10 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
         pdf.write(6, _safe(f" — {insight.get('confidence_explanation', '')}"))
         pdf.ln(8)
 
-    if by_group:
-        section("Breakdown")
+    def _breakdown_table(rows: list[tuple[str, float]]):
+        # Shared by both branches below - a chart's {labels, values} and
+        # by_group's {group, total} both reduce to the same (label,
+        # number) pairs by the time they reach here.
         col1, col2 = 100, 60
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_fill_color(*_TEAL_DEEP)
@@ -162,21 +197,39 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
         pdf.cell(col2, 8, "Total", border=0, fill=True, align="R", ln=1)
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*_INK)
-        for i, row in enumerate(by_group[:15]):
+        for i, (label, value) in enumerate(rows[:15]):
             # Alternating row banding (a very light paper tint on every
             # other row) - the same "scan a long list without losing your
             # place" job zebra-striping does in any real table, purely
             # cosmetic and never touches a value.
-            if i % 2 == 1:
+            fill = i % 2 == 1
+            if fill:
                 pdf.set_fill_color(*_PAPER)
-                fill = True
-            else:
-                fill = False
-            pdf.cell(col1, 7, _safe(str(row["group"])), border=0, fill=fill)
-            pdf.cell(col2, 7, f"{row['total']:,.2f}", border=0, fill=fill, align="R", ln=1)
+            pdf.cell(col1, 7, _safe(str(label)), border=0, fill=fill)
+            pdf.cell(col2, 7, f"{value:,.2f}", border=0, fill=fill, align="R", ln=1)
         pdf.set_draw_color(*_LINE)
         pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + col1 + col2, pdf.get_y())
         pdf.ln(4)
+
+    if charts:
+        # v2 document-only charts (see insight_agent.py's render_chart
+        # tool) - a list of named charts rather than one implicit
+        # bar+pie pair, so each gets its own "Breakdown" section with its
+        # title, falling back to "Breakdown" alone when the chart has none
+        # (the deterministic computed_profile chart planner.py builds
+        # doesn't set a title beyond the column name already in it).
+        for chart in charts:
+            heading = "Breakdown"
+            if chart.get("title"):
+                heading += f' — {chart["title"]}'
+            section(heading)
+            _breakdown_table(list(zip(chart.get("labels", []), chart.get("values", []))))
+            if chart.get("insight"):
+                _mc(pdf, 6, _safe(chart["insight"]))
+                pdf.ln(2)
+    elif by_group:
+        section("Breakdown")
+        _breakdown_table([(row["group"], row["total"]) for row in by_group])
 
     if anomalies:
         section("Notable findings")

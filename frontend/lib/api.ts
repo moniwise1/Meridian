@@ -805,7 +805,27 @@ export type ResultEvent = {
     notes: string[];
   };
   metrics: Record<string, unknown>;
+  // Populated by the database-backed path (app/agents/planner.py's
+  // explain() branch) and by an OLD-shape document-only QueryRecord
+  // (before the v2 rebuild below shipped) - null for a v2 document-only
+  // result, which uses `charts` instead.
   by_group: { group: string; total: number }[] | null;
+  // Only ever populated by a v2 document-only analysis (see
+  // app/agents/insight_agent.py's render_chart tool /
+  // explain_document_only_v2) - a list of named charts rather than one
+  // implicit bar+pie pair, since a document can have more than one
+  // visualizable finding. Absent (undefined) for the database path and
+  // any OLD-shape document-only result, both of which use `by_group`
+  // above instead.
+  charts?: {
+    chart_type: "bar" | "pie" | "line";
+    title: string;
+    labels: string[];
+    values: number[];
+    unit?: string | null;
+    insight?: string | null;
+    location?: string | null;
+  }[];
   anomalies: Anomaly[];
   investigation: Investigation[];
   forecast: Forecast[];
@@ -813,12 +833,14 @@ export type ResultEvent = {
   insight:
     | {
         what: string;
-        // Only ever present for a document-only question (see
-        // Insight.body's docstring in app/agents/insight_agent.py) - the
-        // real, organized answer, following whatever structure the
-        // question itself asked for. Absent (undefined) for a
-        // database-backed analysis, which still uses where/when/
-        // contributors below instead.
+        // Only ever present for an OLD-shape document-only question (see
+        // the comment on `charts` above, and Insight.body's docstring in
+        // app/agents/insight_agent.py) - the real, organized answer,
+        // following whatever structure the question itself asked for.
+        // Absent (undefined) for a database-backed analysis and for a v2
+        // document-only result, both of which use different fields
+        // instead (where/when/contributors, or extraction_summary/
+        // key_findings below).
         body?: string;
         where: string;
         when: string;
@@ -827,6 +849,20 @@ export type ResultEvent = {
         confidence: string;
         confidence_explanation: string;
         next_question: string;
+        // Everything below is only ever present for a v2 document-only
+        // result (app/agents/insight_agent.py's DocumentInsight /
+        // explain_document_only_v2) - absent for the database path and
+        // for an OLD-shape document-only result (which uses `body` above
+        // instead).
+        extraction_summary?: {
+          total_rows_or_items: number;
+          sheets_or_pages_or_slides: number;
+          extraction_confidence: "high" | "medium" | "low";
+          flags: string[];
+        };
+        key_findings?: { finding: string; location: string; confidence: "high" | "medium" | "low" }[];
+        flagged_items?: string[];
+        structured_data?: unknown[];
       }
     | { error: string };
   preview_rows: Record<string, unknown>[];

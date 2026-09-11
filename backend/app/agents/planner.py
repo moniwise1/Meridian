@@ -40,7 +40,7 @@ from app.agents.schema_discovery import discover_schema, schema_to_prompt_text
 from app.agents.query_generator import generate_sql
 from app.agents.data_quality import assess
 from app.agents.analytics_engine import summarize
-from app.agents.insight_agent import explain, explain_document_only
+from app.agents.insight_agent import explain, explain_document_only_v2
 from app.agents.anomaly_detection import detect as detect_anomalies
 from app.agents.investigation import investigate_cascade
 from app.agents.forecasting import forecast_by_group
@@ -108,28 +108,13 @@ def _json_safe(records: list[dict]) -> list[dict]:
 # codebase before choosing this approach over adding a nullable column.
 DOCUMENT_ONLY_SOURCE_ID = "document-only"
 
-
-def _sanitize_by_group(raw: list | None) -> list[dict]:
-    """The document-only insight step's "by_group" is model-supplied (see
-    insight_agent.py's Insight.by_group docstring for why that's fine there
-    specifically) rather than computed by analytics_engine.py like the
-    database path's - so, unlike that path, it hasn't already been through
-    code that guarantees clean {group: str, total: number} shape. A model
-    that copies a formatted figure verbatim (e.g. "18,000" as a string,
-    complete with thousands separator) would otherwise reach GroupBars'
-    `d.total.toLocaleString()` on the frontend or report_generator.py's
-    `f"{row['total']:,.2f}"` and crash there instead - both of which assume
-    a real number, not a string. Silently drops any entry that isn't
-    coercible, rather than failing the whole analysis over one bad row."""
-    cleaned = []
-    for row in raw or []:
-        if not isinstance(row, dict) or "group" not in row or "total" not in row:
-            continue
-        try:
-            cleaned.append({"group": str(row["group"]), "total": float(str(row["total"]).replace(",", ""))})
-        except (TypeError, ValueError):
-            continue
-    return cleaned
+# Model-supplied chart sanitization for this path now lives in
+# insight_agent.py's _sanitize_chart, alongside the render_chart tool-call
+# parsing it sanitizes - the same discipline this file's old
+# _sanitize_by_group applied (a model-supplied value hasn't been through
+# code that guarantees a clean shape, unlike the database path's real
+# analytics_engine.py output), generalized from one implicit bar+pie pair
+# to three chart types.
 
 
 def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
@@ -247,24 +232,29 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
 
     yield StepEvent("preparing_insights", "running")
     document_payload = [{"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents]
-    by_group: list[dict] = []
+    charts: list[dict] = []
+    model_charts: list[dict] = []
     profile_dict = tabular_analysis.profile_to_dict(profile) if profile else None
     try:
-        insight = explain_document_only(question, document_payload, computed_profile=profile_dict)
+        insight, model_charts = explain_document_only_v2(question, document_payload, computed_profile=profile_dict)
         insight_dict = asdict(insight)
         if profile_dict and profile.primary_group_column:
             # The real, deterministically-computed breakdown (see
-            # tabular_analysis.build_profile) is used directly for the
-            # chart, bypassing the model entirely for this number - safer
-            # than the text-only path below, which has no choice but to
-            # trust the model to transcribe a figure off raw text.
-            by_group = [
-                {"group": row["group"], "total": row["value"]}
-                for row in profile.breakdowns[profile.primary_group_column]
-            ]
-            insight_dict.pop("by_group", None)
-        else:
-            by_group = _sanitize_by_group(insight_dict.pop("by_group", None))
+            # tabular_analysis.build_profile) is charted directly, bypassing
+            # the model entirely for this one - safer than trusting the
+            # model to transcribe a figure off raw text. Always first in
+            # the list regardless of what the model itself charted (see
+            # SYSTEM_PROMPT_DOCUMENT_ONLY_V2 - the model is told not to
+            # duplicate this one via render_chart, but this doesn't rely on
+            # it having obeyed that instruction: it's just prepended).
+            charts.append({
+                "chart_type": "bar",
+                "title": f'Breakdown by "{profile.primary_group_column}"',
+                "labels": [row["group"] for row in profile.breakdowns[profile.primary_group_column]],
+                "values": [row["value"] for row in profile.breakdowns[profile.primary_group_column]],
+                "unit": None, "insight": None, "location": None,
+            })
+        charts.extend(model_charts)
     except Exception as e:
         logger.exception("Document-only insight generation failed for query %s", query_id)
         audit.log(db, tenant_id, "insight_generation_failed", user_id,
@@ -286,10 +276,11 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     else:
         data_quality_notes = ["Document-only analysis — no database query was run; this reflects the "
                               "selected document(s)' content only."]
-        if by_group:
+        if model_charts:
             data_quality_notes.append(
-                "The breakdown below was extracted from the document's text by the AI, not computed "
-                "deterministically from a database — verify important figures against the source document."
+                "One or more charts below were extracted from the document's text by the AI, not "
+                "computed deterministically from a database — verify important figures against the "
+                "source document."
             )
         data_quality = {
             "row_count": 0, "completeness_pct": 100.0, "duplicate_pct": 0.0,
@@ -305,7 +296,17 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "duration_ms": 0,
         "truncated": False,
         "metrics": profile.overall if profile else {},
-        "by_group": by_group,
+        # Explicitly null, not omitted - "by_group" is the DB path's key
+        # (populated in run_analysis's other branch), kept null here rather
+        # than absent so it still matches ResultEvent's non-optional TS
+        # type. "charts" below is the document-only equivalent, a list
+        # rather than one implicit bar+pie pair, since v2 can produce more
+        # than one chart. See ResultView.tsx / report_generator.py /
+        # presentation_generator.py for the "charts if present, else
+        # by_group" fallback that keeps a QueryRecord written before this
+        # shipped rendering correctly.
+        "by_group": None,
+        "charts": charts,
         "insight": insight_dict,
         "data_quality": data_quality,
         "anomalies": [asdict(a) for a in detected_anomalies],

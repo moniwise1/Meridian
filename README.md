@@ -2053,6 +2053,83 @@ exposure, deactivate-and-refund happy path, refund-API-failure handling,
 missing-Paystack-handle handling, role gating, empty-reason rejection,
 non-active-tenant guard).
 
+**Document-only analysis, rebuilt (v2)** (`explain_document_only_v2` +
+`RENDER_CHART_TOOL` in `app/agents/insight_agent.py`,
+`_run_document_only_analysis` in `app/agents/planner.py`) — a ground-up
+redesign of the document-only Ask path (a question answered entirely from
+one or more uploaded documents, no database query at all), adopting a
+contractor-drafted spec Joel shared, adapted rather than adopted verbatim
+so two things the existing system already did well didn't get lost in
+translation: the deterministic-number guarantee for a real parsed table's
+primary breakdown (see below), and the working `confidence`/
+`next_question`/`data_quality_caveat` fields already wired into
+`ResultView.tsx`, PDF reports, and presentations. The old
+`explain_document_only`/`SYSTEM_PROMPT_DOCUMENT_ONLY`/`Insight.body`/
+`Insight.by_group` stay in the codebase untouched, purely so a
+`QueryRecord` written before this shipped can still be reopened and
+re-exported correctly — every reader (`ResultView.tsx`, both generators)
+checks for the new shape first and falls back to the old one. `explain()`
+(the database-backed metrics path) isn't touched at all — this is scoped
+to document-only analysis specifically.
+
+New response shape: `what`/`confidence`/`confidence_explanation`/
+`data_quality_caveat`/`next_question` stay as before; `body`/`by_group`
+are replaced by `extraction_summary` (row/item/sheet/page/slide counts,
+an overall extraction-confidence level, and any truncation/malformed-data
+flags), `key_findings` (each with its own source location and confidence
+level — a survey-response percentage cites `Sheet2!B4:B12`, not just a
+bare number), `flagged_items` (anomalies, and rare free-text responses
+grouped into "Other" rather than each getting its own chart category),
+and `structured_data`. Categorical/percentage discipline is explicit and
+exact now: multi-select question percentages are calculated independently
+and correctly don't sum to 100%, chart type (pie/bar/line) is chosen by
+data shape per a stated heuristic, and rare free-text write-ins get
+bucketed into "Other" instead of each inflating the chart with a
+one-off category.
+
+Charts move to their own `charts` array (replacing the single implicit
+bar+pie `by_group` pair) via a real Anthropic tool call
+(`render_chart` — `chart_type: bar|pie|line`, `labels`/`values`, plus an
+`insight`/`location` per chart), parsed from the response's `tool_use`
+blocks alongside the final JSON text in the same API call — not a
+second round-trip, since this is tool-calling used for structured output,
+not a multi-turn agentic loop. Model-supplied chart specs are sanitized
+the same way the old `by_group` was (mismatched `labels`/`values`
+lengths, a non-bar/pie/line type, or unparseable values are dropped, not
+crashed on).
+
+The one deliberate, non-negotiable exception the new design keeps
+enforcing: when the document contains a real, parseable table
+(`tabular_analysis.py`'s `computed_profile`), the primary breakdown chart
+is built directly from that real data in Python — the model is told not
+to duplicate it via `render_chart`, but the guarantee doesn't rely on it
+obeying that instruction; the real chart is unconditionally prepended in
+`planner.py` regardless of what the model itself charts. Verified for
+real, not just asked for in the prompt: a dedicated check builds an
+actual xlsx with a real Region/Sales table, mocks the model to try
+charting deliberately wrong numbers for that exact breakdown, and
+confirms the real computed average — not the model's fabricated
+figures — is what comes out first.
+
+`frontend/components/ResultView.tsx` gained a new dependency-free line
+chart (an inline SVG polyline, same "no charting library anywhere in
+this codebase" convention `PieChart`'s own comment already states) for
+`chart_type: "line"`, a `ChartPanel` that renders any one named chart by
+type (reusing `GroupBars`/`PieChart` for bar/pie), and a `KeyFindingsList`
+panel citing each finding's source location with its own confidence
+badge.
+
+Verified with `verify_document_analysis_v2.py` (8 checks): render_chart
+tool calls parsed and sanitized alongside the JSON answer; malformed
+chart specs dropped without crashing; `_sanitize_chart` never raises on
+bad input; the prompt-injection-defence paragraph and the
+computed_profile trust rule both carried forward into the new prompt
+text; an OLD-shape and a NEW-shape result both still render through
+`report_generator.py`/`presentation_generator.py`; and the real
+safety-property check described above. Full 21-check backend regression
+suite green throughout; frontend lint and `next build` (including full
+TypeScript type-checking of the new `ResultEvent` fields) both clean.
+
 **Frontend** (Next.js/TypeScript/Tailwind) — login/register, Home dashboard
 (connection/analysis/artifact counts and recent activity, pure client-side
 composition of existing endpoints — no new backend surface), Ask screen
