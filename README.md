@@ -1437,6 +1437,45 @@ blank gap, and `explain_document_only_v2`'s real API call requests
 `max_tokens >= 16000`, not the old 4096 a large question could exhaust.
 Full backend regression suite green.
 
+**Document-only analysis: the actual root cause — no tool-use loop at
+all.** The fix above wasn't enough - the user reported every single
+document-only question still failing, including short, simple ones with
+no realistic way to exhaust a 16000-token budget. The real bug:
+`explain_document_only_v2` made one `messages.create()` call and
+expected the response to contain both any `render_chart` tool calls
+*and* the final JSON text in the same turn. That's not how tool use
+works - per Anthropic's own documented agentic-loop pattern, the moment
+the model decides to call a tool, the turn ends with
+`stop_reason: "tool_use"` and (generally) no text yet, waiting for a
+`tool_result` before continuing. Since nothing here ever sent one back,
+any question that invited a chart - which the system prompt itself says
+is true of "any categorical or comparative finding, not an edge case",
+i.e. nearly every real business question - got a response with zero text
+blocks, `_extract_text` raised, and the analysis landed in the
+`{"error": ...}` fallback every time. Fixed by actually looping: collect
+`render_chart` tool calls, send back a fixed acknowledgment
+`tool_result` for each (there's nothing to really execute - render_chart
+is a recording, not a fetch), and keep calling until the model stops
+asking for tools, capped at `_MAX_TOOL_LOOP_ITERATIONS` (6) as a guard
+against a pathological repeated-call loop rather than a limit expected
+to bite in practice (parallel tool use means every chart the model wants
+is normally one batched turn).
+
+A second gap this closed: nothing in the existing test suite could have
+caught the original bug, because the test mock always hardcoded
+`stop_reason="end_turn"` regardless of whether tool_use blocks were
+present - unrealistic, and exactly backwards from what the real API
+does. `verify_document_analysis_v2.py`'s fake client now derives
+`stop_reason` the same way the real API does (`"tool_use"` whenever a
+tool_use block is present), and its tests were restructured into
+realistic multi-turn sequences (tool calls in one response, final text
+in the next) rather than one response containing both - test 1
+additionally asserts the real call count is 2 and that the second
+call's outgoing message carries a `tool_result` for every chart call
+from the first, so a regression back to the single-shot version would
+fail loudly here rather than only in production. Full backend
+regression suite green.
+
 **Structured-table analysis, round two: recovering the file that started
 it all, and making every step genuinely visible** — the same real user
 asked, reasonably, why the feature above still didn't touch their actual

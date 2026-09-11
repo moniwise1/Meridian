@@ -606,6 +606,33 @@ def _sanitize_chart(raw: dict) -> dict | None:
     }
 
 
+# Real production incident: every single document-only question was
+# failing (not just unusually large ones - see the max_tokens comment
+# below for that separate, earlier-fixed issue), because this used to be
+# a single messages.create() call with no tool-use loop at all. Calling a
+# tool is NOT "extra content alongside the final answer" - per Anthropic's
+# own documented agentic-loop pattern (a real tool_use response ends the
+# turn with stop_reason="tool_use" and NO text yet, waiting for a
+# tool_result before continuing), the moment the model decided to call
+# render_chart (which the system prompt itself says to do for "any
+# categorical or comparative finding, not an edge case" - true of nearly
+# every real business question), the single-shot call above got a
+# response with zero text blocks, _extract_text raised, and every such
+# question landed in the {"error": ...} fallback. Fixed by actually
+# looping: send tool_result acks back (render_chart has nothing real to
+# "execute" - it's a recording, not a fetch - so the ack is just a fixed
+# string) and keep going until the model is done calling tools, exactly
+# the "Manual Agentic Loop" pattern the Anthropic Python SDK documents.
+# A second, previously-untested gap this fix closes: nothing in this
+# file's own test suite could have caught the bug above, because the
+# test mock always hardcoded stop_reason="end_turn" even when tool_use
+# blocks were present - unlike the real API, which stops with
+# stop_reason="tool_use" whenever it's waiting on a tool result. See
+# verify_document_analysis_v2.py's rebuilt fake client for the fix to
+# that realism gap.
+_MAX_TOOL_LOOP_ITERATIONS = 6  # generous - parallel tool use means every chart the model wants is normally one turn, so this only guards a genuinely pathological repeated-call loop
+
+
 def explain_document_only_v2(
     question: str, documents: list[dict], computed_profile: dict | None = None,
 ) -> tuple[DocumentInsight, list[dict]]:
@@ -621,41 +648,50 @@ def explain_document_only_v2(
     payload = {"question": question, "reference_documents": documents}
     if computed_profile:
         payload["computed_profile"] = computed_profile
-    resp = _client.messages.create(
-        model=settings.llm_model_reasoning,
-        # Raised from 4096 after a real production failure: a user's
-        # question was itself an unusually large 19-section report
-        # template (KPI tables, ~10 named charts, a per-product write-up
-        # for "every important product", a CEO one-page summary, ...).
-        # The model tried to honor that much structure inside what
-        # should have been a compact JSON answer plus a handful of
-        # render_chart tool calls, ran out of budget mid-generation, and
-        # produced either no text at all or JSON truncated too early to
-        # parse - either way _extract_text/_parse_json_response raised,
-        # caught by planner.py's try/except, and the resulting {"error":
-        # ...} insight rendered as a completely empty analysis in the
-        # exported PDF/PPTX (see report_generator.py/
-        # presentation_generator.py's now-added "error" branch for the
-        # other half of this fix - a failure here should never again be
-        # silently invisible to the user). Same class of issue explain()
-        # and this function's own earlier 800->1200->4096 history already
-        # hit once before - this time raised generously rather than by a
-        # small increment, since an elaborate user-supplied template like
-        # this one is a real, recurring shape of Ask question, not an
-        # edge case to under-provision for again.
-        max_tokens=16000,
-        thinking=_THINKING_DISABLED,
-        system=SYSTEM_PROMPT_DOCUMENT_ONLY_V2,
-        tools=[RENDER_CHART_TOOL],
-        messages=[{"role": "user", "content": json.dumps(payload)}],
-    )
-
-    model_charts = []
-    for block in resp.content:
-        if block.type == "tool_use" and block.name == "render_chart":
-            sanitized = _sanitize_chart(block.input)
-            if sanitized is not None:
-                model_charts.append(sanitized)
+    messages = [{"role": "user", "content": json.dumps(payload)}]
+    model_charts: list[dict] = []
+    resp = None
+    for _ in range(_MAX_TOOL_LOOP_ITERATIONS):
+        resp = _client.messages.create(
+            model=settings.llm_model_reasoning,
+            # Raised from 4096 after a separate real production failure:
+            # a user's question was itself an unusually large 19-section
+            # report template (KPI tables, ~10 named charts, a
+            # per-product write-up for "every important product", a CEO
+            # one-page summary, ...). The model tried to honor that much
+            # structure inside what should have been a compact JSON
+            # answer plus a handful of render_chart tool calls, and could
+            # run out of budget mid-generation. Same class of issue
+            # explain() and this function's own earlier 800->1200->4096
+            # history already hit once before - raised generously this
+            # time rather than by a small increment.
+            max_tokens=16000,
+            thinking=_THINKING_DISABLED,
+            system=SYSTEM_PROMPT_DOCUMENT_ONLY_V2,
+            tools=[RENDER_CHART_TOOL],
+            messages=messages,
+        )
+        if resp.stop_reason != "tool_use":
+            break
+        messages.append({"role": "assistant", "content": resp.content})
+        tool_results = []
+        for block in resp.content:
+            if block.type == "tool_use" and block.name == "render_chart":
+                sanitized = _sanitize_chart(block.input)
+                if sanitized is not None:
+                    model_charts.append(sanitized)
+                # render_chart has nothing to actually execute - it's a
+                # recording of a chart spec, not a fetch - so every call
+                # gets the same fixed acknowledgment. What matters is
+                # that a tool_result exists for every tool_use id in this
+                # turn (a real API requirement) and that returning it
+                # unblocks the model's next turn to write its final text.
+                tool_results.append({
+                    "type": "tool_result", "tool_use_id": block.id, "content": "Chart recorded.",
+                })
+        if not tool_results:
+            break  # shouldn't happen (stop_reason=="tool_use" implies at least one block), but never loop on nothing to send back
+        messages.append({"role": "user", "content": tool_results})
 
     parsed = _parse_json_response(_extract_text(resp))
     insight = DocumentInsight(**{
