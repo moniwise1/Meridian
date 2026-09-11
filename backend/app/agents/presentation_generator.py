@@ -249,6 +249,13 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
                 f"Confidence: {insight.get('confidence', '')} — {insight.get('confidence_explanation', '')}",
                 f"Next question: {insight.get('next_question', '')}",
             ])
+    else:
+        # Previously silent - see report_generator.py's identical branch
+        # for the full explanation (a failed insight-generation step used
+        # to produce a deck with no indication anything had gone wrong).
+        _add_bullets_slide(prs, "Analysis unavailable", [
+            "The explanation step for this analysis failed and no summary could be generated.",
+        ])
 
     if charts:
         # v2 document-only charts (see insight_agent.py's render_chart
