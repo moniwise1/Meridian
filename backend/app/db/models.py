@@ -131,6 +131,11 @@ class User(Base):
     # login, audit "who did this" (that's still user_id), or anything
     # security-relevant - display only.
     display_name = Column(String, nullable=True)
+    # Set on every display-name change (including clearing it) - not a
+    # one-time flag like email_changed_at, just a cooldown clock. See
+    # routes_auth.py's DISPLAY_NAME_COOLDOWN_DAYS: null or old enough
+    # means the change is allowed again.
+    display_name_changed_at = Column(DateTime, nullable=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="analyst")  # admin/analyst/manager/executive/viewer
     # Row-level scope, e.g. {"region": ["South-East"]}. Empty dict = unrestricted (e.g. CEO/admin).

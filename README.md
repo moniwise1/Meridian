@@ -1982,9 +1982,17 @@ the next run once the real URL was restored.
 
 **Tenant account self-service** (`PATCH /auth/me/display-name`, `PATCH
 /auth/me/email`, `PATCH /auth/me/password`, `app/account/page.tsx`) — any
-tenant user can set a display name (shown instead of their raw email once
-set), change their own email, and change their own password, all without
-involving an admin. Email change is deliberately **one-time**: a nullable
+tenant user can set a display name (shown instead of their raw email in
+the Home dashboard greeting and elsewhere around the app once set),
+change their own email, and change their own password, all without
+involving an admin. The display name has a **60-day cooldown** (nullable
+`display_name_changed_at` timestamp on `User`, `DISPLAY_NAME_COOLDOWN_DAYS`
+in `routes_auth.py`) rather than a hard cap — cosmetic, not an identity
+control, so it just needs to stop being churned every few minutes, not be
+locked forever; `GET /auth/me` returns `display_name_change_available` +
+`display_name_next_change_at` so the frontend can grey out the field and
+say exactly when it reopens rather than the user finding out only on
+submit. Email change is deliberately **one-time**: a nullable
 `email_changed_at` timestamp on `User` is set the first time it's used and
 checked on every subsequent attempt, so a second change is rejected with a
 clear error rather than silently allowed — the intent is "fix a typo once,"
@@ -2031,11 +2039,13 @@ required and is written to the audit log; the action is gated to active
 subscriptions only, so it can't be fired twice or against a tenant that
 was never actually paying.
 
-Verified with three new real-DB regression scripts (23 checks total):
-`verify_account_self_service.py` (8 — display name, one-time email change
-including the second-attempt rejection, password change with correct/
-incorrect current-password, and the `.test`-domain `EmailStr` gotcha
-worked around by using `.example.com`-style addresses), `verify_admin_
+Verified with three new real-DB regression scripts (24 checks total):
+`verify_account_self_service.py` (9 — display name including the 60-day
+cooldown rejecting an immediate second change and allowing one again once
+the cooldown has genuinely elapsed, one-time email change including the
+second-attempt rejection, password change with correct/incorrect
+current-password, and the `.test`-domain `EmailStr` gotcha worked around
+by using `.example.com`-style addresses), `verify_admin_
 password_reset.py` (8 — staff-trigger and redeem happy path, tenant/user
 mismatch guard, replay-after-redeem rejection, wrong-purpose-token
 rejection), and `verify_platform_billing_ops.py` (7 — billing detail

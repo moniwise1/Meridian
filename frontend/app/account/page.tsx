@@ -4,13 +4,14 @@ import { useEffect, useState } from "react";
 import { getMe, updateDisplayName, changeOwnEmail, changeOwnPassword, type Me } from "@/lib/api";
 
 function Field({
-  label, value, onChange, placeholder, type = "text",
+  label, value, onChange, placeholder, type = "text", disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   type?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="flex flex-col gap-1">
@@ -20,7 +21,8 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
+        disabled={disabled}
+        className="text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal disabled:opacity-50"
       />
     </label>
   );
@@ -137,14 +139,31 @@ export default function AccountPage() {
 
       {me && (
         <>
-          <Card title="Display name" description="Shown instead of your email around the app. Purely cosmetic — never used to sign in.">
+          <Card
+            title="Display name"
+            description={
+              me.display_name_change_available
+                ? "Shown instead of your email around the app. Purely cosmetic — never used to sign in. Can be changed once every 60 days."
+                : `Shown instead of your email around the app. You can change it again on ${
+                    me.display_name_next_change_at
+                      ? new Date(me.display_name_next_change_at).toLocaleDateString()
+                      : "—"
+                  }.`
+            }
+          >
             <form onSubmit={handleSaveName} className="flex items-end gap-2">
               <div className="flex-1">
-                <Field label="Name" value={displayName} onChange={setDisplayName} placeholder="e.g. Joel Umunnah" />
+                <Field
+                  label="Name"
+                  value={displayName}
+                  onChange={setDisplayName}
+                  placeholder="e.g. Joel Umunnah"
+                  disabled={!me.display_name_change_available}
+                />
               </div>
               <button
                 type="submit"
-                disabled={nameSaving}
+                disabled={nameSaving || !me.display_name_change_available}
                 className="text-[13px] px-3 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 hover:bg-teal transition-colors"
               >
                 {nameSaving ? "Saving…" : "Save"}
