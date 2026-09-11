@@ -144,10 +144,15 @@ assert final["final"] is True
 # "charts" (document-analysis-v2 rebuild) or "by_group" (pre-rebuild) -
 # whichever this branch's planner.py actually produces, it must contain
 # the real computed breakdown, not an empty/missing one.
-chart_rows = final.get("charts") or [{
-    "chart_type": "bar", "labels": [r["group"] for r in final["by_group"]],
-    "values": [r["total"] for r in final["by_group"]],
-}] if final.get("by_group") else []
+if final.get("charts"):
+    chart_rows = final["charts"]
+elif final.get("by_group"):
+    chart_rows = [{
+        "chart_type": "bar", "labels": [r["group"] for r in final["by_group"]],
+        "values": [r["total"] for r in final["by_group"]],
+    }]
+else:
+    chart_rows = []
 assert len(chart_rows) >= 1, final
 real_totals = dict(zip(chart_rows[0]["labels"], chart_rows[0]["values"]))
 assert real_totals["North"] == 60.0 and real_totals["South"] == 53.33, real_totals
