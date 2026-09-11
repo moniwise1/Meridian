@@ -174,7 +174,7 @@ def create_report(query_id: str, db: Session = Depends(get_db),
         insight=snap.get("insight", {}), metrics=snap.get("metrics", {}),
         by_group=snap.get("by_group"), data_quality=snap.get("data_quality", {}),
         anomalies=snap.get("anomalies", []), sql=snap.get("sql", record.generated_sql),
-        query_id=record.id,
+        query_id=record.id, charts=snap.get("charts"),
     )
     artifact = _record_artifact(db, ctx, "report_pdf", f"Report — {record.question[:60]}", query_id, path)
     return _to_out(artifact)
@@ -191,7 +191,7 @@ def create_presentation(query_id: str, db: Session = Depends(get_db),
         title=f"Analysis: {_short_title(record.question)}", question=record.question,
         insight=snap.get("insight", {}), metrics=snap.get("metrics", {}),
         by_group=snap.get("by_group"), data_quality=snap.get("data_quality", {}),
-        anomalies=snap.get("anomalies", []), query_id=record.id,
+        anomalies=snap.get("anomalies", []), query_id=record.id, charts=snap.get("charts"),
     )
     artifact = _record_artifact(db, ctx, "presentation_pptx", f"Presentation — {record.question[:60]}", query_id, path)
     return _to_out(artifact)

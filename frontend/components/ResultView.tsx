@@ -91,6 +91,51 @@ function PieChart({ data }: { data: { group: string; total: number }[] }) {
   );
 }
 
+// Dependency-free line chart (a plain SVG polyline) - the "line" option
+// alongside GroupBars/PieChart above for a v2 document-only chart (see
+// insight_agent.py's render_chart tool) whose chart_type is "line",
+// typically a time-based trend. No charting library exists anywhere in
+// this codebase (see PieChart's own comment) - this follows the same
+// convention rather than introducing one for a single chart type.
+function LineChart({ labels, values }: { labels: string[]; values: number[] }) {
+  const points = labels.map((label, i) => ({ label, value: values[i] ?? 0 })).slice(0, 20);
+  if (points.length === 0) return null;
+  const width = 560;
+  const height = 140;
+  const pad = 24;
+  const max = Math.max(...points.map((p) => p.value), 1);
+  const min = Math.min(...points.map((p) => p.value), 0);
+  const range = max - min || 1;
+  const stepX = (width - pad * 2) / Math.max(points.length - 1, 1);
+  const coords = points.map((p, i) => ({
+    x: pad + i * stepX,
+    y: height - pad - ((p.value - min) / range) * (height - pad * 2),
+  }));
+
+  return (
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full max-w-xl" style={{ height: `${height}px` }}>
+        <polyline
+          points={coords.map((c) => `${c.x},${c.y}`).join(" ")}
+          fill="none"
+          stroke="var(--teal-deep)"
+          strokeWidth={2}
+        />
+        {coords.map((c, i) => (
+          <circle key={points[i].label} cx={c.x} cy={c.y} r={3} fill="var(--teal-deep)" />
+        ))}
+      </svg>
+      <div className="flex justify-between text-[11px] text-ink-soft mt-1 px-1 gap-1">
+        {points.map((p) => (
+          <span key={p.label} className="truncate max-w-[80px]">
+            {p.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const TREND_ARROW: Record<string, string> = { up: "↑", down: "↓", flat: "→" };
 const TREND_COLOR: Record<string, string> = { up: "text-teal", down: "text-red", flat: "text-ink-soft" };
 
@@ -159,6 +204,80 @@ function InvestigationCascade({ investigation }: { investigation: Investigation[
   );
 }
 
+// One named chart from a v2 document-only result's `charts` array,
+// rendered by type - bar/pie reuse GroupBars/PieChart above (adapting
+// {labels, values} into the {group, total}[] shape they already take),
+// "line" gets the new LineChart. Mirrors the existing by_group panels'
+// layout (a titled panel, optionally a pie alongside a bar) but per-chart
+// rather than one hard-coded pair.
+function ChartPanel({ chart }: { chart: NonNullable<ResultEvent["charts"]>[number] }) {
+  const data = chart.labels.map((label, i) => ({ group: label, total: chart.values[i] ?? 0 }));
+  const canShowPie = chart.chart_type === "pie" && data.some((d) => d.total > 0);
+
+  return (
+    <div className="bg-panel border border-line rounded-[4px] p-5">
+      <div className="text-[13px] text-ink-soft mb-3">{chart.title || "Breakdown"}</div>
+      {chart.chart_type === "line" ? (
+        <LineChart labels={chart.labels} values={chart.values} />
+      ) : chart.chart_type === "pie" ? (
+        canShowPie && <PieChart data={data} />
+      ) : (
+        <GroupBars data={data} />
+      )}
+      {chart.insight && <div className="text-[12.5px] text-ink-soft mt-3 italic">{chart.insight}</div>}
+      {chart.location && (
+        <div className="text-[11px] text-ink-soft font-[family-name:var(--font-mono)] mt-1.5">{chart.location}</div>
+      )}
+    </div>
+  );
+}
+
+// A v2 document-only result's key_findings/flagged_items (see
+// app/agents/insight_agent.py's DocumentInsight) - each finding cites
+// where in the source document it came from, with its own confidence
+// tag reusing ConfidenceBadge, same as an anomaly's confidence badge
+// below. Rendered only when there's at least one of either, same
+// "don't show an empty panel" convention every other section here uses.
+function KeyFindingsList({
+  findings, flaggedItems,
+}: {
+  findings: { finding: string; location: string; confidence: string }[];
+  flaggedItems: string[];
+}) {
+  if (findings.length === 0 && flaggedItems.length === 0) return null;
+  return (
+    <div className="bg-panel border border-line rounded-[4px] p-5">
+      {findings.length > 0 && (
+        <>
+          <div className="text-[13px] text-ink-soft mb-3">Key findings</div>
+          <div className="flex flex-col gap-3">
+            {findings.map((f, i) => (
+              <div key={i} className={i > 0 ? "pt-3 border-t border-line" : ""}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-[13.5px] text-ink">{f.finding}</div>
+                  <ConfidenceBadge level={f.confidence} />
+                </div>
+                {f.location && (
+                  <div className="text-[12px] text-ink-soft font-[family-name:var(--font-mono)] mt-1">
+                    {f.location}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {flaggedItems.length > 0 && (
+        <ul className={`text-[12.5px] text-amber flex flex-col gap-1 ${findings.length > 0 ? "mt-4 pt-4 border-t border-line" : ""}`}>
+          {flaggedItems.map((item, i) => (
+            <li key={i}>{item}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function AnomalyList({ result }: { result: ResultEvent }) {
   if (result.anomalies.length === 0) return null;
 
@@ -205,15 +324,36 @@ export default function ResultView({ result }: { result: ResultEvent }) {
             <ConfidenceBadge level={insight.confidence} />
           </div>
 
-          {insight.body ? (
-            // A document-only question's real, organized answer (see
-            // Insight.body's docstring in insight_agent.py) - the
+          {insight.extraction_summary ? (
+            // A v2 document-only result (see DocumentInsight in
+            // insight_agent.py) - the extraction summary here, key
+            // findings/flagged items rendered separately below in their
+            // own panel (KeyFindingsList), same reasoning as `body` below
+            // for why this doesn't force an open-ended document answer
+            // into the Where/When/Contributors template.
+            <div className="text-[13px] text-ink-soft">
+              {insight.extraction_summary.total_rows_or_items} row(s)/item(s) across{" "}
+              {insight.extraction_summary.sheets_or_pages_or_slides} sheet(s)/page(s)/slide(s) —
+              extraction confidence: {insight.extraction_summary.extraction_confidence}
+              {insight.extraction_summary.flags.length > 0 && (
+                <ul className="mt-2 flex flex-col gap-1 text-amber">
+                  {insight.extraction_summary.flags.map((flag, i) => (
+                    <li key={i}>{flag}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : insight.body ? (
+            // The OLD document-only shape (see the comment on
+            // ResultEvent["charts"] in lib/api.ts) - a real, organized
+            // answer, kept working purely so a QueryRecord written before
+            // the v2 rebuild still reopens correctly. The
             // Where/When/Contributors template below is built for
             // explaining a single computed database metric and is a bad
             // fit for an open-ended document question, which is what
-            // produced a genuinely disorganized report before this.
-            // pre-wrap preserves the model's own blank-line/"- " bullet
-            // structure without needing a markdown renderer.
+            // produced a genuinely disorganized report before this
+            // existed. pre-wrap preserves the model's own blank-line/"- "
+            // bullet structure without needing a markdown renderer.
             <div className="text-[13.5px] text-ink whitespace-pre-wrap leading-relaxed">{insight.body}</div>
           ) : (
             <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 text-[13px]">
@@ -247,18 +387,32 @@ export default function ResultView({ result }: { result: ResultEvent }) {
         </div>
       )}
 
-      {result.by_group && result.by_group.length > 0 && (
-        <div className="bg-panel border border-line rounded-[4px] p-5">
-          <div className="text-[13px] text-ink-soft mb-3">By group</div>
-          <GroupBars data={result.by_group} />
-        </div>
+      {result.charts && result.charts.length > 0 ? (
+        // v2 document-only charts (see the comment on ResultEvent["charts"]
+        // in lib/api.ts) - one panel per named chart, rather than the
+        // single implicit bar+pie pair below (which this result doesn't
+        // have - by_group is null whenever charts is populated).
+        result.charts.map((chart, i) => <ChartPanel key={i} chart={chart} />)
+      ) : (
+        <>
+          {result.by_group && result.by_group.length > 0 && (
+            <div className="bg-panel border border-line rounded-[4px] p-5">
+              <div className="text-[13px] text-ink-soft mb-3">By group</div>
+              <GroupBars data={result.by_group} />
+            </div>
+          )}
+
+          {result.by_group && canShowPie && (
+            <div className="bg-panel border border-line rounded-[4px] p-5">
+              <div className="text-[13px] text-ink-soft mb-3">Share of total</div>
+              <PieChart data={result.by_group} />
+            </div>
+          )}
+        </>
       )}
 
-      {result.by_group && canShowPie && (
-        <div className="bg-panel border border-line rounded-[4px] p-5">
-          <div className="text-[13px] text-ink-soft mb-3">Share of total</div>
-          <PieChart data={result.by_group} />
-        </div>
+      {insight && (
+        <KeyFindingsList findings={insight.key_findings ?? []} flaggedItems={insight.flagged_items ?? []} />
       )}
 
       <ForecastPanel forecasts={result.forecast} />

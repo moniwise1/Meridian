@@ -191,7 +191,8 @@ def _add_table_slide(prs, title, headers, rows):
 
 def generate_presentation_pptx(title: str, question: str, insight: dict, metrics: dict,
                                  by_group: list[dict] | None, data_quality: dict,
-                                 anomalies: list[dict], query_id: str) -> str:
+                                 anomalies: list[dict], query_id: str,
+                                 charts: list[dict] | None = None) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
     path = os.path.join(settings.artifacts_dir, f"presentation-{uuid.uuid4().hex}.pptx")
 
@@ -200,14 +201,37 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
     _add_title_slide(prs, title, f"{question}\nQuery ID: {query_id}")
 
     if "error" not in insight:
-        # See report_generator.py's identical branch for why: "body"
-        # (document-only questions only) is the real answer, already
-        # organized however the question called for - the Where/When/
-        # Contributors slide below is a template built for explaining a
-        # single computed database metric and is skipped here in favor of
-        # the real answer when there is one.
+        # Three possible shapes, checked in this order - see
+        # report_generator.py's identical branch for the full explanation:
+        # the current document-only shape (extraction_summary, from
+        # explain_document_only_v2), the OLD document-only shape ("body",
+        # kept working only so a QueryRecord written before v2 shipped
+        # still re-exports correctly), then the database-metric shape
+        # every other analysis uses.
+        extraction_summary = insight.get("extraction_summary")
         body = insight.get("body")
-        if body:
+        if extraction_summary:
+            conf = extraction_summary.get("extraction_confidence", "")
+            _add_bullets_slide(prs, "Executive summary", [
+                insight.get("what", ""),
+                f"{extraction_summary.get('total_rows_or_items', 0)} row(s)/item(s) across "
+                f"{extraction_summary.get('sheets_or_pages_or_slides', 0)} sheet(s)/page(s)/slide(s) "
+                f"— extraction confidence: {conf}",
+            ])
+            findings = [
+                f"{kf.get('finding', '')} [{kf.get('location', '')} — {kf.get('confidence', '')} confidence]"
+                for kf in insight.get("key_findings", [])
+            ]
+            if findings:
+                _add_bullets_slide(prs, "Key findings", findings)
+            flagged = insight.get("flagged_items") or []
+            if flagged:
+                _add_bullets_slide(prs, "Flagged items", flagged)
+            _add_bullets_slide(prs, "Confidence", [
+                f"Confidence: {insight.get('confidence', '')} — {insight.get('confidence_explanation', '')}",
+                f"Next question: {insight.get('next_question', '')}",
+            ])
+        elif body:
             _add_bullets_slide(prs, "Executive summary", [insight.get("what", "")])
             _add_text_slide(prs, "Analysis", body)
             _add_bullets_slide(prs, "Confidence", [
@@ -226,7 +250,17 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
                 f"Next question: {insight.get('next_question', '')}",
             ])
 
-    if by_group:
+    if charts:
+        # v2 document-only charts (see insight_agent.py's render_chart
+        # tool) - one table slide per named chart, rather than the single
+        # implicit bar+pie pair `by_group` produces.
+        for chart in charts:
+            heading = "Breakdown"
+            if chart.get("title"):
+                heading += f' — {chart["title"]}'
+            rows = list(zip(chart.get("labels", []), chart.get("values", [])))
+            _add_table_slide(prs, heading, ["Group", "Total"], [[label, f"{value:,.2f}"] for label, value in rows])
+    elif by_group:
         _add_table_slide(
             prs, "Breakdown", ["Group", "Total"],
             [[row["group"], f"{row['total']:,.2f}"] for row in by_group],
