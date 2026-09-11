@@ -310,6 +310,10 @@ export type Me = {
   email: string;
   display_name: string | null;
   email_change_available: boolean;
+  // Mirrors email_change_available but for the 60-day display-name
+  // cooldown (a cooldown, not a lifetime limit like email).
+  display_name_change_available: boolean;
+  display_name_next_change_at: string | null;
 };
 
 export async function getMe(): Promise<Me> {

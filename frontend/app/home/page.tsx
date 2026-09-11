@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  getMe,
   listAnalyses,
   listArtifactHistory,
   listConnections,
@@ -37,6 +38,7 @@ export default function HomePage() {
   const [artifacts, setArtifacts] = useState<ArtifactHistoryEntry[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [error, setError] = useState("");
+  const [displayName, setDisplayName] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([listAnalyses(), listArtifactHistory(), listConnections()])
@@ -46,9 +48,14 @@ export default function HomePage() {
         setConnections(c);
       })
       .catch((e) => setError(e.message));
+    // Best-effort - if this fails the greeting just falls back to the
+    // email-derived name below, same as before display names existed.
+    getMe()
+      .then((m) => setDisplayName(m.display_name))
+      .catch(() => {});
   }, []);
 
-  const greetingName = session?.email.split("@")[0] ?? "there";
+  const greetingName = displayName || session?.email.split("@")[0] || "there";
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-12">

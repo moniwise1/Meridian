@@ -7,7 +7,7 @@ gets an email and accepts it themselves within 24 hours, proving control
 of that inbox and choosing their own password, rather than an admin
 picking a temporary password for them.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
@@ -500,6 +500,24 @@ def accept_team_invite(body: AcceptInviteRequest, db: Session = Depends(get_db))
     )
 
 
+# A display name isn't the one-per-lifetime deal email is - it's cosmetic,
+# so a cooldown (not a hard cap) is enough to stop it being churned every
+# few minutes while still allowing a genuine rename later (marriage,
+# rebrand, correcting a typo missed the first time).
+DISPLAY_NAME_COOLDOWN_DAYS = 60
+
+
+def _display_name_change_status(user: User) -> tuple[bool, datetime | None]:
+    """(available_now, next_available_at). next_available_at is None once
+    available_now is True - nothing for the frontend to count down to."""
+    if user.display_name_changed_at is None:
+        return True, None
+    next_at = user.display_name_changed_at + timedelta(days=DISPLAY_NAME_COOLDOWN_DAYS)
+    if datetime.utcnow() >= next_at:
+        return True, None
+    return False, next_at
+
+
 class MeOut(BaseModel):
     user_id: str
     tenant_id: str
@@ -510,6 +528,21 @@ class MeOut(BaseModel):
     # frontend uses this to grey out the email field rather than let
     # someone fill in a new address and only find out it's refused.
     email_change_available: bool
+    # Mirrors the field above but for the display-name cooldown (see
+    # DISPLAY_NAME_COOLDOWN_DAYS) - a cooldown, not a lifetime limit, so
+    # display_name_next_change_at tells the frontend when it reopens.
+    display_name_change_available: bool
+    display_name_next_change_at: datetime | None = None
+
+
+def _me_out(ctx: AuthContext, user: User) -> MeOut:
+    available, next_at = _display_name_change_status(user)
+    return MeOut(
+        user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
+        email=user.email, display_name=user.display_name,
+        email_change_available=user.email_changed_at is None,
+        display_name_change_available=available, display_name_next_change_at=next_at,
+    )
 
 
 @router.get("/me", response_model=MeOut)
@@ -517,11 +550,7 @@ def me(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_current_use
     user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
     if not user:
         raise HTTPException(404, "User not found.")
-    return MeOut(
-        user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
-        email=user.email, display_name=user.display_name,
-        email_change_available=user.email_changed_at is None,
-    )
+    return _me_out(ctx, user)
 
 
 class DisplayNameUpdate(BaseModel):
@@ -537,12 +566,18 @@ def update_own_display_name(body: DisplayNameUpdate, db: Session = Depends(get_d
     user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
     if not user:
         raise HTTPException(404, "User not found.")
+    available, next_at = _display_name_change_status(user)
+    if not available:
+        raise HTTPException(
+            400,
+            f"Display name can only be changed once every {DISPLAY_NAME_COOLDOWN_DAYS} days. "
+            f"You can change it again on {next_at.date().isoformat()}.",
+        )
     user.display_name = body.display_name.strip() or None
+    user.display_name_changed_at = datetime.utcnow()
     db.commit()
     audit.log(db, ctx.tenant_id, "display_name_updated", ctx.user_id)
-    return MeOut(user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
-                 email=user.email, display_name=user.display_name,
-                 email_change_available=user.email_changed_at is None)
+    return _me_out(ctx, user)
 
 
 class EmailChangeRequest(BaseModel):
@@ -595,8 +630,7 @@ def change_own_email(body: EmailChangeRequest, db: Session = Depends(get_db),
         f"A teammate's email changed on {ctx.tenant_id}",
         f"{old_email} changed their sign-in email to {new_email}.",
     )
-    return MeOut(user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
-                 email=user.email, display_name=user.display_name, email_change_available=False)
+    return _me_out(ctx, user)
 
 
 class PasswordChangeRequest(BaseModel):

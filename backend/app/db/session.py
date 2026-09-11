@@ -59,6 +59,7 @@ _ADDED_COLUMNS = [
     ("tenants", "expiry_reminder_sent_for", "TIMESTAMP"),
     ("users", "display_name", "VARCHAR"),
     ("users", "email_changed_at", "TIMESTAMP"),
+    ("users", "display_name_changed_at", "TIMESTAMP"),
 ]
 
 
