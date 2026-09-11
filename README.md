@@ -1476,6 +1476,46 @@ from the first, so a regression back to the single-shot version would
 fail loudly here rather than only in production. Full backend
 regression suite green.
 
+**A second real accuracy gap, found by hand-checking a live report against
+its source** — after the tool-loop fix above shipped, Joel cross-checked a
+real generated report's numbers against the original PDF by hand. The
+written answer and every directly-quoted figure were correct, and the
+model correctly flagged genuinely garbled source data (an "On-Time
+Delivery %" column reading `9420.0%` in the source file) rather than
+reporting it as fact. But 3 of 5 category totals in one chart were
+slightly wrong (1.6%-3.4% off) — the model had summed 12 monthly figures
+into an annual total itself, in its head, and gotten the arithmetic
+wrong, even though every individual monthly figure it transcribed was
+correct. Reading a number off a document and adding several of them
+together are different skills, and only the first one had ever been
+verified reliable.
+
+Fixed with a second tool, `compute_aggregate` (`app/agents/
+insight_agent.py`), extending the exact same "AI reads/narrates, code
+computes" split `computed_profile` already enforces for real spreadsheet
+tables — just covering the one remaining gap: a PDF has no
+`computed_profile` at all (deliberately — see the CSV/PDF-trust decision
+above), so an aggregate figure with no real table behind it used to have
+no deterministic path whatsoever. The model now hands over the raw
+values it read (e.g. 12 monthly figures) and the requested operation
+(`sum`/`average`/`min`/`max`); `_execute_aggregate` does the actual
+arithmetic in real Python and the tool_result sent back carries that
+real number, not whatever the model would have claimed. This is a
+narrower, safer fix than attempting real PDF table-structure parsing
+(the thing already deliberately avoided): it only ever trusts the model
+to transcribe a number it can already see reliably, never to interpret
+which column or row a value belongs to.
+
+Verified with 3 new checks in `verify_document_analysis_v2.py` (now 14,
+up from 10), built directly from the real incident: `compute_aggregate`
+given the actual 12 Staff Costs figures from the real report returns the
+real sum (63.3), not the 64.3 the live model had claimed; a malformed
+call (an unsupported operation) still returns a usable tool_result
+rather than breaking the loop, matching `render_chart`'s existing
+fails-open discipline; and `_execute_aggregate` is checked directly for
+all four operations plus non-dict/empty-array/bad-operation input. Full
+backend regression suite green.
+
 **Structured-table analysis, round two: recovering the file that started
 it all, and making every step genuinely visible** — the same real user
 asked, reasonably, why the feature above still didn't touch their actual

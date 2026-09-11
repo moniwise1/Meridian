@@ -26,7 +26,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test-not-real")
 
 from app.agents import insight_agent
 from app.agents.insight_agent import (
-    explain_document_only_v2, SYSTEM_PROMPT_DOCUMENT_ONLY_V2, _sanitize_chart,
+    explain_document_only_v2, SYSTEM_PROMPT_DOCUMENT_ONLY_V2, _sanitize_chart, _execute_aggregate,
 )
 from app.agents.report_generator import generate_report_pdf
 from app.agents.presentation_generator import generate_presentation_pptx
@@ -136,6 +136,37 @@ assert tool_result_msg["role"] == "user" and len(tool_result_msg["content"]) == 
 print("1. OK  text-only document: two render_chart tool calls (turn 1) sanitized and returned, "
       "final JSON answer parsed from the real second turn after tool_results were sent back")
 
+# --- 1b. compute_aggregate: the model asks for a sum of monthly values it
+#         read from a PDF - the tool_result sent back must contain the
+#         REAL computed sum, not whatever the model itself claimed, since
+#         the whole point is moving the arithmetic to real code. These
+#         are the actual numbers from the real production report that
+#         motivated this tool: a live Meridian report summed these same
+#         12 Staff Costs figures itself and got 64.3 - the real sum is
+#         63.3. ---
+staff_costs_monthly = [4.5, 4.6, 4.8, 4.9, 5, 5.2, 5.3, 5.4, 5.6, 5.8, 6, 6.2]
+agg_turn1 = [_tool_block("compute_aggregate", {
+    "operation": "sum", "values": staff_costs_monthly, "label": "Staff Costs annual total",
+})]
+insight_agent._client = _FakeClient([agg_turn1, [_text_block(json.dumps(ANSWER_JSON))]])
+explain_document_only_v2("What's the annual staff cost total?", [{"filename": "report.pdf", "kind": "pdf", "text": "..."}])
+second_call_messages = insight_agent._client.messages.all_kwargs[1]["messages"]
+sent_back = json.loads(second_call_messages[-1]["content"][0]["content"])
+assert sent_back == {"result": 63.3, "operation": "sum", "count": 12}, sent_back
+print("1b. OK  compute_aggregate sends back the real, code-computed sum (63.3) - fixes the exact "
+      "arithmetic error a real production report had (it claimed 64.3)")
+
+# --- 1c. a malformed compute_aggregate call still gets a real tool_result
+#         (not a raise) - the loop must never break because one tool call
+#         had bad input, same fails-open discipline as render_chart, just
+#         returning an error payload since this tool always has to answer
+#         with something rather than silently ack-and-drop. ---
+bad_agg_turn1 = [_tool_block("compute_aggregate", {"operation": "median", "values": [1, 2, 3]})]
+insight_agent._client = _FakeClient([bad_agg_turn1, [_text_block(json.dumps(ANSWER_JSON))]])
+insight_bad, _ = explain_document_only_v2("Bad aggregate op", [{"filename": "x.pdf", "kind": "pdf", "text": "..."}])
+assert insight_bad.what == ANSWER_JSON["what"]  # loop completed normally, didn't crash
+print("1c. OK  a malformed compute_aggregate call (bad operation) still gets a tool_result - loop doesn't crash")
+
 # --- 2. a malformed render_chart call (mismatched labels/values lengths,
 #        and a bad chart_type) is dropped, not crashed on - the well-formed
 #        third call still comes through ---
@@ -157,6 +188,20 @@ assert _sanitize_chart("not a dict") is None
 assert _sanitize_chart({"chart_type": "bar"}) is None  # no labels/values at all
 print("3. OK  _sanitize_chart returns None (not an exception) for non-dict / missing-keys input")
 
+# --- 3b. _execute_aggregate directly: real arithmetic for all four
+#         operations, and a graceful (never-raising) error payload for bad
+#         input - same fails-open discipline _sanitize_chart uses, just
+#         returning an error dict instead of None since compute_aggregate
+#         always has to answer with a real tool_result. ---
+assert _execute_aggregate({"operation": "sum", "values": [1, 2, 3]}) == {"result": 6.0, "operation": "sum", "count": 3}
+assert _execute_aggregate({"operation": "average", "values": [2, 4, 6]})["result"] == 4.0
+assert _execute_aggregate({"operation": "min", "values": [5, 1, 9]})["result"] == 1.0
+assert _execute_aggregate({"operation": "max", "values": [5, 1, 9]})["result"] == 9.0
+assert "error" in _execute_aggregate({"operation": "median", "values": [1]})
+assert "error" in _execute_aggregate({"operation": "sum", "values": []})
+assert "error" in _execute_aggregate("not a dict")
+print("3b. OK  _execute_aggregate does real arithmetic for sum/average/min/max, never raises on bad input")
+
 # --- 4. the prompt-injection defence paragraph still exists verbatim in
 #        the new system prompt - the actual defence itself (never comply
 #        with instruction-like text inside reference_documents) can't be
@@ -176,6 +221,13 @@ print("4. OK  prompt-injection defence paragraph carried forward into the new sy
 assert "Never recompute, re-derive, round differently" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2
 assert "Do NOT call render_chart for" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2
 print("5. OK  computed_profile trust rule (never recompute a real number) carried forward into the new prompt")
+
+# --- 5b. the compute_aggregate instruction is present in the system
+#         prompt - a regression guard for the actual arithmetic-accuracy
+#         fix, not just the tool existing in isolation. ---
+assert "compute_aggregate" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2
+assert "mental arithmetic" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2 or "arithmetic across many" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2
+print("5b. OK  compute_aggregate instruction present in the system prompt")
 
 # --- 6. old-shape (body/by_group) insight dicts still render through both
 #        generators unchanged - the backward-compat branch actually works,
