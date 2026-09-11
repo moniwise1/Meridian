@@ -623,7 +623,27 @@ def explain_document_only_v2(
         payload["computed_profile"] = computed_profile
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
-        max_tokens=4096,
+        # Raised from 4096 after a real production failure: a user's
+        # question was itself an unusually large 19-section report
+        # template (KPI tables, ~10 named charts, a per-product write-up
+        # for "every important product", a CEO one-page summary, ...).
+        # The model tried to honor that much structure inside what
+        # should have been a compact JSON answer plus a handful of
+        # render_chart tool calls, ran out of budget mid-generation, and
+        # produced either no text at all or JSON truncated too early to
+        # parse - either way _extract_text/_parse_json_response raised,
+        # caught by planner.py's try/except, and the resulting {"error":
+        # ...} insight rendered as a completely empty analysis in the
+        # exported PDF/PPTX (see report_generator.py/
+        # presentation_generator.py's now-added "error" branch for the
+        # other half of this fix - a failure here should never again be
+        # silently invisible to the user). Same class of issue explain()
+        # and this function's own earlier 800->1200->4096 history already
+        # hit once before - this time raised generously rather than by a
+        # small increment, since an elaborate user-supplied template like
+        # this one is a real, recurring shape of Ask question, not an
+        # edge case to under-provision for again.
+        max_tokens=16000,
         thinking=_THINKING_DISABLED,
         system=SYSTEM_PROMPT_DOCUMENT_ONLY_V2,
         tools=[RENDER_CHART_TOOL],

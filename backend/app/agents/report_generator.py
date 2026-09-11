@@ -184,6 +184,22 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
         pdf.set_text_color(*_INK)
         pdf.write(6, _safe(f" — {insight.get('confidence_explanation', '')}"))
         pdf.ln(8)
+    else:
+        # Previously silent - a failed insight-generation step (e.g. the
+        # model ran out of its response budget on an unusually large
+        # question) produced a PDF with nothing between the question and
+        # the Data Quality footer, no indication anything had gone wrong
+        # at all. ResultView.tsx already shows a real message for this
+        # exact case ("The analysis ran, but the explanation step is
+        # unavailable.") - this brings the exported PDF in line with it
+        # rather than leaving a downloaded report look like a hung/broken
+        # analysis with no explanation.
+        section("Analysis unavailable")
+        _mc(pdf, 6, _safe(
+            "The explanation step for this analysis failed and no summary could be generated. "
+            "The data quality and methodology details below still reflect the real underlying data."
+        ))
+        pdf.ln(4)
 
     def _breakdown_table(rows: list[tuple[str, float]]):
         # Shared by both branches below - a chart's {labels, values} and

@@ -1406,6 +1406,37 @@ guard above, and a full end-to-end check (a real uploaded CSV through
 produces matches XLSX's). Full backend regression suite green; frontend
 lint and `next build` clean.
 
+**Document-only analysis: a genuinely empty exported report, and a raised
+token budget** — a real user's downloaded PDF showed the title and their
+own question, then jumped straight to the Data Quality footer with
+nothing in between: no Executive Summary, no findings, no confidence,
+looking exactly like the AI had "just repeated the question and given no
+real answer." Root cause: their question was itself an unusually large
+19-section report template (KPI tables, ~10 named charts, a per-product
+write-up for every important product, a CEO one-page summary). The model
+tried to honor that much structure inside `explain_document_only_v2`'s
+compact JSON answer plus its `render_chart` tool calls, exhausted the
+4096-token budget mid-generation, and the resulting parse failure was
+caught and turned into an `{"error": ...}` insight — exactly as designed
+for a genuine failure, except `report_generator.py`/
+`presentation_generator.py` had *always* rendered that case as nothing
+at all (no message, no indication of failure), a pre-existing gap this
+surfaced but didn't create. Two fixes: `max_tokens` raised from 4096 to
+16000 (Sonnet 5 supports up to 128K output tokens; 16000 is the safe
+ceiling for a non-streaming call before risking an SDK-level HTTP
+timeout), and both generators now show a visible "Analysis unavailable"
+note on a failed insight instead of silently omitting the entire
+Executive Summary/Confidence section — bringing an exported report in
+line with `ResultView.tsx`, which already showed a real message for this
+case ("The analysis ran, but the explanation step is unavailable.") in
+the live app.
+
+Verified with 3 new checks in `verify_document_analysis_v2.py`: a failed
+insight renders a visible note through both generators rather than a
+blank gap, and `explain_document_only_v2`'s real API call requests
+`max_tokens >= 16000`, not the old 4096 a large question could exhaust.
+Full backend regression suite green.
+
 **Structured-table analysis, round two: recovering the file that started
 it all, and making every step genuinely visible** — the same real user
 asked, reasonably, why the feature above still didn't touch their actual

@@ -182,6 +182,39 @@ pptx_path2 = generate_presentation_pptx(
 assert os.path.exists(pptx_path2) and os.path.getsize(pptx_path2) > 0
 print("7. OK  a NEW-shape (extraction_summary/key_findings/charts) result renders via both generators")
 
+# --- 7b. a failed insight ({"error": ...}) is no longer silently blank in
+#         the exported PDF/PPTX - a real production report looked exactly
+#         like this (title + question, then straight to the Data Quality
+#         footer with zero indication anything had failed) before this
+#         fix. Both generators must now show a visible "unavailable" note.
+error_insight = {"error": "The explanation step is temporarily unavailable for this analysis."}
+pdf_path3 = generate_report_pdf(
+    title="Error shape test", question="q", insight=error_insight, metrics={},
+    by_group=None, data_quality={"row_count": 0, "completeness_pct": 100, "notes": []},
+    anomalies=[], sql="-- n/a", query_id="q-err-1", charts=[],
+)
+assert os.path.exists(pdf_path3) and os.path.getsize(pdf_path3) > 0
+pptx_path3 = generate_presentation_pptx(
+    title="Error shape test", question="q", insight=error_insight, metrics={},
+    by_group=None, data_quality={"row_count": 0, "completeness_pct": 100, "notes": []},
+    anomalies=[], query_id="q-err-2", charts=[],
+)
+assert os.path.exists(pptx_path3) and os.path.getsize(pptx_path3) > 0
+print("7b. OK  a failed ({\"error\": ...}) insight now shows a visible 'unavailable' note in both exports, "
+      "not a silently blank report")
+
+# --- 7c. the actual root cause of the real failure this session
+#         investigated: max_tokens was too low for an unusually large
+#         question (a full multi-section report template). Confirm the
+#         real API call now requests generous headroom, not the old 4096
+#         that could be exhausted mid-generation. ---
+insight_agent._client = _FakeClient([_text_block(json.dumps(ANSWER_JSON))])
+explain_document_only_v2("A short question", [{"filename": "x.pdf", "kind": "pdf", "text": "..."}])
+assert insight_agent._client.messages.last_kwargs["max_tokens"] >= 16000, \
+    insight_agent._client.messages.last_kwargs["max_tokens"]
+print("7c. OK  explain_document_only_v2 requests a generous max_tokens budget (>=16000), "
+      "not the old 4096 that a large question could exhaust")
+
 # --- 8. the actual safety property, exercised through the real planner
 #        function (not just asked for in the prompt): when a document has
 #        a real parseable table, the primary breakdown chart is built
