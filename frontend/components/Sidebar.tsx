@@ -16,6 +16,7 @@ const NAV = [
   { href: "/connections", label: "Data sources" },
   { href: "/team", label: "Team", adminOnly: true },
   { href: "/billing", label: "Billing" },
+  { href: "/account", label: "Account" },
   { href: "/security", label: "Security" },
   { href: "/support", label: "Support" },
   { href: "/audit", label: "Audit log" },
@@ -38,6 +39,7 @@ export default function Sidebar() {
     pathname === "/auth/handoff" ||
     pathname === "/accept-invite" ||
     pathname === "/mfa-recovery" ||
+    pathname === "/reset-password" ||
     pathname === "/privacy" ||
     pathname === "/terms" ||
     pathname.startsWith("/platform") ||

@@ -1971,6 +1971,69 @@ for real against a live local server — a genuine simulated outage
 reported, confirmed visible on `/status`, and confirmed auto-resolved on
 the next run once the real URL was restored.
 
+**Tenant account self-service** (`PATCH /auth/me/display-name`, `PATCH
+/auth/me/email`, `PATCH /auth/me/password`, `app/account/page.tsx`) — any
+tenant user can set a display name (shown instead of their raw email once
+set), change their own email, and change their own password, all without
+involving an admin. Email change is deliberately **one-time**: a nullable
+`email_changed_at` timestamp on `User` is set the first time it's used and
+checked on every subsequent attempt, so a second change is rejected with a
+clear error rather than silently allowed — the intent is "fix a typo once,"
+not an open-ended identity swap. Password change requires the current
+password, same as any other in-session credential change. Both email and
+password changes notify every admin on the tenant (`notify_owners`) so a
+change nobody recognizes doesn't go unnoticed.
+
+**Admin-triggered password reset** (`POST /platform/tenants/{id}/users/
+{user_id}/reset-password`, owner/support, `POST /auth/password-reset/
+redeem`, `app/reset-password/page.tsx`) — for a tenant user who's locked
+out and can't use the normal "change my password" flow above because they
+can't sign in at all. Platform staff trigger it from the tenant's
+sub-accounts list; the user gets an emailed link (not a numeric code —
+reuses the same signed pre-auth JWT pattern as MFA recovery, `purpose=
+"password_reset"`, 30-minute expiry) that sets a new password and signs
+them straight in on redemption. The token is single-purpose (a
+`mfa_recovery` or `handoff` token can't be replayed here and vice versa)
+and tenant/user-bound, so redeeming it can't be pointed at a different
+account.
+
+**Subscription-expiring-soon banner** (`components/
+SubscriptionExpiryBanner.tsx`) — a persistent bar (same pattern as the
+existing MFA-setup warning banner, not a dismissible toast) that appears
+on every screen once a tenant's subscription is within 7 days of
+`subscription_expires_at`, with a direct link to Billing. This is the
+"you can see it yourself" complement to the existing automatic email/bell
+renewal reminder (`maybe_send_expiry_reminder`) — same underlying data,
+just always visible rather than something that has to land in an inbox.
+
+**Platform billing detail & fraud/abuse override** (extends `GET
+/platform/tenants`, `POST /platform/tenants/{id}/deactivate-and-refund`,
+owner-only) — the tenant list in the internal admin panel now shows the
+comped plan amount, the last Paystack transaction reference, and the
+Paystack customer code alongside the existing subscribed/expires dates,
+so "how much, when, and where to look it up directly in Paystack" is all
+on one screen without cross-referencing the Paystack dashboard by hand.
+Separately, an owner-only "Deactivate & refund" action exists for
+confirmed fraud/abuse: it disables the real Paystack subscription
+(`paystack.disable_subscription`), refunds the last transaction in full
+(`paystack.refund_transaction`), and marks the tenant `cancelled` — one
+step, not "cancel, then separately remember to refund." A reason is
+required and is written to the audit log; the action is gated to active
+subscriptions only, so it can't be fired twice or against a tenant that
+was never actually paying.
+
+Verified with three new real-DB regression scripts (23 checks total):
+`verify_account_self_service.py` (8 — display name, one-time email change
+including the second-attempt rejection, password change with correct/
+incorrect current-password, and the `.test`-domain `EmailStr` gotcha
+worked around by using `.example.com`-style addresses), `verify_admin_
+password_reset.py` (8 — staff-trigger and redeem happy path, tenant/user
+mismatch guard, replay-after-redeem rejection, wrong-purpose-token
+rejection), and `verify_platform_billing_ops.py` (7 — billing detail
+exposure, deactivate-and-refund happy path, refund-API-failure handling,
+missing-Paystack-handle handling, role gating, empty-reason rejection,
+non-active-tenant guard).
+
 **Frontend** (Next.js/TypeScript/Tailwind) — login/register, Home dashboard
 (connection/analysis/artifact counts and recent activity, pure client-side
 composition of existing endpoints — no new backend surface), Ask screen

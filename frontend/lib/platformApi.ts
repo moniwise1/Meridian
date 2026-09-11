@@ -180,6 +180,11 @@ export type PlatformTenant = {
   user_count: number;
   connection_count: number;
   users: PlatformTenantUser[];
+  // Billing detail - "how much" and "where to look it up in Paystack
+  // directly" alongside subscribed_at/subscription_expires_at above.
+  plan_amount_naira: string | null;
+  last_transaction_reference: string | null;
+  paystack_customer_code: string | null;
 };
 
 export async function listTenants(): Promise<PlatformTenant[]> {
@@ -214,6 +219,35 @@ export async function deleteTenant(tenantId: string): Promise<void> {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? "Could not delete this tenant.");
   }
+}
+
+// Sends a locked-out tenant user a one-time password-reset link (see
+// app/reset-password/page.tsx on the redeeming side) - the tenant-side
+// equivalent of the platform-owner bootstrap recovery.
+export async function resetUserPassword(tenantId: string, userId: string): Promise<{ status: string; email: string }> {
+  const res = await fetch(`${API_BASE}/platform/tenants/${tenantId}/users/${userId}/reset-password`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not send a password-reset link.");
+  return body;
+}
+
+// Owner-only fraud/abuse override: disables the real Paystack subscription
+// and refunds the last transaction in full, regardless of the normal
+// self-serve refund window.
+export async function deactivateAndRefund(tenantId: string, reason: string): Promise<PlatformTenant> {
+  const res = await fetch(`${API_BASE}/platform/tenants/${tenantId}/deactivate-and-refund`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ reason }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not deactivate this tenant.");
+  return body;
 }
 
 // ---------- Tickets ----------
