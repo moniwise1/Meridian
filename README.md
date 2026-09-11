@@ -1570,26 +1570,35 @@ independent of the FastAPI/DB/pandas stack.
 
   **Every email now renders as a branded HTML message**
   (`_render_html_email` in `app/agents/email_delivery.py`), not the bare
-  plain text it used to be — a header badge (the same "MERIDIAN" wordmark
-  treatment as the web app's own nav) and a "Made by Meridian" footer,
-  applied uniformly to every email this backend sends (welcome, invites,
-  owner notifications, MFA recovery, and the AI agent's "email me this
-  report" feature) without any of those callers needing to change at all
-  — purely a presentation layer added at the transport level. Sent as a
-  real `multipart/alternative` (plain text + HTML, the plain-text part
-  completely unchanged) so every client can render it and nothing looks
-  broken to a mail client that doesn't render HTML; the logo specifically
-  is CSS-styled text, not an embedded image — most email clients block
-  remote images until a recipient clicks "show images," so a real `<img>`
-  logo would often render as a blank box on first open, while
-  background-color-styled text always renders immediately. Verified by
-  constructing a real message through the actual `SmtpEmailBackend` (with
-  `smtplib.SMTP` mocked) and confirming the resulting MIME tree is
-  correctly `multipart/mixed` → `multipart/alternative` (plain + html) →
+  plain text it used to be — a header logo and a "Made by Meridian"
+  footer, applied uniformly to every email this backend sends (welcome,
+  invites, owner notifications, MFA recovery, admin-triggered password
+  reset, and the AI agent's "email me this report" feature) without any
+  of those callers needing to change at all — purely a presentation layer
+  added at the transport level. Sent as a real `multipart/alternative`
+  (plain text + HTML, the plain-text part completely unchanged) so every
+  client can render it and nothing looks broken to a mail client that
+  doesn't render HTML. The header is the real logo image
+  (`frontend/public/brand/meridian-logo-email.png`, served as a static
+  asset off the frontend and referenced by an absolute
+  `https://www.getmeridiananalytics.com/...` URL so it works from any
+  mail client, not just ones that can reach the app itself) — a
+  deliberate choice over the earlier CSS-styled text badge, even though
+  it means some clients (desktop Outlook, mainly) show a blank space
+  until the recipient clicks "show images" rather than rendering
+  instantly; `alt="Meridian"` plus explicit `width`/`height` keep that
+  state from collapsing to nothing. Verified by constructing a real
+  message through the actual `SmtpEmailBackend` (with `smtplib.SMTP`
+  mocked) and confirming the resulting MIME tree is correctly
+  `multipart/mixed` → `multipart/alternative` (plain + html) →
   attachment, that the plain-text part is byte-for-byte what it always
   was, and that the HTML part contains the expected branding and dynamic
   content (founder name, company name) — then confirmed for real against
-  the actual production `send_welcome_email` path.
+  the actual production `send_welcome_email` path. The logo swap itself
+  is covered separately by `verify_email_branding.py` (3 checks): the
+  rendered shell embeds the real `<img>` and not the old text badge, the
+  image carries explicit width/height, and the real `SmtpEmailBackend`
+  send path embeds it too (not just the template function in isolation).
 
   **Sender name** — the `From` header was a bare address
   (`hello@getmeridiananalytics.com`) with no display name, so most inboxes
