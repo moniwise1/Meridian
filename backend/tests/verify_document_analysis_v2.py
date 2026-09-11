@@ -36,27 +36,50 @@ def _text_block(text: str):
     return SimpleNamespace(type="text", text=text)
 
 
+_next_tool_use_id = [0]
+
+
 def _tool_block(name: str, input_: dict):
-    return SimpleNamespace(type="tool_use", name=name, input=input_)
+    _next_tool_use_id[0] += 1
+    return SimpleNamespace(type="tool_use", name=name, input=input_, id=f"toolu_fake{_next_tool_use_id[0]}")
 
 
 def _fake_response(blocks: list):
-    return SimpleNamespace(content=blocks, stop_reason="end_turn", usage=SimpleNamespace(output_tokens=123))
+    # Realistic, not hardcoded: the real API stops a turn with
+    # stop_reason="tool_use" (no guarantee of any text yet) whenever a
+    # tool_use block is present, and "end_turn" otherwise - this exact
+    # distinction is what the real production bug hinged on (see
+    # explain_document_only_v2's own docstring) and what the OLD version
+    # of this mock got wrong by always returning "end_turn", which is why
+    # this file's earlier test runs never caught it.
+    stop_reason = "tool_use" if any(b.type == "tool_use" for b in blocks) else "end_turn"
+    return SimpleNamespace(content=blocks, stop_reason=stop_reason, usage=SimpleNamespace(output_tokens=123))
 
 
 class _FakeMessages:
-    def __init__(self, blocks: list):
-        self._blocks = blocks
+    """`turns` is a list of block-lists, one per successive .create() call -
+    simulates a real multi-turn tool-use loop (turn 1: the model calls
+    render_chart, stop_reason="tool_use"; turn 2, after a synthetic
+    tool_result goes back: the model's final text). The last turn repeats
+    if the code under test calls .create() more times than `turns` has
+    entries, so a test can supply just the turns it cares about."""
+    def __init__(self, turns: list[list]):
+        self._turns = turns
+        self._call_count = 0
         self.last_kwargs = None
+        self.all_kwargs: list[dict] = []
 
     def create(self, **kwargs):
         self.last_kwargs = kwargs
-        return _fake_response(self._blocks)
+        self.all_kwargs.append(kwargs)
+        blocks = self._turns[min(self._call_count, len(self._turns) - 1)]
+        self._call_count += 1
+        return _fake_response(blocks)
 
 
 class _FakeClient:
-    def __init__(self, blocks: list):
-        self.messages = _FakeMessages(blocks)
+    def __init__(self, turns: list[list]):
+        self.messages = _FakeMessages(turns)
 
 
 ANSWER_JSON = {
@@ -76,9 +99,17 @@ ANSWER_JSON = {
     "structured_data": [],
 }
 
-# --- 1. text-only document: JSON text block + two render_chart tool
-#        calls -> both charts sanitized and returned, in order ---
-blocks = [
+# --- 1. text-only document: the model calls render_chart twice in its
+#        first turn (parallel tool use - stop_reason="tool_use", NO text
+#        yet, matching the real API), then writes its final JSON answer
+#        in a second turn once tool_results come back -> both charts
+#        sanitized and returned, in call order, alongside a real parsed
+#        answer. This is exactly the multi-turn shape a single-shot call
+#        (the original, buggy version of explain_document_only_v2) could
+#        never have gotten right - see this test file's _fake_response
+#        for why the mock itself has to be realistic for this to mean
+#        anything. ---
+turn1 = [
     _tool_block("render_chart", {
         "chart_type": "pie", "title": "Satisfaction", "labels": ["Very satisfied", "Satisfied", "Unsatisfied"],
         "values": [25, 10, 5], "unit": "count",
@@ -86,9 +117,9 @@ blocks = [
     _tool_block("render_chart", {
         "chart_type": "bar", "title": "By region", "labels": ["North", "South", "East"], "values": [15, 15, 10],
     }),
-    _text_block(json.dumps(ANSWER_JSON)),
 ]
-insight_agent._client = _FakeClient(blocks)
+turn2 = [_text_block(json.dumps(ANSWER_JSON))]
+insight_agent._client = _FakeClient([turn1, turn2])
 insight, model_charts = explain_document_only_v2("What did the survey find?", [{"filename": "survey.pdf", "kind": "pdf", "text": "..."}])
 assert insight.what == ANSWER_JSON["what"], insight
 assert insight.extraction_summary["total_rows_or_items"] == 40, insight.extraction_summary
@@ -96,18 +127,24 @@ assert insight.key_findings[0]["location"] == "Sheet1!C2:C41", insight.key_findi
 assert len(model_charts) == 2, model_charts
 assert model_charts[0]["chart_type"] == "pie" and model_charts[0]["values"] == [25.0, 10.0, 5.0], model_charts[0]
 assert model_charts[1]["chart_type"] == "bar" and model_charts[1]["title"] == "By region", model_charts[1]
-print("1. OK  text-only document: two render_chart tool calls sanitized and returned alongside the JSON answer")
+# Confirm the loop actually made two real API calls, not one - and that
+# the second one carries the tool_result acks back for both chart calls.
+assert insight_agent._client.messages._call_count == 2
+second_call_messages = insight_agent._client.messages.all_kwargs[1]["messages"]
+tool_result_msg = second_call_messages[-1]
+assert tool_result_msg["role"] == "user" and len(tool_result_msg["content"]) == 2
+print("1. OK  text-only document: two render_chart tool calls (turn 1) sanitized and returned, "
+      "final JSON answer parsed from the real second turn after tool_results were sent back")
 
 # --- 2. a malformed render_chart call (mismatched labels/values lengths,
 #        and a bad chart_type) is dropped, not crashed on - the well-formed
 #        third call still comes through ---
-bad_blocks = [
+bad_turn1 = [
     _tool_block("render_chart", {"chart_type": "bar", "title": "Bad", "labels": ["A", "B"], "values": [1]}),
     _tool_block("render_chart", {"chart_type": "scatter", "title": "Bad type", "labels": ["A"], "values": [1]}),
     _tool_block("render_chart", {"chart_type": "line", "title": "Good", "labels": ["Jan", "Feb"], "values": ["1,000", "2,000"]}),
-    _text_block(json.dumps(ANSWER_JSON)),
 ]
-insight_agent._client = _FakeClient(bad_blocks)
+insight_agent._client = _FakeClient([bad_turn1, [_text_block(json.dumps(ANSWER_JSON))]])
 _, model_charts2 = explain_document_only_v2("Trend?", [{"filename": "x.pdf", "kind": "pdf", "text": "..."}])
 assert len(model_charts2) == 1, model_charts2
 assert model_charts2[0]["title"] == "Good" and model_charts2[0]["values"] == [1000.0, 2000.0], model_charts2[0]
@@ -208,7 +245,7 @@ print("7b. OK  a failed ({\"error\": ...}) insight now shows a visible 'unavaila
 #         question (a full multi-section report template). Confirm the
 #         real API call now requests generous headroom, not the old 4096
 #         that could be exhausted mid-generation. ---
-insight_agent._client = _FakeClient([_text_block(json.dumps(ANSWER_JSON))])
+insight_agent._client = _FakeClient([[_text_block(json.dumps(ANSWER_JSON))]])
 explain_document_only_v2("A short question", [{"filename": "x.pdf", "kind": "pdf", "text": "..."}])
 assert insight_agent._client.messages.last_kwargs["max_tokens"] >= 16000, \
     insight_agent._client.messages.last_kwargs["max_tokens"]
@@ -255,11 +292,10 @@ db2.add(doc); db2.commit()
 # actually hold, only sounds like it does in the prompt text.
 wrong_answer = dict(ANSWER_JSON)
 wrong_answer["key_findings"] = [{"finding": "North leads.", "location": "regions.xlsx", "confidence": "high"}]
-wrong_blocks = [
+wrong_turn1 = [
     _tool_block("render_chart", {"chart_type": "bar", "title": "Wrong region totals", "labels": ["North", "South"], "values": [9999, 1]}),
-    _text_block(json.dumps(wrong_answer)),
 ]
-insight_agent._client = _FakeClient(wrong_blocks)
+insight_agent._client = _FakeClient([wrong_turn1, [_text_block(json.dumps(wrong_answer))]])
 
 events = list(_run_document_only_analysis(db2, t2.id, u2.id, "Break down sales by region", [doc], "AQ-test-safety"))
 final = events[-1]
