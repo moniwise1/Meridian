@@ -27,6 +27,13 @@ credentials are still encrypted with it.
 import os
 import sys
 
+# Make `app` importable no matter where this is launched from. A plain
+# `python scripts/migrate_metadata_db.py` only puts scripts/ on sys.path,
+# not the backend root - so add it (this file is backend/scripts/x.py).
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
