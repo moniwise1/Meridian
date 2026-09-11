@@ -122,9 +122,10 @@ def send_subscription_confirmation(
         f"You can review or cancel your plan any time from Billing in the app. "
         f"A cancellation within the first {settings.billing_refund_window_days} "
         f"days is a full self-serve refund.\n\n"
+        f"If you have any complaints or run into any issues, contact us any time "
+        f"at support@getmeridiananalytics.com.\n\n"
         f"Thanks for choosing Meridian.\n\n"
-        f"{FOUNDER_NAME}\n"
-        f"Founder, Meridian"
+        f"The Meridian team"
     )
     _send_best_effort(to_email, subject, body)
 
