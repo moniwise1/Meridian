@@ -301,6 +301,75 @@ export async function redeemMfaRecovery(token: string): Promise<void> {
   }
 }
 
+// ---------- Account settings (self-service) ----------
+
+export type Me = {
+  user_id: string;
+  tenant_id: string;
+  role: string;
+  email: string;
+  display_name: string | null;
+  email_change_available: boolean;
+};
+
+export async function getMe(): Promise<Me> {
+  const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  if (!res.ok) throw new Error("Could not load your account.");
+  return res.json();
+}
+
+export async function updateDisplayName(displayName: string): Promise<Me> {
+  const res = await fetch(`${API_BASE}/auth/me/display-name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update your display name.");
+  return body;
+}
+
+export async function changeOwnEmail(newEmail: string, currentPassword: string): Promise<Me> {
+  const res = await fetch(`${API_BASE}/auth/me/email`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ new_email: newEmail, current_password: currentPassword }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update your email.");
+  return body;
+}
+
+export async function changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/me/password`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  await handleAuthFailure(res);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? "Could not update your password.");
+  }
+}
+
+// Public - reached from an admin-emailed link with no session at all
+// (see lib/platformApi.ts's resetUserPassword, which sends that email).
+// Sets a new password AND returns a real session in one step.
+export async function redeemPasswordReset(token: string, newPassword: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/password-reset/redeem`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "This link is invalid or has expired.");
+  return body;
+}
+
 // ---------- Connections ----------
 
 export type Connection = {

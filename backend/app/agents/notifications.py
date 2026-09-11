@@ -96,6 +96,20 @@ def send_mfa_recovery_email(to_email: str, recovery_url: str) -> None:
     _send_best_effort(to_email, subject, body)
 
 
+def send_password_reset_email(to_email: str, reset_url: str) -> None:
+    subject = "Reset your Meridian password"
+    body = (
+        f"Hi,\n\n"
+        f"An admin on your team requested a password reset for your Meridian account.\n\n"
+        f"Use this link to sign in and set a new password (expires in 30 minutes):\n"
+        f"{reset_url}\n\n"
+        f"If you didn't expect this, you can ignore it - your password stays unchanged until "
+        f"the link above is actually used.\n\n"
+        f"Meridian"
+    )
+    _send_best_effort(to_email, subject, body)
+
+
 def send_invite_email(to_email: str, org_label: str, inviter_email: str, role: str, accept_url: str) -> None:
     subject = f"You're invited to join {org_label} on Meridian"
     body = (

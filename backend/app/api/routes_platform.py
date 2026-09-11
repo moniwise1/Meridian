@@ -22,6 +22,7 @@ from app.db.models import (
 )
 from app.security.auth import (
     hash_password, verify_password, normalize_email, password_needs_rehash, dummy_password_hash,
+    create_pre_auth_token,
 )
 from app.security.platform_auth import (
     create_platform_access_token, get_current_staff, require_staff_role, PlatformAuthContext,
@@ -36,15 +37,33 @@ import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
 from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
-from app.billing.plans import PLANS
+from app.billing.plans import PLANS, get_plan, format_naira
+from app.billing import paystack
+from app.billing.paystack import PaystackError
 from app.invites import create_invite, get_invite_by_token, list_invites, revoke_invite, mark_accepted
-from app.agents.notifications import send_invite_email, notify_owners, platform_owner_emails
+from app.agents.notifications import (
+    send_invite_email, send_password_reset_email, notify_owners, platform_owner_emails, tenant_admin_emails,
+)
+
+# Same TTL reasoning as MFA's RECOVERY_TTL_SECONDS (app/api/routes_mfa.py):
+# checking an inbox and clicking a link realistically takes longer than
+# the 5-minute default pre-auth window.
+PASSWORD_RESET_TTL_SECONDS = 30 * 60
 
 router = APIRouter(prefix="/platform", tags=["platform"])
 
 
 def _staff_accept_url(token: str) -> str:
     return f"{settings.frontend_origins[0].rstrip('/')}/platform/accept-invite?token={token}"
+
+
+def _password_reset_url(tenant: Tenant | None, token: str) -> str:
+    # Same subdomain-aware pattern as _team_accept_url (routes_auth.py) /
+    # _recovery_url (routes_mfa.py) - land on the tenant's own branded
+    # subdomain when it has one, the generic domain otherwise.
+    if tenant and tenant.subdomain:
+        return f"https://{tenant.subdomain}.{settings.apex_domain}/reset-password?token={token}"
+    return f"{settings.frontend_origins[0].rstrip('/')}/reset-password?token={token}"
 
 
 # ---------- Staff auth ----------
@@ -386,10 +405,21 @@ class TenantOut(BaseModel):
     user_count: int
     connection_count: int
     users: list[TenantUserOut]
+    # Billing detail for the platform Tenants page - "when they subscribed"
+    # is subscribed_at above; this is "how much, how, and where to look it
+    # up in Paystack directly". plan_amount_naira is the CURRENT price of
+    # t.plan (app/billing/plans.py) - if pricing has changed since they
+    # subscribed, this reflects today's price, not necessarily what they
+    # were actually charged; last_transaction_reference is the one to look
+    # up in Paystack's own dashboard for the real historical amount.
+    plan_amount_naira: str | None
+    last_transaction_reference: str | None
+    paystack_customer_code: str | None
 
 
 def _tenant_out(db: Session, t: Tenant) -> TenantOut:
     users = db.query(User).filter_by(tenant_id=t.id).order_by(User.created_at.asc()).all()
+    plan_obj = get_plan(t.plan) if t.plan else None
     return TenantOut(
         id=t.id, name=t.name, subdomain=t.subdomain,
         subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
@@ -403,6 +433,9 @@ def _tenant_out(db: Session, t: Tenant) -> TenantOut:
                           created_at=u.created_at.isoformat() if u.created_at else "")
             for u in users
         ],
+        plan_amount_naira=f"{format_naira(plan_obj.amount)}/mo" if plan_obj else None,
+        last_transaction_reference=t.last_transaction_reference,
+        paystack_customer_code=t.paystack_customer_code,
     )
 
 
@@ -501,6 +534,108 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
     db.commit()
     db.refresh(t)
     audit.log(db, tenant_id, "platform_tenant_updated", detail={"by_staff_id": ctx.staff_id, "changes": changes})
+    return _tenant_out(db, t)
+
+
+# ---------- Locked-out user recovery (tenant side) ----------
+
+class StaffPasswordResetOut(BaseModel):
+    status: str
+    email: str
+
+
+@router.post("/tenants/{tenant_id}/users/{user_id}/reset-password", response_model=StaffPasswordResetOut)
+def reset_user_password(tenant_id: str, user_id: str, db: Session = Depends(get_db),
+                         ctx: PlatformAuthContext = Depends(require_staff_role("owner", "support"))):
+    """The tenant-side equivalent of what an owner had to do by hand
+    tonight for their own platform account: a locked-out customer admin
+    (forgot their password, no working MFA recovery either) previously had
+    no path back in except a staffer editing the database directly. This
+    mints the same kind of signed, single-purpose, time-limited token the
+    MFA-recovery flow already uses (purpose="password_reset" instead of
+    "mfa_recovery") and emails it to the user - doesn't touch their
+    password itself until they actually click it and set a new one (see
+    POST /auth/password-reset/redeem)."""
+    user = db.query(User).filter_by(id=user_id, tenant_id=tenant_id).first()
+    if not user:
+        raise HTTPException(404, "User not found.")
+    tenant = db.query(Tenant).filter_by(id=tenant_id).first()
+
+    reset_token = create_pre_auth_token(
+        user.id, user.tenant_id, purpose="password_reset", ttl_seconds=PASSWORD_RESET_TTL_SECONDS,
+    )
+    send_password_reset_email(user.email, _password_reset_url(tenant, reset_token))
+    audit.log(db, tenant_id, "password_reset_requested_by_staff",
+              detail={"by_staff_id": ctx.staff_id, "target_user": user.email})
+    notify_owners(
+        tenant_admin_emails(db, tenant_id, exclude_user_id=user.id),
+        f"Password reset requested for {user.email}",
+        f"Meridian staff sent a password-reset link to {user.email} at your request. "
+        f"It expires in 30 minutes and is only usable once.",
+    )
+    return StaffPasswordResetOut(status="sent", email=user.email)
+
+
+# ---------- Fraud / abuse override: deactivate + full refund ----------
+
+class DeactivateRefundRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/tenants/{tenant_id}/deactivate-and-refund", response_model=TenantOut)
+def deactivate_and_refund(tenant_id: str, body: DeactivateRefundRequest, db: Session = Depends(get_db),
+                           ctx: PlatformAuthContext = Depends(require_staff_role("owner"))):
+    """Owner-only override for suspected fraud/abuse: immediately disables
+    the tenant's real Paystack subscription (if one is on file) and
+    refunds their last transaction in full - regardless of
+    BILLING_REFUND_WINDOW_DAYS, which only governs the tenant's own
+    self-serve /billing/cancel. Moves real money, so it requires a reason
+    (goes straight into the audit trail) and is owner-only, same tier as
+    deleting a tenant. Deactivation still proceeds even if the refund call
+    itself fails - the priority is cutting off access, not blocking on a
+    Paystack hiccup - but subscription_status only ever says "refunded"
+    if the refund genuinely went through, same honesty rule the self-serve
+    /billing/cancel already follows."""
+    t = db.query(Tenant).filter_by(id=tenant_id).first()
+    if not t:
+        raise HTTPException(404, "Tenant not found.")
+    if t.subscription_status != "active":
+        raise HTTPException(400, "This tenant has no active subscription to deactivate.")
+
+    if t.paystack_subscription_code and t.paystack_email_token:
+        try:
+            paystack.disable_subscription(t.paystack_subscription_code, t.paystack_email_token)
+        except PaystackError as e:
+            audit.log(db, tenant_id, "platform_deactivate_disable_failed", status="error",
+                      detail={"by_staff_id": ctx.staff_id, "reason": str(e)})
+            raise HTTPException(502, f"Could not disable the Paystack subscription: {e}")
+
+    refunded = False
+    if t.last_transaction_reference:
+        try:
+            paystack.refund_transaction(t.last_transaction_reference)
+            refunded = True
+        except PaystackError as e:
+            # Don't block deactivation on this - see docstring. Loud in the
+            # audit trail so a human follows up on the refund by hand.
+            audit.log(db, tenant_id, "platform_refund_failed", status="error",
+                      detail={"by_staff_id": ctx.staff_id, "reason": str(e)})
+
+    t.subscription_status = "refunded" if refunded else "cancelled"
+    t.subscription_expires_at = None
+    t.plan = None
+    db.commit()
+    db.refresh(t)
+    audit.log(db, tenant_id, "platform_tenant_deactivated", detail={
+        "by_staff_id": ctx.staff_id, "reason": body.reason, "refunded": refunded,
+    })
+    notify_owners(
+        tenant_admin_emails(db, tenant_id),
+        "Your Meridian subscription has been deactivated",
+        "Your Meridian subscription has been deactivated by our team"
+        + (" and refunded in full" if refunded else "") + ". "
+        "If you believe this is a mistake, contact support@getmeridiananalytics.com.",
+    )
     return _tenant_out(db, t)
 
 

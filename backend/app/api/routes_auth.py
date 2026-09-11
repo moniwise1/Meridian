@@ -7,6 +7,7 @@ gets an email and accepts it themselves within 24 hours, proving control
 of that inbox and choosing their own password, rather than an admin
 picking a temporary password for them.
 """
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
@@ -499,9 +500,161 @@ def accept_team_invite(body: AcceptInviteRequest, db: Session = Depends(get_db))
     )
 
 
-@router.get("/me")
-def me(ctx: AuthContext = Depends(get_current_user)):
-    return {"user_id": ctx.user_id, "tenant_id": ctx.tenant_id, "role": ctx.role}
+class MeOut(BaseModel):
+    user_id: str
+    tenant_id: str
+    role: str
+    email: str
+    display_name: str | None
+    # False once the one lifetime email change has been used - the
+    # frontend uses this to grey out the email field rather than let
+    # someone fill in a new address and only find out it's refused.
+    email_change_available: bool
+
+
+@router.get("/me", response_model=MeOut)
+def me(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_current_user)):
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    if not user:
+        raise HTTPException(404, "User not found.")
+    return MeOut(
+        user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
+        email=user.email, display_name=user.display_name,
+        email_change_available=user.email_changed_at is None,
+    )
+
+
+class DisplayNameUpdate(BaseModel):
+    # Blank clears it back to the default (deriving something from the
+    # email client-side), not an error - same "empty = unset" convention
+    # row_scope/outbound_email_policy already use elsewhere in this file.
+    display_name: str = Field(max_length=100)
+
+
+@router.patch("/me/display-name", response_model=MeOut)
+def update_own_display_name(body: DisplayNameUpdate, db: Session = Depends(get_db),
+                             ctx: AuthContext = Depends(get_current_user)):
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    if not user:
+        raise HTTPException(404, "User not found.")
+    user.display_name = body.display_name.strip() or None
+    db.commit()
+    audit.log(db, ctx.tenant_id, "display_name_updated", ctx.user_id)
+    return MeOut(user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
+                 email=user.email, display_name=user.display_name,
+                 email_change_available=user.email_changed_at is None)
+
+
+class EmailChangeRequest(BaseModel):
+    new_email: EmailStr
+    # Changing the login identity is sensitive enough to re-prove you are
+    # who you say you are, same reasoning as the password-change endpoint
+    # below - a hijacked-but-still-open browser tab shouldn't be enough on
+    # its own to take over the account's email.
+    current_password: str
+
+
+@router.patch("/me/email", response_model=MeOut)
+def change_own_email(body: EmailChangeRequest, db: Session = Depends(get_db),
+                      ctx: AuthContext = Depends(get_current_user)):
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    if not user or not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(401, "Your current password is incorrect.")
+    if user.email_changed_at is not None:
+        raise HTTPException(
+            400, "Your email can only be changed once. Contact support to change it again.",
+        )
+    new_email = normalize_email(body.new_email)
+    old_email = user.email
+    if new_email == normalize_email(old_email):
+        raise HTTPException(400, "That's already your current email.")
+    if db.query(User).filter(func.lower(User.email) == new_email).first():
+        raise HTTPException(400, "An account with this email already exists.")
+
+    user.email = new_email
+    user.email_changed_at = datetime.utcnow()
+    db.commit()
+    audit.log(db, ctx.tenant_id, "email_changed", ctx.user_id, detail={"from": old_email, "to": new_email})
+    # To BOTH addresses - the old one so its real owner finds out even if
+    # this wasn't them (the standard "notify the address you're leaving"
+    # pattern), the new one as confirmation it's now attached here.
+    notify_owners(
+        [old_email],
+        "Your Meridian account email was changed",
+        f"Your Meridian login email was changed to {new_email}. If this wasn't you, "
+        f"contact support@getmeridiananalytics.com immediately - whoever did this was "
+        f"signed in as you.",
+    )
+    notify_owners(
+        [new_email],
+        "Your Meridian account email was updated",
+        f"This address is now the sign-in email for your Meridian account (previously {old_email}).",
+    )
+    notify_owners(
+        tenant_admin_emails(db, ctx.tenant_id, exclude_user_id=ctx.user_id),
+        f"A teammate's email changed on {ctx.tenant_id}",
+        f"{old_email} changed their sign-in email to {new_email}.",
+    )
+    return MeOut(user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
+                 email=user.email, display_name=user.display_name, email_change_available=False)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+@router.patch("/me/password")
+def change_own_password(body: PasswordChangeRequest, db: Session = Depends(get_db),
+                         ctx: AuthContext = Depends(get_current_user)):
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    if not user or not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(401, "Your current password is incorrect.")
+    user.password_hash = hash_password(body.new_password)
+    db.commit()
+    audit.log(db, ctx.tenant_id, "password_changed", ctx.user_id)
+    notify_owners(
+        tenant_admin_emails(db, ctx.tenant_id, exclude_user_id=ctx.user_id),
+        f"{user.email} changed their password",
+        f"{user.email} just changed their own Meridian password.",
+    )
+    return {"status": "changed"}
+
+
+# ---------- Admin-triggered password reset (see routes_platform.py's
+# reset_user_password, which mints the token this redeems) ----------
+
+class PasswordResetRedeemBody(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+@router.post("/password-reset/redeem", response_model=TokenResponse)
+def redeem_password_reset(body: PasswordResetRedeemBody, db: Session = Depends(get_db)):
+    """Public - reached from the emailed link with no session at all,
+    same shape as /auth/mfa/recovery/redeem. Sets the new password AND
+    signs the user in immediately (returns a real access_token), so the
+    one link both recovers the account and gets them straight back to
+    work - no separate 'now log in again' step."""
+    claims = decode_pre_auth_token(body.token, expected_purpose="password_reset")
+    user = db.query(User).filter_by(id=claims["sub"], tenant_id=claims["tenant_id"]).first()
+    if not user:
+        raise HTTPException(401, "This link has expired. Please ask an admin to send a new one.")
+
+    user.password_hash = hash_password(body.new_password)
+    db.commit()
+    audit.log(db, user.tenant_id, "password_reset_completed", user.id)
+    notify_owners(
+        tenant_admin_emails(db, user.tenant_id, exclude_user_id=user.id),
+        f"Password reset completed for {user.email}",
+        f"{user.email} used the emailed reset link to set a new password and sign in.",
+    )
+    tenant = db.query(Tenant).filter_by(id=user.tenant_id).first()
+    token = create_access_token(user.id, user.tenant_id, user.role)
+    return TokenResponse(
+        access_token=token, tenant_id=user.tenant_id, user_id=user.id, role=user.role,
+        subdomain=tenant.subdomain if tenant else None, email=user.email,
+    )
 
 
 class UserOut(BaseModel):
@@ -509,6 +662,7 @@ class UserOut(BaseModel):
     email: str
     role: str
     row_scope: dict
+    display_name: str | None = None
     created_at: str
 
     class Config:
@@ -517,6 +671,7 @@ class UserOut(BaseModel):
     @classmethod
     def from_user(cls, u: User) -> "UserOut":
         return cls(id=u.id, email=u.email, role=u.role, row_scope=u.row_scope,
+                    display_name=u.display_name,
                     created_at=u.created_at.isoformat() if u.created_at else "")
 
 

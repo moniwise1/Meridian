@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listTenants, updateTenant, deleteTenant, type PlatformTenant } from "@/lib/platformApi";
+import {
+  listTenants,
+  updateTenant,
+  deleteTenant,
+  resetUserPassword,
+  deactivateAndRefund,
+  type PlatformTenant,
+} from "@/lib/platformApi";
 import { loadPlatformSession } from "@/lib/platformAuth";
 
 const STATUS_OPTIONS = ["none", "pending", "active", "cancelled", "refunded"];
@@ -18,6 +25,15 @@ export default function PlatformTenantsPage() {
   const [editingSubdomainId, setEditingSubdomainId] = useState<string | null>(null);
   const [subdomainInput, setSubdomainInput] = useState("");
   const [subdomainError, setSubdomainError] = useState("");
+  // Per sub-account status line after "Reset password" is clicked - keyed by
+  // user id so multiple rows can show independent outcomes at once.
+  const [resetStatus, setResetStatus] = useState<Record<string, string>>({});
+  // Owner-only fraud/abuse override state - separate from the delete
+  // confirmation block below, since this one needs a reason, not a
+  // type-the-name confirmation.
+  const [refundingId, setRefundingId] = useState<string | null>(null);
+  const [refundReason, setRefundReason] = useState("");
+  const [refundError, setRefundError] = useState("");
   const isOwner = loadPlatformSession()?.role === "owner";
 
   function refresh() {
@@ -70,6 +86,32 @@ export default function PlatformTenantsPage() {
       refresh();
     } catch (e) {
       setError((e as Error).message);
+    }
+  }
+
+  async function handleResetPassword(tenantId: string, userId: string) {
+    setResetStatus((prev) => ({ ...prev, [userId]: "Sending…" }));
+    try {
+      const { email } = await resetUserPassword(tenantId, userId);
+      setResetStatus((prev) => ({ ...prev, [userId]: `Link sent to ${email}` }));
+    } catch (e) {
+      setResetStatus((prev) => ({ ...prev, [userId]: (e as Error).message }));
+    }
+  }
+
+  async function handleDeactivateAndRefund(tenant: PlatformTenant) {
+    setRefundError("");
+    if (!refundReason.trim()) {
+      setRefundError("A reason is required — it's written to the audit log.");
+      return;
+    }
+    try {
+      await deactivateAndRefund(tenant.id, refundReason.trim());
+      setRefundingId(null);
+      setRefundReason("");
+      refresh();
+    } catch (e) {
+      setRefundError((e as Error).message);
     }
   }
 
@@ -161,7 +203,15 @@ export default function PlatformTenantsPage() {
                   {t.subscription_expires_at && (
                     <> · renews/expires {new Date(t.subscription_expires_at).toLocaleDateString()}</>
                   )}
+                  {t.plan_amount_naira && <> · {t.plan_amount_naira}</>}
                 </div>
+                {(t.last_transaction_reference || t.paystack_customer_code) && (
+                  <div className="text-[11px] text-ink-soft font-[family-name:var(--font-mono)] mt-0.5">
+                    {t.last_transaction_reference && <>ref {t.last_transaction_reference}</>}
+                    {t.last_transaction_reference && t.paystack_customer_code && <> · </>}
+                    {t.paystack_customer_code && <>customer {t.paystack_customer_code}</>}
+                  </div>
+                )}
                 <button
                   onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
                   className="text-[11.5px] text-teal hover:text-teal-deep transition-colors mt-1"
@@ -195,6 +245,19 @@ export default function PlatformTenantsPage() {
                     </option>
                   ))}
                 </select>
+                {isOwner && t.subscription_status === "active" && (
+                  <button
+                    onClick={() => {
+                      setRefundingId(refundingId === t.id ? null : t.id);
+                      setRefundReason("");
+                      setRefundError("");
+                    }}
+                    title="Fraud/abuse override: cancels the real Paystack subscription and refunds the last transaction in full."
+                    className="text-[11.5px] text-red hover:opacity-70 transition-opacity"
+                  >
+                    Deactivate &amp; refund
+                  </button>
+                )}
                 {isOwner && (
                   <button
                     onClick={() => {
@@ -226,6 +289,17 @@ export default function PlatformTenantsPage() {
                         <span className="text-ink-soft font-[family-name:var(--font-mono)]">
                           opened {new Date(u.created_at).toLocaleDateString()}
                         </span>
+                        {resetStatus[u.id] ? (
+                          <span className="text-ink-soft">{resetStatus[u.id]}</span>
+                        ) : (
+                          <button
+                            onClick={() => handleResetPassword(t.id, u.id)}
+                            title="Emails this user a one-time link to set a new password and sign in."
+                            className="text-teal hover:text-teal-deep transition-colors"
+                          >
+                            Reset password
+                          </button>
+                        )}
                       </span>
                     </div>
                   ))}
@@ -258,6 +332,33 @@ export default function PlatformTenantsPage() {
                     Permanently delete
                   </button>
                 </div>
+              </div>
+            )}
+
+            {refundingId === t.id && (
+              <div className="mt-3 pt-3 border-t border-line">
+                <div className="text-[12.5px] text-red mb-2">
+                  This cancels {t.name}&apos;s real Paystack subscription and refunds their last
+                  transaction in full, then marks the tenant cancelled. Use this only for confirmed
+                  fraud or abuse — it&apos;s not a normal support action. Reason is required and is
+                  written to the audit log.
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={refundReason}
+                    onChange={(e) => setRefundReason(e.target.value)}
+                    placeholder="Why — e.g. chargeback abuse, fake signup pattern"
+                    className="flex-1 text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50"
+                  />
+                  <button
+                    onClick={() => handleDeactivateAndRefund(t)}
+                    disabled={!refundReason.trim()}
+                    className="text-[12.5px] px-3 py-1.5 rounded-[3px] bg-red text-white disabled:opacity-40 hover:opacity-90 transition-opacity"
+                  >
+                    Deactivate &amp; refund
+                  </button>
+                </div>
+                {refundError && <div className="text-[11.5px] text-red mt-1.5">{refundError}</div>}
               </div>
             )}
           </div>

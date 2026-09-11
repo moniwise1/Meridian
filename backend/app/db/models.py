@@ -117,6 +117,20 @@ class User(Base):
     tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     email = Column(String, nullable=False)
+    # Set once, the first time the user changes their email away from
+    # whatever they registered/were invited with (see routes_auth.py's
+    # change_own_email) - null means "hasn't used their one change yet".
+    # Deliberately one-time, not a full history: this is a login
+    # identity, and letting it be changed freely and often is exactly the
+    # kind of thing an account-takeover attempt looks like.
+    email_changed_at = Column(DateTime, nullable=True)
+    # Optional, purely cosmetic - what shows in the UI instead of the raw
+    # email (Sidebar, greetings, owner-activity notifications naming who
+    # did something). Null falls back to deriving something from the
+    # email client-side, same as before this existed. Never used for
+    # login, audit "who did this" (that's still user_id), or anything
+    # security-relevant - display only.
+    display_name = Column(String, nullable=True)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="analyst")  # admin/analyst/manager/executive/viewer
     # Row-level scope, e.g. {"region": ["South-East"]}. Empty dict = unrestricted (e.g. CEO/admin).
