@@ -60,15 +60,25 @@ def normalize_outbound_email_policy(raw: dict | None) -> dict:
 # Same brand tokens as frontend/app/globals.css - kept in sync by hand
 # since an email needs its styling INLINE (email clients strip <style>
 # blocks and ignore CSS variables), not shared CSS the way the web app
-# gets it. A CSS-styled text badge, not an embedded image, for the header
-# mark: many email clients block remote images until a recipient clicks
-# "show images", so a real <img> logo would often render as a blank box
-# on first open - text styled with background-color always renders.
+# gets it.
 _BRAND_TEAL_DEEP = "#123f3d"
 _BRAND_TEAL = "#1c5d5a"
 _BRAND_PAPER = "#f5f6f4"
 _BRAND_INK = "#171a1c"
 _BRAND_INK_SOFT = "#565f66"
+
+# Real logo image, served as a static asset off the frontend (frontend/
+# public/brand/meridian-logo-email.png) rather than a CSS text badge -
+# explicit product decision, even though it means the header renders
+# blank in clients that block remote images until "show images" is
+# clicked (desktop Outlook, mainly; Gmail/Apple Mail/most mobile clients
+# show it immediately). width/height are set explicitly so blocked-image
+# state reserves the right amount of space instead of collapsing to
+# nothing, and alt text is styled to read reasonably on its own for
+# clients that show it.
+_BRAND_LOGO_URL = "https://www.getmeridiananalytics.com/brand/meridian-logo-email.png"
+_BRAND_LOGO_WIDTH = 170
+_BRAND_LOGO_HEIGHT = 41
 
 
 def _render_html_email(body: str) -> str:
@@ -95,9 +105,9 @@ def _render_html_email(body: str) -> str:
       <tr><td align="center">
         <table role="presentation" width="100%" style="max-width:520px;" cellpadding="0" cellspacing="0">
           <tr><td align="center" style="padding-bottom:24px;">
-            <span style="display:inline-block;background:{_BRAND_TEAL_DEEP};color:{_BRAND_PAPER};
-                         font-weight:700;font-size:14px;letter-spacing:0.03em;
-                         padding:10px 18px;border-radius:5px;">MERIDIAN</span>
+            <img src="{_BRAND_LOGO_URL}" alt="Meridian" width="{_BRAND_LOGO_WIDTH}" height="{_BRAND_LOGO_HEIGHT}"
+                 style="display:block;border:0;outline:none;text-decoration:none;
+                        color:{_BRAND_INK};font-weight:700;font-size:16px;font-family:Georgia,'Times New Roman',serif;">
           </td></tr>
           <tr><td style="background:#ffffff;border:1px solid #e2e4e1;border-radius:6px;
                          padding:28px 32px;color:{_BRAND_INK};font-size:14px;line-height:1.6;">
