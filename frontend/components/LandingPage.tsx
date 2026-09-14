@@ -10,28 +10,28 @@ function formatNaira(amountKobo: number): string {
 
 const FEATURES = [
   {
-    title: "Ask in plain English",
-    body: "No SQL, no dashboards to build. Type a real business question and Meridian finds the relevant authorized data, runs the analysis, and checks it for anomalies before it ever reaches you.",
+    title: "Ask in plain English, get a board-ready answer",
+    body: "Type a real business question the way you'd ask a colleague — no SQL, no waiting on an analyst, no dashboard to build first. Meridian finds the authorized data behind your question, runs the analysis, checks it for anomalies, and hands back an answer you can actually stand behind in a meeting.",
   },
   {
-    title: "Evidence, not guesses",
-    body: "Every answer comes with the query that produced it, data-quality notes, and a plain-English explanation with a stated confidence level — never a number with nothing behind it.",
+    title: "Every answer comes with proof, not just a number",
+    body: "You get the exact query that produced the answer, the data-quality notes behind it, and a stated confidence level — every time. No black box, and no number you can't trace back to its source the moment someone in the room asks how you know that.",
   },
   {
-    title: "Document intelligence",
-    body: "Upload a PDF, Word, PowerPoint, or Excel file and ask questions about it directly — including scanned pages, read automatically via OCR — no database required at all.",
+    title: "Works with whatever you already have",
+    body: "Connect a live database, or simply upload a PDF, Word, PowerPoint, or Excel file — including scanned documents, read automatically via OCR. No data-warehouse project, no months-long integration, no waiting on IT to get a first real answer.",
   },
   {
-    title: "Read-only, always",
-    body: "Every connected database is verified read-only at the transaction level before it's ever saved — Meridian can query and explain, it cannot write, alter, or delete.",
+    title: "Zero risk to your live systems",
+    body: "Every connected database is verified read-only at the transaction level before Meridian is ever allowed to touch it — a write attempt is required to fail first, not just assumed to. It can query and explain; it is structurally incapable of writing, altering, or deleting a single record.",
   },
   {
-    title: "Row- and column-level access",
-    body: "Restrict what each teammate's questions can ever see, down to specific rows and columns, enforced on every single query — not a setting someone can forget to apply.",
+    title: "Safe to roll out to your whole team",
+    body: "Give every teammate access to ask questions, without giving every teammate access to everything. Row- and column-level permissions restrict exactly what each person's questions can ever see, enforced on every single query — not a checkbox someone can forget to tick.",
   },
   {
-    title: "A trail for everything",
-    body: "Every query, connection change, and export is written to a hash-chained audit log with a one-click verification check — tamper-evident by construction, not just by policy.",
+    title: "A defensible trail for every question asked",
+    body: "Every query, connection change, and export is written to a tamper-evident, hash-chained audit log with a one-click verification check. When a regulator, auditor, or your own board asks what happened and why, you have a real, provable answer — not a guess.",
   },
 ] as const;
 
@@ -213,11 +213,16 @@ export default function LandingPage() {
 
       {/* ---------- Features ---------- */}
       <section id="features" className="max-w-6xl mx-auto px-6 md:px-8 py-16 md:py-20 border-t border-line">
-        <div className="max-w-xl mb-12">
+        <div className="max-w-2xl mb-12">
           <h2 className="text-[26px] font-medium tracking-tight text-ink mb-3">What Meridian does</h2>
           <p className="text-[14.5px] text-ink-soft leading-relaxed">
-            Not another dashboard. An agent that does the analysis and shows its work, with the
-            access controls a real enterprise data team actually needs.
+            Most teams either wait days for someone to pull a report, or trust a dashboard that was
+            built for a different question than the one they&apos;re actually asking today. Meridian
+            removes both problems: ask your real question in plain English, and it finds the
+            authorized data, runs the analysis, checks it for anomalies, and gives you a plain-English
+            answer — with the evidence behind it, every time. Built with the read-only architecture
+            and access controls a real enterprise data team requires before they&apos;ll ever connect a
+            production database to anything new.
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
