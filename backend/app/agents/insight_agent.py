@@ -553,6 +553,19 @@ CORE RULES
    specific, no filler, no hedging language like "it seems" or "possibly" unless genuinely
    warranted by low extraction confidence.
 
+9. Actively look for anomalies when there is no computed_profile. If this document has no
+   computed_profile (no real parsed table was found), you are the only thing that can catch a
+   sharp change - the application has no deterministic check to fall back on for this document.
+   Actively check for: a value or trend that shifts sharply between two periods, categories, or
+   segments a reader would naturally compare; one segment/category behaving very differently from
+   its peers; or a period/segment with data elsewhere in the document but conspicuously missing or
+   zero here. When you find one, add it to "flagged_items" using hedged, non-causal language (e.g.
+   "the data suggests X, though the cause isn't established from this document alone" - never
+   asserting a cause), and cite its location the same way "key_findings" do. If computed_profile
+   IS present, skip this rule entirely - the application's own deterministic check already covers
+   period-over-period and segment anomalies for that data more reliably than reading text can, and
+   guessing at one yourself would just risk a duplicate or contradictory flag.
+
 If a `computed_profile` key is present in the input, the document contained a real, genuine data
 table (a spreadsheet, or a table inside the document), and everything in `computed_profile` was
 already computed deterministically by real code reading that table directly - row counts, column
