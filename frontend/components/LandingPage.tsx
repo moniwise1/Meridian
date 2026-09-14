@@ -182,83 +182,127 @@ export default function LandingPage() {
       <section className="relative overflow-hidden max-w-6xl mx-auto px-6 md:px-8 pt-20 pb-16 md:pt-28 md:pb-24">
         {/* Purely decorative - sits behind everything (negative z-index,
             no pointer events) and adds zero layout weight, so it can
-            never push or misalign real content on any screen size. */}
+            never push or misalign real content on any screen size. Two
+            soft blobs behind the right-hand card specifically, so the
+            glass CTA buttons and the card's floating badge have some real
+            color underneath them to actually look like glass on. */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -z-10 -top-24 -right-40 w-[560px] h-[560px] rounded-full opacity-[0.07] blur-3xl bg-teal-deep"
+          className="pointer-events-none absolute -z-10 -top-20 right-[-160px] w-[620px] h-[620px] rounded-full opacity-[0.10] blur-3xl bg-teal-deep"
         />
-        <div className="max-w-2xl">
-          <div className="text-[12px] font-[family-name:var(--font-mono)] text-teal-deep tracking-wide uppercase mb-4">
-            Enterprise analytics agent
-          </div>
-          <h1 className="text-[34px] md:text-[44px] font-medium tracking-tight text-ink leading-[1.1] mb-5">
-            Ask your data anything. Get an answer with the evidence behind it.
-          </h1>
-          <p className="text-[15.5px] text-ink-soft leading-relaxed mb-8 max-w-xl">
-            Meridian connects to your databases and documents, answers real business questions in
-            plain English, and shows its work — the query, the data quality, the anomalies, the
-            confidence — every time. Read-only by design, so it can query and explain, and nothing
-            else.
-          </p>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/login?mode=register"
-              className="text-[13.5px] px-5 py-2.5 rounded-[3px] bg-teal-deep text-white hover:bg-teal transition-colors"
-            >
-              Get started free
-            </Link>
-            <a
-              href="#features"
-              className="text-[13.5px] px-5 py-2.5 rounded-[3px] border border-line text-ink hover:border-teal hover:text-teal transition-colors"
-            >
-              See what it does
-            </a>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -z-10 top-52 right-16 w-[280px] h-[280px] rounded-full opacity-[0.14] blur-3xl bg-amber"
+        />
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1.05fr_1fr] gap-14 lg:gap-10 items-center">
+          <div className="max-w-xl">
+            <div className="text-[12px] font-[family-name:var(--font-mono)] text-teal-deep tracking-wide uppercase mb-4">
+              Enterprise analytics agent
+            </div>
+            <h1 className="text-[34px] md:text-[44px] font-medium tracking-tight text-ink leading-[1.1] mb-5">
+              Ask your data anything. Get a board-ready answer — with the proof behind it.
+            </h1>
+            <p className="text-[15.5px] text-ink-soft leading-relaxed mb-8 max-w-xl">
+              Meridian connects to your live database or your uploaded documents and answers real
+              business questions in plain English — with the exact query, a data-quality check, and
+              a stated confidence level behind every answer. Read-only by design: built to look and
+              explain, never to write or delete.
+            </p>
+            <div className="flex items-center gap-3.5">
+              {/* Glass-style CTAs - translucent + backdrop-blur so they pick
+                  up the decorative color blobs behind this section instead
+                  of sitting as flat, opaque blocks. */}
+              <Link
+                href="/login?mode=register"
+                className="text-[13.5px] px-5 py-2.5 rounded-[6px] bg-teal-deep/85 backdrop-blur-md border border-white/25 text-white shadow-[0_8px_24px_-8px_rgba(18,63,61,0.55)] hover:bg-teal-deep transition-colors"
+              >
+                Get started free
+              </Link>
+              <a
+                href="#features"
+                className="text-[13.5px] px-5 py-2.5 rounded-[6px] bg-white/40 backdrop-blur-md border border-white/70 text-ink shadow-sm hover:bg-white/60 transition-colors"
+              >
+                See what it does
+              </a>
+            </div>
+
+            {/* A quick visual read of the flow (connect → ask → evidence) -
+                condensed teaser of the full "How it works" section below,
+                here to give the hero some real visual interest beyond a
+                wall of text before the reader ever scrolls. */}
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-4 mt-10">
+              {HERO_FLOW.map(({ icon: Icon, label }) => (
+                <div key={label} className="flex items-center gap-2.5 max-w-[220px]">
+                  <span className="shrink-0 w-8 h-8 rounded-full border border-white/60 bg-white/50 backdrop-blur-md flex items-center justify-center text-teal-deep">
+                    <Icon />
+                  </span>
+                  <span className="text-[12px] text-ink-soft leading-snug">{label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* A quick visual read of the flow (connect → ask → evidence) -
-              condensed teaser of the full "How it works" section below,
-              here to give the hero some real visual interest beyond a
-              wall of text before the reader ever scrolls. */}
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-4 mt-10">
-            {HERO_FLOW.map(({ icon: Icon, label }) => (
-              <div key={label} className="flex items-center gap-2.5 max-w-[220px]">
-                <span className="shrink-0 w-8 h-8 rounded-full border border-line bg-panel flex items-center justify-center text-teal-deep">
-                  <Icon />
-                </span>
-                <span className="text-[12px] text-ink-soft leading-snug">{label}</span>
+          {/* Illustrative mock of a real Ask exchange — built from the app's
+              own design tokens, not a screenshot, so it never drifts out of
+              sync visually and needs no image asset. Kept as a solid,
+              opaque panel (unlike the CTAs above) since this is meant to
+              read as an actual product view, not a decorative glass chip. */}
+          <div className="relative">
+            <div className="absolute -top-4 right-6 hidden sm:flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-white/60 backdrop-blur-md border border-white/70 shadow-sm text-ink-soft z-10">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-deep" />
+              Live example
+            </div>
+            <div className="bg-panel border border-line rounded-[6px] shadow-sm overflow-hidden">
+              <div className="border-b border-line px-5 py-3 flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-line" />
+                <span className="w-2.5 h-2.5 rounded-full bg-line" />
+                <span className="w-2.5 h-2.5 rounded-full bg-line" />
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Illustrative mock of a real Ask exchange — built from the app's
-            own design tokens, not a screenshot, so it never drifts out of
-            sync visually and needs no image asset. */}
-        <div className="mt-16 max-w-3xl bg-panel border border-line rounded-[6px] shadow-sm overflow-hidden">
-          <div className="border-b border-line px-5 py-3 flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-line" />
-            <span className="w-2.5 h-2.5 rounded-full bg-line" />
-            <span className="w-2.5 h-2.5 rounded-full bg-line" />
-          </div>
-          <div className="p-6">
-            <div className="text-[13px] text-ink-soft mb-1">You asked</div>
-            <div className="text-[15px] text-ink mb-5">Why did South-East revenue fall last quarter?</div>
-            <div className="text-[13px] text-ink-soft mb-2">Meridian found</div>
-            <div className="border border-line rounded-[4px] p-4 bg-paper">
-              <div className="text-[13.5px] text-ink leading-relaxed mb-3">
-                South-East revenue fell 14.2% quarter-over-quarter, concentrated in two accounts that
-                churned in week 6 — not a broad regional decline.
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-line text-ink-soft font-[family-name:var(--font-mono)]">
-                  SQL query included
-                </span>
-                <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-line text-ink-soft font-[family-name:var(--font-mono)]">
-                  2 anomalies flagged
-                </span>
-                <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-amber-soft text-amber font-[family-name:var(--font-mono)]">
-                  Confidence: high
-                </span>
+              <div className="p-6">
+                <div className="text-[13px] text-ink-soft mb-1">You asked</div>
+                <div className="text-[15px] text-ink mb-5">Why did South-East revenue fall last quarter?</div>
+                <div className="text-[13px] text-ink-soft mb-2">Meridian found</div>
+                <div className="border border-line rounded-[4px] p-4 bg-paper">
+                  <div className="text-[13.5px] text-ink leading-relaxed mb-4">
+                    South-East revenue fell 14.2% quarter-over-quarter, concentrated in two accounts
+                    that churned in week 6 — not a broad regional decline.
+                  </div>
+                  {/* Small illustrative chart tying the text answer to a
+                      visual, so the hero shows what the product produces,
+                      not just what it says - South-East reads visibly
+                      shorter, matching the finding above. */}
+                  <div className="flex items-end gap-2.5 h-16 mb-1">
+                    {[
+                      { label: "NW", pct: 68 },
+                      { label: "NE", pct: 54 },
+                      { label: "SE", pct: 27 },
+                      { label: "SW", pct: 61 },
+                      { label: "C", pct: 47 },
+                    ].map((bar) => (
+                      <div key={bar.label} className="flex-1 flex flex-col items-center gap-1.5">
+                        <div className="w-full flex items-end h-12">
+                          <div
+                            className={`w-full rounded-t-[2px] ${bar.label === "SE" ? "bg-red/70" : "bg-teal-deep/70"}`}
+                            style={{ height: `${bar.pct}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-ink-soft">{bar.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-line text-ink-soft font-[family-name:var(--font-mono)]">
+                      SQL query included
+                    </span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-line text-ink-soft font-[family-name:var(--font-mono)]">
+                      2 anomalies flagged
+                    </span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-[3px] bg-amber-soft text-amber font-[family-name:var(--font-mono)]">
+                      Confidence: high
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
