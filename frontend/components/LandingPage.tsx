@@ -86,6 +86,60 @@ function LockIcon({ small = false }: { small?: boolean }) {
   );
 }
 
+// Same hand-drawn line-icon treatment as the rest of this file's icons
+// (currentColor, stroke-based, no image asset) - simple line-art evoking
+// each platform's own mark rather than a pixel-accurate brand asset.
+function LinkedInIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <line x1="7.5" y1="10.5" x2="7.5" y2="16.5" />
+      <circle cx="7.5" cy="7" r="0.9" fill="currentColor" stroke="none" />
+      <path d="M11.5 16.5v-4a2.2 2.2 0 0 1 4.4 0v4" />
+      <line x1="11.5" y1="10.5" x2="11.5" y2="16.5" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <line x1="8" y1="8" x2="16" y2="16" />
+      <line x1="16" y1="8" x2="8" y2="16" />
+    </svg>
+  );
+}
+
+function InstagramIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <rect x="3" y="3" width="18" height="18" rx="5" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="17" cy="7" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function FacebookIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M14 8.5h-1a1.5 1.5 0 0 0-1.5 1.5v1.5H14l-.3 2h-2.2v4.5" />
+    </svg>
+  );
+}
+
+// Fill in each real profile URL as soon as the account exists - an empty
+// href renders the icon without a link (nothing to send anyone to yet)
+// rather than shipping a dead "#" link.
+const SOCIAL_LINKS = [
+  { name: "LinkedIn", href: "", Icon: LinkedInIcon },
+  { name: "X (Twitter)", href: "", Icon: XIcon },
+  { name: "Instagram", href: "", Icon: InstagramIcon },
+  { name: "Facebook", href: "", Icon: FacebookIcon },
+] as const;
+
 const HERO_FLOW = [
   { icon: DatabaseIcon, label: "Connect a database or upload a document" },
   { icon: ChatIcon, label: "Ask a real business question, plain English" },
@@ -398,7 +452,7 @@ export default function LandingPage() {
         </div>
 
         <div className="border-t border-line">
-          <div className="max-w-6xl mx-auto px-6 md:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="max-w-6xl mx-auto px-6 md:px-8 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="text-[11.5px] text-ink-soft">
               © {new Date().getFullYear()} Meridian Techverse Limited. All rights reserved.
             </div>
@@ -409,6 +463,22 @@ export default function LandingPage() {
                 <LockIcon small />
                 Secured checkout via Paystack
               </span>
+            </div>
+            <div className="flex items-center gap-3.5 text-ink-soft">
+              {SOCIAL_LINKS.map(({ name, href, Icon }) =>
+                href ? (
+                  <a
+                    key={name} href={href} target="_blank" rel="noopener noreferrer" aria-label={name}
+                    className="hover:text-ink transition-colors"
+                  >
+                    <Icon />
+                  </a>
+                ) : (
+                  <span key={name} aria-hidden="true" className="opacity-30">
+                    <Icon />
+                  </span>
+                )
+              )}
             </div>
           </div>
         </div>
