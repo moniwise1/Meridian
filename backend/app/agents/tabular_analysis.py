@@ -660,3 +660,65 @@ def compute_data_quality_and_anomalies(df: pd.DataFrame, profile: TabularProfile
         df, profile.primary_value_column, profile.primary_group_column, profile.date_column,
     )
     return quality, anomalies
+
+
+# Same bound as investigation.py's MAX_CASCADE_DEPTH - duplicated rather
+# than imported since that module pulls in the connector/query-generator
+# stack this in-memory version has no use for.
+_MAX_DOCUMENT_CASCADE_DEPTH = 3
+
+
+def investigate_document_anomalies(df: pd.DataFrame, profile: TabularProfile, anomalies: list) -> list[dict]:
+    """In-memory analog of investigation.py's investigate_cascade for a
+    document's already-parsed table. The DB path drills down by running
+    NEW authorized queries against further schema dimensions; a document
+    has no live source left to query - everything it could ever answer
+    from is already sitting in `df` - so this drills down by repeatedly
+    filtering that same DataFrame to the top contributor found at each
+    level and regrouping by the next unused candidate dimension column
+    build_profile already identified (profile.breakdowns' other keys),
+    the same "decline -> by X -> by Y" cascade, done here over data
+    already in hand rather than a new SQL query per level.
+    Returns [] whenever there's no anomaly to drill into, or no second
+    dimension column to drill by - most single-table documents only have
+    one usable group column, in which case this is a no-op.
+    """
+    if not anomalies or not profile.primary_group_column or not profile.primary_value_column:
+        return []
+    group_col, value_col = profile.primary_group_column, profile.primary_value_column
+    if group_col not in df.columns or value_col not in df.columns:
+        return []
+
+    # Excludes the date column deliberately: build_profile's own
+    # pick_group_columns has no notion of "this is really the time axis",
+    # so a low-cardinality date-like column (e.g. only 2 distinct months
+    # in the table) can otherwise slip into profile.breakdowns as if it
+    # were a category. Drilling down "by Month" isn't a real dimension
+    # cascade - it's the same trend profile.trend already covers - and
+    # would just add a confusing, redundant panel instead of an insight.
+    other_group_cols = [c for c in profile.breakdowns if c != group_col and c != profile.date_column]
+    if not other_group_cols:
+        return []
+
+    filtered = df[df[group_col].astype(str) == str(anomalies[0].segment)]
+    if filtered.empty:
+        return []
+
+    results: list[dict] = []
+    already_used = {group_col.lower()}
+    for _ in range(_MAX_DOCUMENT_CASCADE_DEPTH):
+        next_dim = next((c for c in other_group_cols if str(c).lower() not in already_used), None)
+        if next_dim is None or next_dim not in filtered.columns:
+            break
+        grouped = filtered.groupby(next_dim)[value_col].sum().sort_values(ascending=False)
+        if grouped.empty:
+            break
+        breakdown = [{"group": str(k), "total": round(float(v), 2)} for k, v in grouped.items()]
+        results.append({"dimension": str(next_dim), "breakdown": breakdown})
+        already_used.add(str(next_dim).lower())
+        top_group = grouped.index[0]
+        filtered = filtered[filtered[next_dim].astype(str) == str(top_group)]
+        if filtered.empty:
+            break
+
+    return results

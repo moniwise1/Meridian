@@ -154,6 +154,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     profile = None
     quality_report = None
     detected_anomalies = []
+    investigation_results: list[dict] = []
     if len(documents) == 1:
         doc = documents[0]
         tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
@@ -161,6 +162,10 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         if table is not None:
             profile = tabular_analysis.build_profile(table, question)
             quality_report, detected_anomalies = tabular_analysis.compute_data_quality_and_anomalies(table, profile)
+            if detected_anomalies:
+                investigation_results = tabular_analysis.investigate_document_anomalies(
+                    table, profile, detected_anomalies,
+                )
             # As specific as the manual, by-hand version of this analysis
             # would narrate out loud: exactly which columns were picked
             # and why, and the real headline numbers from each breakdown
@@ -215,8 +220,12 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         yield StepEvent("checking_quality", "done", "Not applicable — no database result to assess for a document-only analysis.")
 
     if detected_anomalies:
-        yield StepEvent("investigating_drivers", "done",
-                         "; ".join(f"{a.what} ({a.magnitude})" for a in detected_anomalies[:3]))
+        detail = "; ".join(f"{a.what} ({a.magnitude})" for a in detected_anomalies[:3])
+        if investigation_results:
+            detail += " Drilled down: " + " -> ".join(
+                f"by {r['dimension']} (top: {r['breakdown'][0]['group']})" for r in investigation_results
+            )
+        yield StepEvent("investigating_drivers", "done", detail)
     elif quality_report:
         yield StepEvent("investigating_drivers", "done", "No significant anomalies detected in the parsed table.")
     else:
@@ -315,7 +324,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "insight": insight_dict,
         "data_quality": data_quality,
         "anomalies": [asdict(a) for a in detected_anomalies],
-        "investigation": [],
+        "investigation": investigation_results,
         "forecast": [],
         "documents_used": [d.filename for d in documents],
         "preview_rows": [],
