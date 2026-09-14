@@ -69,8 +69,8 @@ export default function TermsOfServicePage() {
               <p>
                 By creating an account or using Meridian, you agree to these terms on behalf of
                 yourself and, if you register on behalf of a company, that company. Meridian is
-                operated by <strong className="text-ink font-medium">Meridian Techverse Limited</strong>,
-                a company incorporated in Nigeria.
+                operated by <strong className="text-ink font-medium">Meridian Techverse Limited</strong>{" "}
+                (RC 9849528), a company incorporated in the Federal Republic of Nigeria.
               </p>
             </Section>
 

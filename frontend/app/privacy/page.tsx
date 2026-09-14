@@ -70,9 +70,10 @@ export default function PrivacyPolicyPage() {
             <Section id="who-we-are" title="Who we are">
               <p>
                 Meridian is operated by <strong className="text-ink font-medium">Meridian Techverse
-                Limited</strong>, a company incorporated in Nigeria. This policy explains what
-                information we collect through getmeridiananalytics.com and the Meridian application
-                (together, the &quot;Service&quot;), why we collect it, and how it is handled.
+                Limited</strong> (RC 9849528), a company incorporated in the Federal Republic of
+                Nigeria. This policy explains what information we collect through
+                getmeridiananalytics.com and the Meridian application (together, the
+                &quot;Service&quot;), why we collect it, and how it is handled.
               </p>
             </Section>
 

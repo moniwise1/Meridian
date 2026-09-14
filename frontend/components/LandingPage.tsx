@@ -353,7 +353,7 @@ export default function LandingPage() {
               evidence behind it.
             </p>
             <p className="text-[11px] text-ink-soft/70 leading-relaxed max-w-[260px] mb-4">
-              A product of Meridian Techverse Limited, Nigeria.
+              A product of Meridian Techverse Limited (RC 9849528), Nigeria.
             </p>
             <div className="flex items-center gap-2 text-[11.5px] text-ink-soft border border-line rounded-[4px] px-3 py-2 max-w-[260px]">
               <LockIcon />
