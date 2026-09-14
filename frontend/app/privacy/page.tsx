@@ -124,7 +124,7 @@ export default function PrivacyPolicyPage() {
                 When you ask a question, the relevant authorized schema (table and column names, never
                 raw records beyond what your question&apos;s result actually returns), the computed
                 result, and any document text you have attached are sent to Anthropic&apos;s Claude API
-                to generate a plain-English explanation. Meridian is read-only by design — the AI can
+                to generate a clear, human-readable explanation. Meridian is read-only by design — the AI can
                 query and explain; it cannot write, alter, or delete anything in your connected
                 systems.
               </p>

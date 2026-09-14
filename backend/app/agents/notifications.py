@@ -68,7 +68,7 @@ def send_welcome_email(to_email: str, company_name: str) -> None:
     body = (
         f"Hi,\n\n"
         f"Welcome to Meridian - I'm {FOUNDER_NAME}, founder.\n\n"
-        f"Meridian is your team's AI analytics agent: ask a business question in plain English, "
+        f"Meridian is your team's AI analytics agent: just ask a business question, "
         f"and it finds the relevant authorized data, analyses it, checks for anomalies, and explains "
         f"the answer with evidence, not just a number. It's read-only by design, so it can query and "
         f"explain, but it can never write, alter, or delete anything in your systems.\n\n"
