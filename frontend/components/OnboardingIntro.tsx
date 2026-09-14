@@ -7,7 +7,7 @@ import { useSession } from "@/lib/useSession";
 const STEPS = [
   {
     title: "Welcome to Meridian",
-    body: "Ask business questions about your data in plain English — Meridian finds the relevant authorized data, analyses it, checks for anomalies, and explains the answer with evidence, not just a number.",
+    body: "Just ask business questions about your data — Meridian finds the relevant authorized data, analyses it, checks for anomalies, and explains the answer with evidence, not just a number.",
   },
   {
     title: "1. Connect a data source, or upload a document",

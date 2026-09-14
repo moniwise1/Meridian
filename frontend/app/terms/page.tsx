@@ -77,7 +77,7 @@ export default function TermsOfServicePage() {
             <Section id="the-service" title="2. What Meridian is">
               <p>
                 Meridian is an AI-powered analytics agent: it connects to your databases and documents,
-                answers business questions in plain English, and shows its work — the query it ran,
+                answers business questions in clear, everyday language, and shows its work — the query it ran,
                 data quality notes, and a confidence-rated explanation. It is read-only by design:
                 Meridian can query and explain, and nothing else. It never writes, alters, or deletes
                 data in any system you connect.

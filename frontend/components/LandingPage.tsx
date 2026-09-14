@@ -10,7 +10,7 @@ function formatNaira(amountKobo: number): string {
 
 const FEATURES = [
   {
-    title: "Ask in plain English, get a board-ready answer",
+    title: "Just ask — get a board-ready answer",
     body: "Type a real business question the way you'd ask a colleague — no SQL, no waiting on an analyst, no dashboard to build first. Meridian finds the authorized data behind your question, runs the analysis, checks it for anomalies, and hands back an answer you can actually stand behind in a meeting.",
   },
   {
@@ -37,7 +37,7 @@ const FEATURES = [
 
 const STEPS = [
   { n: "1", title: "Connect or upload", body: "Link a read-only database, or upload a document — either can be the data source." },
-  { n: "2", title: "Ask a question", body: "Plain English, the way you'd ask a colleague. Follow up naturally — Meridian keeps the thread." },
+  { n: "2", title: "Ask a question", body: "Just ask, the way you'd ask a colleague. Follow up naturally — Meridian keeps the thread." },
   { n: "3", title: "Get the evidence", body: "The answer, the query behind it, anomalies flagged, and a confidence-rated explanation." },
 ] as const;
 
@@ -142,7 +142,7 @@ const SOCIAL_LINKS = [
 
 const HERO_FLOW = [
   { icon: DatabaseIcon, label: "Connect a database or upload a document" },
-  { icon: ChatIcon, label: "Ask a real business question, plain English" },
+  { icon: ChatIcon, label: "Just ask a real business question" },
   { icon: EvidenceIcon, label: "Get an answer with the evidence behind it" },
 ] as const;
 
@@ -204,10 +204,10 @@ export default function LandingPage() {
               Ask your data anything. Get a board-ready answer — with the proof behind it.
             </h1>
             <p className="text-[15.5px] text-ink-soft leading-relaxed mb-8 max-w-xl">
-              Meridian connects to your live database or your uploaded documents and answers real
-              business questions in plain English — with the exact query, a data-quality check, and
-              a stated confidence level behind every answer. Read-only by design: built to look and
-              explain, never to write or delete.
+              Meridian connects to your live database or your uploaded documents — just ask a real
+              business question and get back the exact query, a data-quality check, and a stated
+              confidence level behind every answer. Read-only by design: built to look and explain,
+              never to write or delete.
             </p>
             <div className="flex items-center gap-3.5">
               {/* Glass-style CTAs - translucent + backdrop-blur so they pick
@@ -316,9 +316,9 @@ export default function LandingPage() {
           <p className="text-[14.5px] text-ink-soft leading-relaxed">
             Most teams either wait days for someone to pull a report, or trust a dashboard that was
             built for a different question than the one they&apos;re actually asking today. Meridian
-            removes both problems: ask your real question in plain English, and it finds the
-            authorized data, runs the analysis, checks it for anomalies, and gives you a plain-English
-            answer — with the evidence behind it, every time. Built with the read-only architecture
+            removes both problems: just ask your real question, and it finds the authorized data,
+            runs the analysis, checks it for anomalies, and hands back a clear answer — with the
+            evidence behind it, every time. Built with the read-only architecture
             and access controls a real enterprise data team requires before they&apos;ll ever connect a
             production database to anything new.
           </p>
