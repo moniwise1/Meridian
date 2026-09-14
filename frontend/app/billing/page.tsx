@@ -24,6 +24,21 @@ function formatNaira(amountKobo: number): string {
   return `₦${(amountKobo / 100).toLocaleString("en-NG", { maximumFractionDigits: 0 })}`;
 }
 
+// Same hand-drawn line-icon treatment as the landing page's own icons
+// (currentColor, stroke-based, no image asset) - kept local rather than
+// shared since neither page currently imports icons from the other.
+function LockIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+      strokeLinejoin="round" className="w-4 h-4 shrink-0"
+    >
+      <rect x="5.5" y="10.5" width="13" height="9.5" rx="1.5" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
 export default function BillingPage() {
   const [status, setStatus] = useState<BillingStatus | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -219,6 +234,16 @@ export default function BillingPage() {
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+              {isAdmin && (
+                <div className="flex items-center gap-2.5 text-[12px] text-ink-soft border border-line rounded-[4px] px-4 py-3 max-w-md mb-8">
+                  <LockIcon />
+                  <span>
+                    Checkout is handled by <strong className="text-ink font-medium">Paystack</strong>,
+                    a PCI DSS Level 1 certified payment processor. Meridian never sees or stores your
+                    card details.
+                  </span>
                 </div>
               )}
             </>
