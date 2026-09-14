@@ -372,4 +372,16 @@ print("8. OK  a real parseable table's primary breakdown chart is built from the
 
 db2.close()
 
+# --- 9. the new anomaly-awareness rule exists, is correctly gated to the
+#        no-computed_profile case, and points findings at flagged_items -
+#        a PDF/text-only document has no deterministic anomaly_detection.py
+#        check to fall back on (that only runs against a real parsed
+#        table), so this is the only thing that can catch a sharp change
+#        for that case; it must not fire when computed_profile IS present,
+#        since the real deterministic check already covers that data. ---
+assert "Actively look for anomalies when there is no computed_profile" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2
+assert "flagged_items" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2.split("Actively look for anomalies")[1][:600]
+assert "skip this rule entirely" in SYSTEM_PROMPT_DOCUMENT_ONLY_V2
+print("9. OK  anomaly-awareness rule present in the document-only prompt, scoped to the no-computed_profile case")
+
 print("\nALL CHECKS PASSED")
