@@ -74,6 +74,18 @@ function EvidenceIcon() {
   );
 }
 
+function LockIcon({ small = false }: { small?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+      strokeLinejoin="round" className={small ? "w-3.5 h-3.5 shrink-0" : "w-4 h-4 shrink-0"}
+    >
+      <rect x="5.5" y="10.5" width="13" height="9.5" rx="1.5" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
 const HERO_FLOW = [
   { icon: DatabaseIcon, label: "Connect a database or upload a document" },
   { icon: ChatIcon, label: "Ask a real business question, plain English" },
@@ -333,16 +345,23 @@ export default function LandingPage() {
 
       {/* ---------- Footer ---------- */}
       <footer className="border-t border-line">
-        <div className="max-w-6xl mx-auto px-6 md:px-8 py-14 grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-10">
-          <div className="col-span-2 sm:col-span-1 pr-4">
+        <div className="max-w-6xl mx-auto px-6 md:px-8 py-14 grid grid-cols-2 sm:grid-cols-5 gap-x-6 gap-y-10">
+          <div className="col-span-2 sm:col-span-2 pr-4">
             <div className="text-[15px] font-semibold tracking-tight text-ink mb-2">Meridian</div>
-            <p className="text-[12.5px] text-ink-soft leading-relaxed max-w-[220px] mb-2">
+            <p className="text-[12.5px] text-ink-soft leading-relaxed max-w-[260px] mb-3">
               Enterprise analytics, read-only by design. Ask a real question, get an answer with the
               evidence behind it.
             </p>
-            <p className="text-[11px] text-ink-soft/70 leading-relaxed max-w-[220px]">
-              Meridian is a product of Meridian Techverse Limited.
+            <p className="text-[11px] text-ink-soft/70 leading-relaxed max-w-[260px] mb-4">
+              A product of Meridian Techverse Limited, Nigeria.
             </p>
+            <div className="flex items-center gap-2 text-[11.5px] text-ink-soft border border-line rounded-[4px] px-3 py-2 max-w-[260px]">
+              <LockIcon />
+              <span>
+                Payments secured by <strong className="text-ink font-medium">Paystack</strong> —
+                PCI DSS Level 1 certified
+              </span>
+            </div>
           </div>
 
           <div>
@@ -363,11 +382,12 @@ export default function LandingPage() {
           </div>
 
           <div>
-            <div className="text-[11.5px] font-medium text-ink uppercase tracking-wide mb-3">Resources</div>
+            <div className="text-[11.5px] font-medium text-ink uppercase tracking-wide mb-3">Legal &amp; support</div>
             <nav className="flex flex-col gap-2.5 text-[13px] text-ink-soft">
               <Link href="/status" className="hover:text-ink transition-colors">System status</Link>
               <Link href="/privacy" className="hover:text-ink transition-colors">Privacy Policy</Link>
               <Link href="/terms" className="hover:text-ink transition-colors">Terms of Service</Link>
+              <a href="mailto:hello@getmeridiananalytics.com" className="hover:text-ink transition-colors">Contact us</a>
             </nav>
           </div>
         </div>
@@ -377,7 +397,14 @@ export default function LandingPage() {
             <div className="text-[11.5px] text-ink-soft">
               © {new Date().getFullYear()} Meridian Techverse Limited. All rights reserved.
             </div>
-            <div className="text-[11.5px] text-ink-soft">Read-only by design — it can query and explain, nothing else.</div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11.5px] text-ink-soft">
+              <span>Read-only by design</span>
+              <span className="text-line hidden sm:inline">•</span>
+              <span className="flex items-center gap-1.5">
+                <LockIcon small />
+                Secured checkout via Paystack
+              </span>
+            </div>
           </div>
         </div>
       </footer>
