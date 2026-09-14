@@ -38,7 +38,7 @@ from app.connectors.mssql import MSSQLConnector
 from app.connectors.snowflake import SnowflakeConnector
 from app.agents.schema_discovery import discover_schema, schema_to_prompt_text
 from app.agents.query_generator import generate_sql
-from app.agents.data_quality import assess
+from app.agents.data_quality import assess, scan_text_for_implausible_percentages
 from app.agents.analytics_engine import summarize
 from app.agents.insight_agent import explain, explain_document_only_v2
 from app.agents.anomaly_detection import detect as detect_anomalies
@@ -282,6 +282,11 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
                 "computed deterministically from a database — verify important figures against the "
                 "source document."
             )
+        # No parseable table means assess() never runs for this document, so
+        # it gets no plausibility check at all otherwise - a lighter, purely
+        # textual version of the same check, since there are no columns here.
+        combined_text = "\n".join(d.extracted_text for d in documents)
+        data_quality_notes.extend(scan_text_for_implausible_percentages(combined_text))
         data_quality = {
             "row_count": 0, "completeness_pct": 100.0, "duplicate_pct": 0.0,
             "missing_by_column": {}, "outlier_notes": [], "excluded_row_count": 0,
