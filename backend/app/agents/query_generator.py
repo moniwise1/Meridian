@@ -23,17 +23,32 @@ You will be given a database schema (already filtered to only the tables and
 columns this user is authorized to see) and a business question.
 
 Rules:
-- Output ONLY valid JSON: {"sql": "...", "rationale": "..."}
+- Output ONLY valid JSON: {"sql": "...", "rationale": "...", "clarification_question": null}
 - The SQL must be a single read-only SELECT (or WITH ... SELECT) statement.
 - Never use INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, MERGE, or any DDL/DML.
 - Never reference a table or column that is not explicitly listed in the schema you were given.
 - Prefer aggregation (GROUP BY, SUM, AVG, COUNT) over returning raw rows whenever the
   question can be answered that way — the goal is the smallest result set that answers
   the question, not a full table dump.
-- If the question cannot be answered with the given schema, return {"sql": "", "rationale": "explain why"}.
+- If the question cannot be answered with the given schema at all, return
+  {"sql": "", "rationale": "explain why", "clarification_question": null}.
 - "rationale" must read as a finished, single-pass explanation — never a visible correction
   like "wait, let me reconsider". Work through any uncertainty privately and state only your
   final choice.
+
+Ambiguity: prefer answering with a stated assumption over asking a question. Only set
+"clarification_question" (and leave "sql" empty) when the question is ambiguous in a way that
+would produce a MATERIALLY DIFFERENT result depending on the answer — e.g. a metric name that
+could genuinely map to two different columns with no clear default, or a time period with no
+fixed meaning anywhere in the schema or the question itself. In that case:
+- "clarification_question" must be ONE short, specific, directly-answerable question — never an
+  open-ended "can you clarify?".
+- Do not ask about phrasing, chart type, formatting, or anything that wouldn't change the actual
+  numbers returned.
+- If you can make a reasonable, defensible assumption instead (e.g. "revenue" clearly maps to the
+  one column that mentions money, or "recent" reasonably means the last 30 days absent any other
+  signal), do that instead of asking — just say what you assumed in "rationale" so it's never a
+  silent guess.
 """
 
 
@@ -41,13 +56,25 @@ Rules:
 class GeneratedQuery:
     sql: str
     rationale: str
+    clarification_question: str | None = None
 
 
-def generate_sql(question: str, schema_text: str) -> GeneratedQuery:
+def generate_sql(question: str, schema_text: str, force_answer: bool = False) -> GeneratedQuery:
     if _client is None:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
 
     user_prompt = f"Schema (authorized tables/columns only):\n{schema_text}\n\nQuestion: {question}"
+    if force_answer:
+        # The user has already been asked once and chose to proceed without
+        # answering (or this is a resumed request after answering) - asking
+        # again would be a dead-end loop, so this round must produce a real
+        # answer no matter how uncertain, stating any assumption made
+        # instead of blocking on it a second time.
+        user_prompt += (
+            "\n\n(The user was already offered a chance to clarify and chose to proceed anyway. "
+            "Do not set clarification_question this time - make your best defensible assumption "
+            "and state it in \"rationale\" instead.)"
+        )
 
     resp = _client.messages.create(
         model=settings.llm_model_fast,
@@ -63,4 +90,8 @@ def generate_sql(question: str, schema_text: str) -> GeneratedQuery:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Query generator returned non-JSON output: {e}") from e
 
-    return GeneratedQuery(sql=parsed.get("sql", ""), rationale=parsed.get("rationale", ""))
+    clarification = parsed.get("clarification_question") if not force_answer else None
+    return GeneratedQuery(
+        sql=parsed.get("sql", ""), rationale=parsed.get("rationale", ""),
+        clarification_question=clarification or None,
+    )

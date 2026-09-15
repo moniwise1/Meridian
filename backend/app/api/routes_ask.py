@@ -21,7 +21,7 @@ from app.security.rate_limit import (
     check_ask_rate_limit, acquire_concurrency_slot, release_concurrency_slot,
     RateLimitExceeded, ConcurrencyLimitExceeded,
 )
-from app.agents.planner import run_analysis, StepEvent, PolicyViolation
+from app.agents.planner import run_analysis, StepEvent, ClarificationEvent, PolicyViolation
 from app.audit import logger as audit
 from app.billing.plans import query_limit_for
 from app.billing.usage import count_queries_this_month
@@ -39,6 +39,12 @@ class AskRequest(BaseModel):
     question: str
     conversation_id: str | None = None
     document_ids: list[str] = []
+    # True on a resend after the user answered (or chose to skip) a
+    # clarification_question from a prior request - see planner.py's
+    # ClarificationEvent docstring for why this is stateless (the frontend
+    # folds the Q&A into a new self-contained question text rather than the
+    # backend remembering an in-progress analysis).
+    skip_clarification: bool = False
 
 
 def _sse(event: dict) -> str:
@@ -105,9 +111,12 @@ def ask_stream(body: AskRequest, db: Session = Depends(get_db),
             for event in run_analysis(
                 db, ctx.tenant_id, ctx.user_id, body.connection_id,
                 body.question, row_scope, body.conversation_id, body.document_ids,
+                force_answer=body.skip_clarification,
             ):
                 if isinstance(event, StepEvent):
                     yield _sse({"type": "step", **asdict(event)})
+                elif isinstance(event, ClarificationEvent):
+                    yield _sse({"type": "clarification", **asdict(event)})
                 else:
                     yield _sse({"type": "result", **event})
         except PolicyViolation as e:

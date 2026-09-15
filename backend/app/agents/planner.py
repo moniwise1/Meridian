@@ -61,6 +61,20 @@ class StepEvent:
     detail: str = ""
 
 
+@dataclass
+class ClarificationEvent:
+    """Yielded instead of a final result when the question is genuinely
+    ambiguous in a way that would change the actual numbers (see
+    query_generator.py / insight_agent.py's clarification_question rules) -
+    pauses the analysis without persisting a QueryRecord. Resuming is
+    stateless: the frontend folds the question/answer into a new
+    self-contained question text and re-asks with force_answer=True, the
+    same "combine into one question" idea context_resolver.py already uses
+    for follow-ups, rather than the backend having to remember any
+    in-progress state."""
+    question: str
+
+
 class PolicyViolation(Exception):
     pass
 
@@ -118,7 +132,8 @@ DOCUMENT_ONLY_SOURCE_ID = "document-only"
 
 
 def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
-                                 question: str, documents: list[UploadedDocument], query_id: str):
+                                 question: str, documents: list[UploadedDocument], query_id: str,
+                                 force_answer: bool = False):
     """The document-only path: no DataSourceConnection at all, one or more
     uploaded documents selected as the thing being analysed directly (as
     opposed to attached as supplementary context to a database-backed
@@ -245,7 +260,12 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     model_charts: list[dict] = []
     profile_dict = tabular_analysis.profile_to_dict(profile) if profile else None
     try:
-        insight, model_charts = explain_document_only_v2(question, document_payload, computed_profile=profile_dict)
+        insight, model_charts = explain_document_only_v2(
+            question, document_payload, computed_profile=profile_dict, force_answer=force_answer,
+        )
+        if insight.clarification_question:
+            yield ClarificationEvent(question=insight.clarification_question)
+            return
         insight_dict = asdict(insight)
         if profile_dict and profile.primary_group_column:
             # The real, deterministically-computed breakdown (see
@@ -359,8 +379,12 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
 
 def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str | None,
                   question: str, row_scope: dict, conversation_id: str | None = None,
-                  document_ids: list[str] | None = None):
-    """Generator yielding StepEvent progress, ending with a final dict result."""
+                  document_ids: list[str] | None = None, force_answer: bool = False):
+    """Generator yielding StepEvent progress, ending with a final dict result -
+    or, if the question is genuinely ambiguous, a ClarificationEvent instead
+    (see its own docstring). force_answer=True (set once the user has
+    answered, or chosen to skip, a prior clarification) tells the model not
+    to ask again this round - guarantees this can never loop more than once."""
     query_id = f"AQ-{uuid.uuid4().hex[:8]}"
 
     # Re-resolved against this tenant, never trusting that a client-supplied
@@ -379,7 +403,7 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         # _run_document_only_analysis above. routes_ask.py already
         # rejects a request with neither connection_id nor document_ids
         # before this is ever called.
-        yield from _run_document_only_analysis(db, tenant_id, user_id, question, documents, query_id)
+        yield from _run_document_only_analysis(db, tenant_id, user_id, question, documents, query_id, force_answer)
         return
 
     conn_row = db.query(DataSourceConnection).filter_by(id=connection_id, tenant_id=tenant_id).first()
@@ -469,7 +493,10 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     yield StepEvent("finding_data", "done", f"{len(tables)} authorized table(s) available.")
 
     yield StepEvent("running_analysis", "running")
-    generated = generate_sql(resolved_question, schema_text)
+    generated = generate_sql(resolved_question, schema_text, force_answer=force_answer)
+    if generated.clarification_question:
+        yield ClarificationEvent(question=generated.clarification_question)
+        return
     if not generated.sql:
         yield StepEvent("running_analysis", "error", generated.rationale or "Could not translate question to an authorized query.")
         return

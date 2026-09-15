@@ -49,6 +49,7 @@ def _install_stubs():
     class _Gen:
         sql = "SELECT region, revenue FROM sales"
         rationale = "Sum revenue by region."
+        clarification_question = None
     planner.generate_sql = lambda *a, **k: _Gen()
 
     planner.explain = lambda *a, **k: Insight(
