@@ -11,6 +11,7 @@ import {
   type StepEvent,
   type ResultEvent,
 } from "@/lib/api";
+import ClarificationPrompt from "@/components/ClarificationPrompt";
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
 
@@ -40,6 +41,15 @@ export default function AskDashboard() {
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
+  // Set when the backend pauses mid-analysis to ask something that would
+  // genuinely change the answer (see app/agents/planner.py's
+  // ClarificationEvent) - non-null means the question/source form above is
+  // frozen and ClarificationPrompt is shown instead of a running/result
+  // state. Resuming is stateless: askAgain() below folds the question and
+  // answer (or the skip) into one self-contained question and re-asks with
+  // skip_clarification: true, which the backend guarantees can only ever
+  // trigger one more round, never a second clarification.
+  const [clarificationQuestion, setClarificationQuestion] = useState<string | null>(null);
 
   useEffect(() => {
     // Connections and documents load independently (two separate
@@ -84,25 +94,36 @@ export default function AskDashboard() {
     setSelectedDocIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
   }
 
-  async function handleAsk(followUp = false) {
-    if (!question.trim() || !source) return;
+  async function runAsk(
+    questionText: string,
+    opts: { followUp: boolean; skipClarification: boolean },
+  ) {
+    if (!source) return;
     setRunning(true);
     setSteps([]);
     setResult(null);
+    setClarificationQuestion(null);
     try {
       await askStream(
         {
           connection_id: source.type === "connection" ? source.id : null,
-          question,
-          conversation_id: followUp ? conversationId : null,
+          question: questionText,
+          conversation_id: opts.followUp ? conversationId : null,
           // Attaching/selecting documents forces a fresh (non-follow-up)
           // question server-side too, but keep the UI consistent with
           // that rule.
-          document_ids: followUp ? [] : documentIsSource ? [source.id] : selectedDocIds,
+          document_ids: opts.followUp ? [] : documentIsSource ? [source.id] : selectedDocIds,
+          skip_clarification: opts.skipClarification,
         },
         (evt) => {
           if (evt.type === "step") setSteps((prev) => [...prev, evt]);
-          else {
+          else if (evt.type === "clarification") {
+            // Pauses here rather than showing a result - the analysis
+            // never ran, nothing was persisted, so there's no partial
+            // result to show alongside this. (running is cleared in the
+            // shared finally block below once the stream ends.)
+            setClarificationQuestion(evt.question);
+          } else {
             setResult(evt);
             setConversationId(evt.conversation_id);
           }
@@ -115,12 +136,34 @@ export default function AskDashboard() {
     }
   }
 
+  function handleAsk(followUp = false) {
+    if (!question.trim()) return;
+    runAsk(question, { followUp, skipClarification: false });
+  }
+
+  // Folds the clarifying question and the user's answer into one
+  // self-contained question text, then re-asks with skip_clarification:
+  // true - the same "combine into one question" idea context_resolver.py
+  // already uses for follow-ups (see its docstring), just done here on the
+  // client rather than needing the backend to remember any in-progress
+  // state.
+  function answerClarification(answer: string) {
+    if (!clarificationQuestion) return;
+    const combined = `${question}\n\n(Clarifying question: "${clarificationQuestion}" — Answer: "${answer}")`;
+    runAsk(combined, { followUp: false, skipClarification: true });
+  }
+
+  function skipClarification() {
+    runAsk(question, { followUp: false, skipClarification: true });
+  }
+
   function startNewConversation() {
     setConversationId(null);
     setResult(null);
     setSteps([]);
     setQuestion("");
     setSelectedDocIds([]);
+    setClarificationQuestion(null);
   }
 
   return (
@@ -164,7 +207,8 @@ export default function AskDashboard() {
           <select
             value={sourceValue}
             onChange={(e) => setSourceValue(e.target.value)}
-            className="text-[13px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink flex-1"
+            disabled={!!clarificationQuestion}
+            className="text-[13px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink flex-1 disabled:opacity-60"
           >
             {connections.length === 0 && documents.length === 0 && (
               <option value="">No data sources or documents available</option>
@@ -200,13 +244,14 @@ export default function AskDashboard() {
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAsk(!!conversationId);
           }}
+          disabled={!!clarificationQuestion}
           placeholder={
             conversationId
               ? "Ask a follow-up — e.g. what about last month specifically?"
               : "e.g. Why did South-East revenue fall last quarter?"
           }
           rows={3}
-          className="w-full text-[14px] border border-line rounded-[3px] px-3 py-2.5 bg-panel text-ink placeholder:text-ink-soft/70 resize-none focus:outline-none focus:ring-1 focus:ring-teal"
+          className="w-full text-[14px] border border-line rounded-[3px] px-3 py-2.5 bg-panel text-ink placeholder:text-ink-soft/70 resize-none focus:outline-none focus:ring-1 focus:ring-teal disabled:opacity-60"
         />
 
         {!conversationId && !documentIsSource && documents.length > 0 && (
@@ -241,13 +286,24 @@ export default function AskDashboard() {
         <div className="flex justify-end mt-3">
           <button
             onClick={() => handleAsk(!!conversationId)}
-            disabled={running || !question.trim() || !source}
+            disabled={running || !question.trim() || !source || !!clarificationQuestion}
             className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-teal transition-colors"
           >
             {running ? "Analysing…" : conversationId ? "Ask follow-up" : "Ask"}
           </button>
         </div>
       </div>
+
+      {clarificationQuestion && (
+        <div className="mb-8">
+          <ClarificationPrompt
+            question={clarificationQuestion}
+            busy={running}
+            onAnswer={answerClarification}
+            onSkip={skipClarification}
+          />
+        </div>
+      )}
 
       {steps.length > 0 && (
         <div className="mb-8">

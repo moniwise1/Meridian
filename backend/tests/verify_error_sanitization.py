@@ -83,7 +83,9 @@ class _FakeTbl:
 planner.build_connector = lambda cr: _FakeConn()
 planner.discover_schema = lambda *a, **k: [_FakeTbl()]
 planner.schema_to_prompt_text = lambda x: "sales(region, revenue)"
-planner.generate_sql = lambda *a, **k: type("G", (), {"sql": "SELECT region, revenue FROM sales", "rationale": "r"})()
+planner.generate_sql = lambda *a, **k: type("G", (), {
+    "sql": "SELECT region, revenue FROM sales", "rationale": "r", "clarification_question": None,
+})()
 planner.resolve_followup = lambda q, c: ResolvedQuestion(resolved_question=q)
 planner.query_cache.get = lambda *a, **k: None
 planner.query_cache.put = lambda *a, **k: None

@@ -868,6 +868,13 @@ export type ResultEvent = {
   preview_rows: Record<string, unknown>[];
 };
 
+// Yielded instead of a StepEvent/ResultEvent when the question is
+// genuinely ambiguous in a way that would change the answer (see
+// app/agents/planner.py's ClarificationEvent) - pauses the analysis rather
+// than guessing or failing outright. Answer it (or skip it) by re-calling
+// askStream with skip_clarification: true - see AskDashboard.tsx.
+export type ClarificationRequestEvent = { type: "clarification"; question: string };
+
 export async function askStream(
   input: {
     // A document can be the data source on its own now - see
@@ -876,8 +883,9 @@ export async function askStream(
     question: string;
     conversation_id?: string | null;
     document_ids?: string[];
+    skip_clarification?: boolean;
   },
-  onEvent: (evt: StepEvent | ResultEvent) => void,
+  onEvent: (evt: StepEvent | ResultEvent | ClarificationRequestEvent) => void,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/ask/stream`, {
     method: "POST",

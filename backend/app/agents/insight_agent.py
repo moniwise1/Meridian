@@ -566,6 +566,16 @@ CORE RULES
    period-over-period and segment anomalies for that data more reliably than reading text can, and
    guessing at one yourself would just risk a duplicate or contradictory flag.
 
+10. Ask, don't guess, when a question is genuinely ambiguous. Prefer answering with a stated
+    assumption over asking - only set "clarification_question" (leaving every other field at its
+    default/empty value) when the question could reasonably mean two clearly different things AND
+    answering it wrong would give a materially different result (e.g. "the highs and lows" with no
+    indication of which metric; a date range with no fixed meaning anywhere in the document or the
+    question). Do not ask about phrasing, format, or chart type - only things that would change the
+    actual answer. If the input includes "clarification_already_offered": true, you MUST NOT set
+    "clarification_question" this time - make your best defensible assumption instead and say what
+    you assumed in "confidence_explanation".
+
 If a `computed_profile` key is present in the input, the document contained a real, genuine data
 table (a spreadsheet, or a table inside the document), and everything in `computed_profile` was
 already computed deterministically by real code reading that table directly - row counts, column
@@ -597,7 +607,8 @@ Respond with JSON in exactly this shape (in addition to any render_chart/compute
     {"finding": "...", "location": "e.g. Sheet2!B4:B12 or Slide 7", "confidence": "high|medium|low"}
   ],
   "flagged_items": ["anything that needs human review, looks anomalous, or is a grouped 'Other' - [] if none"],
-  "structured_data": []
+  "structured_data": [],
+  "clarification_question": null
 }
 
 "what" is the headline - it should stand alone and make sense before anyone reads "key_findings".
@@ -626,7 +637,7 @@ calling compute_aggregate - rule 6 above still applies; "privately" means don't 
 # collected separately in planner.py, never from this dict).
 _DOCUMENT_ONLY_V2_FIELDS = {
     "what", "confidence", "confidence_explanation", "data_quality_caveat", "next_question",
-    "extraction_summary", "key_findings", "flagged_items", "structured_data",
+    "extraction_summary", "key_findings", "flagged_items", "structured_data", "clarification_question",
 }
 
 _VALID_CHART_TYPES = {"bar", "pie", "line"}
@@ -643,6 +654,12 @@ class DocumentInsight:
     key_findings: list[dict]
     flagged_items: list[str]
     structured_data: list
+    # Set only when the question is genuinely ambiguous in a way that would
+    # change the actual answer (see the system prompt's own rule for this) -
+    # planner.py checks this BEFORE persisting a QueryRecord or using any
+    # other field on this dataclass, so every other field is left at its
+    # default/empty value on this path rather than a half-formed answer.
+    clarification_question: str | None = None
 
 
 def _sanitize_chart(raw: dict) -> dict | None:
@@ -741,6 +758,7 @@ _MAX_TOOL_LOOP_ITERATIONS = 6  # generous - parallel tool use means every chart 
 
 def explain_document_only_v2(
     question: str, documents: list[dict], computed_profile: dict | None = None,
+    force_answer: bool = False,
 ) -> tuple[DocumentInsight, list[dict]]:
     """Returns (insight, model_charts) - model_charts is whatever the model
     called render_chart with, sanitized, in call order; planner.py is what
@@ -754,6 +772,13 @@ def explain_document_only_v2(
     payload = {"question": question, "reference_documents": documents}
     if computed_profile:
         payload["computed_profile"] = computed_profile
+    if force_answer:
+        # The user was already offered a chance to clarify (or this is the
+        # resumed request after answering) - asking again would be a
+        # dead-end loop, so this round must produce a real answer no matter
+        # how uncertain, stating any assumption made instead of blocking on
+        # it a second time (mirrors query_generator.py's identical rule).
+        payload["clarification_already_offered"] = True
     messages = [{"role": "user", "content": json.dumps(payload)}]
     model_charts: list[dict] = []
     resp = None
@@ -812,11 +837,16 @@ def explain_document_only_v2(
         messages.append({"role": "user", "content": tool_results})
 
     parsed = _parse_json_response(_extract_text(resp))
+    if force_answer:
+        # Defensive, not just relying on the prompt: guarantees this can
+        # never loop more than once even if the model asks again anyway.
+        parsed = {**parsed, "clarification_question": None}
     insight = DocumentInsight(**{
         **{  # sensible defaults for anything the model omitted, rather than a KeyError
             "what": "", "confidence": "low", "confidence_explanation": "",
             "data_quality_caveat": "", "next_question": "",
             "extraction_summary": {}, "key_findings": [], "flagged_items": [], "structured_data": [],
+            "clarification_question": None,
         },
         **{k: v for k, v in parsed.items() if k in _DOCUMENT_ONLY_V2_FIELDS},
     })
