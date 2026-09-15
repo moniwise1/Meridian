@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listPlans, type Plan } from "@/lib/api";
+import { track } from "@/lib/analytics";
 
 function formatNaira(amountKobo: number): string {
   return `₦${(amountKobo / 100).toLocaleString("en-NG", { maximumFractionDigits: 0 })}`;
@@ -170,6 +171,7 @@ export default function LandingPage() {
             </Link>
             <Link
               href="/login?mode=register"
+              onClick={() => track("cta_get_started", { location: "nav" })}
               className="text-[13px] px-3.5 py-1.5 rounded-[3px] bg-teal-deep text-white hover:bg-teal transition-colors"
             >
               Get started
@@ -215,6 +217,7 @@ export default function LandingPage() {
                   of sitting as flat, opaque blocks. */}
               <Link
                 href="/login?mode=register"
+                onClick={() => track("cta_get_started", { location: "hero" })}
                 className="text-[13.5px] px-5 py-2.5 rounded-[6px] bg-teal-deep/85 backdrop-blur-md border border-white/25 text-white shadow-[0_8px_24px_-8px_rgba(18,63,61,0.55)] hover:bg-teal-deep transition-colors"
               >
                 Get started free
@@ -415,6 +418,7 @@ export default function LandingPage() {
                 </ul>
                 <Link
                   href="/login?mode=register"
+                  onClick={() => track("cta_get_started", { location: "pricing", plan: plan.key })}
                   className={`text-center text-[13px] px-4 py-2 rounded-[3px] transition-colors ${
                     plan.key === "pro"
                       ? "bg-teal-deep text-white hover:bg-teal"
@@ -440,6 +444,7 @@ export default function LandingPage() {
         </p>
         <Link
           href="/login?mode=register"
+          onClick={() => track("cta_get_started", { location: "final_cta" })}
           className="inline-block text-[13.5px] px-6 py-2.5 rounded-[3px] bg-teal-deep text-white hover:bg-teal transition-colors"
         >
           Get started free
