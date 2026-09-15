@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   listConnections,
@@ -15,12 +15,12 @@ import ClarificationPrompt from "@/components/ClarificationPrompt";
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
 
-// The "Data source" select offers both database connections and uploaded
+// The "Data source" picker offers both database connections and uploaded
 // documents in one list — a document can now BE the thing being analysed,
 // not only supplementary context attached to a database question (see
 // app/agents/planner.py's document-only branch on the backend). Encoded
-// as "conn:<id>" / "doc:<id>" in the <select> value and parsed back out
-// on submit, so there's one selection model instead of two disconnected
+// as "conn:<id>" / "doc:<id>" in sourceValue and parsed back out on
+// submit, so there's one selection model instead of two disconnected
 // pieces of state that could disagree about what's actually selected.
 type SourceSelection = { type: "connection"; id: string } | { type: "document"; id: string } | null;
 
@@ -30,26 +30,34 @@ function parseSourceValue(value: string): SourceSelection {
   return null;
 }
 
+// One exchange in the chat thread - the question as the user actually
+// typed it, the source it was asked against, and everything that came
+// back for it. Kept as its own record (rather than re-deriving from a
+// single shared `steps`/`result` pair) so earlier turns stay visible and
+// frozen once a new question starts, the same reason any chat UI keeps
+// every past message rather than only ever showing the latest one.
+type Turn = {
+  id: number;
+  question: string;
+  sourceLabel: string;
+  steps: StepEvent[];
+  result: ResultEvent | null;
+  clarificationQuestion: string | null;
+  clarificationAnswer: string | null;
+};
+
 export default function AskDashboard() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [sourceValue, setSourceValue] = useState("");
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [steps, setSteps] = useState<StepEvent[]>([]);
-  const [result, setResult] = useState<ResultEvent | null>(null);
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
-  // Set when the backend pauses mid-analysis to ask something that would
-  // genuinely change the answer (see app/agents/planner.py's
-  // ClarificationEvent) - non-null means the question/source form above is
-  // frozen and ClarificationPrompt is shown instead of a running/result
-  // state. Resuming is stateless: askAgain() below folds the question and
-  // answer (or the skip) into one self-contained question and re-asks with
-  // skip_clarification: true, which the backend guarantees can only ever
-  // trigger one more round, never a second clarification.
-  const [clarificationQuestion, setClarificationQuestion] = useState<string | null>(null);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Connections and documents load independently (two separate
@@ -59,11 +67,8 @@ export default function AskDashboard() {
     // original behavior before documents could be a source at all), but
     // if there are zero connections and at least one document, the
     // document needs to become the default too - otherwise sourceValue
-    // stays "", which means <select>'s bound value matches no real
-    // <option>, and the browser falls back to visually displaying the
-    // first option anyway (misleadingly looking selected) while React's
-    // own state - and therefore the Ask button's enabled check and the
-    // "hide the redundant attach section" logic - both still see nothing
+    // stays "", which means nothing downstream (the Ask button's enabled
+    // check, the "hide the redundant attach section" logic) sees anything
     // selected. The functional update below only sets a document default
     // when nothing has claimed sourceValue yet, so a connection arriving
     // either before or after documents always takes priority correctly.
@@ -83,26 +88,52 @@ export default function AskDashboard() {
       .catch(() => {}); // no document_retrieval capability, or none uploaded yet — fine either way
   }, []);
 
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns]);
+
   const source = parseSourceValue(sourceValue);
   // Selecting a document AS the source is a distinct, single-document
-  // mode — the separate "attach a supplementary document" list (for a
+  // mode — the separate "attach a supplementary document" popover (for a
   // database-backed question) is hidden in that case rather than letting
   // the two overlap confusingly.
   const documentIsSource = source?.type === "document";
+
+  const activeTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+  const pendingClarification = !!activeTurn && !!activeTurn.clarificationQuestion && !activeTurn.result;
+  const inputLocked = running || pendingClarification;
 
   function toggleDoc(id: string) {
     setSelectedDocIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
   }
 
+  function currentSourceLabel(): string {
+    if (!source) return "";
+    if (source.type === "connection") return connections.find((c) => c.id === source.id)?.name ?? "Database";
+    return documents.find((d) => d.id === source.id)?.filename ?? "Document";
+  }
+
+  // turnId is set only when resuming a turn already in the thread (a
+  // clarification answer/skip) - omitted for a brand new question, which
+  // appends a fresh turn instead.
   async function runAsk(
     questionText: string,
-    opts: { followUp: boolean; skipClarification: boolean },
+    opts: { followUp: boolean; skipClarification: boolean; turnId?: number },
   ) {
     if (!source) return;
     setRunning(true);
-    setSteps([]);
-    setResult(null);
-    setClarificationQuestion(null);
+
+    const id = opts.turnId ?? Date.now();
+    if (opts.turnId === undefined) {
+      setTurns((prev) => [...prev, {
+        id, question: questionText, sourceLabel: currentSourceLabel(),
+        steps: [], result: null, clarificationQuestion: null, clarificationAnswer: null,
+      }]);
+    }
+    function patch(fn: (t: Turn) => Turn) {
+      setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
+    }
+
     try {
       await askStream(
         {
@@ -116,54 +147,67 @@ export default function AskDashboard() {
           skip_clarification: opts.skipClarification,
         },
         (evt) => {
-          if (evt.type === "step") setSteps((prev) => [...prev, evt]);
+          if (evt.type === "step") patch((t) => ({ ...t, steps: [...t.steps, evt] }));
           else if (evt.type === "clarification") {
-            // Pauses here rather than showing a result - the analysis
+            // Pauses here rather than producing a result - the analysis
             // never ran, nothing was persisted, so there's no partial
-            // result to show alongside this. (running is cleared in the
-            // shared finally block below once the stream ends.)
-            setClarificationQuestion(evt.question);
+            // result to show alongside this.
+            patch((t) => ({ ...t, clarificationQuestion: evt.question }));
           } else {
-            setResult(evt);
+            patch((t) => ({ ...t, result: evt, clarificationQuestion: null }));
             setConversationId(evt.conversation_id);
           }
         },
       );
     } catch (e) {
-      setSteps((prev) => [...prev, { type: "step", step: "error", status: "error", detail: (e as Error).message }]);
+      patch((t) => ({
+        ...t,
+        steps: [...t.steps, { type: "step", step: "error", status: "error", detail: (e as Error).message }],
+      }));
     } finally {
       setRunning(false);
     }
   }
 
-  function handleAsk(followUp = false) {
+  function askText(text: string, followUp: boolean) {
+    if (!text.trim() || !source || inputLocked) return;
+    runAsk(text, { followUp, skipClarification: false });
+  }
+
+  function handleAsk() {
     if (!question.trim()) return;
-    runAsk(question, { followUp, skipClarification: false });
+    const text = question;
+    setQuestion("");
+    askText(text, !!conversationId);
   }
 
   // Folds the clarifying question and the user's answer into one
   // self-contained question text, then re-asks with skip_clarification:
   // true - the same "combine into one question" idea context_resolver.py
-  // already uses for follow-ups (see its docstring), just done here on the
-  // client rather than needing the backend to remember any in-progress
-  // state.
-  function answerClarification(answer: string) {
-    if (!clarificationQuestion) return;
-    const combined = `${question}\n\n(Clarifying question: "${clarificationQuestion}" — Answer: "${answer}")`;
-    runAsk(combined, { followUp: false, skipClarification: true });
+  // already uses for follow-ups, just done here on the client rather than
+  // needing the backend to remember any in-progress state. Reads the
+  // original question straight off the turn itself (not ambient `question`
+  // state, which is already cleared/reused for whatever the user types
+  // next) so this stays correct even if they start typing a new message
+  // before answering.
+  function answerClarification(turn: Turn, answer: string) {
+    if (!turn.clarificationQuestion) return;
+    setTurns((prev) => prev.map((t) => (t.id === turn.id ? { ...t, clarificationAnswer: answer } : t)));
+    const combined = `${turn.question}\n\n(Clarifying question: "${turn.clarificationQuestion}" — Answer: "${answer}")`;
+    runAsk(combined, { followUp: false, skipClarification: true, turnId: turn.id });
   }
 
-  function skipClarification() {
-    runAsk(question, { followUp: false, skipClarification: true });
+  function skipClarification(turn: Turn) {
+    setTurns((prev) => prev.map((t) => (t.id === turn.id ? { ...t, clarificationAnswer: "Skipped — best guess" } : t)));
+    runAsk(turn.question, { followUp: false, skipClarification: true, turnId: turn.id });
   }
 
   function startNewConversation() {
     setConversationId(null);
-    setResult(null);
-    setSteps([]);
+    setTurns([]);
     setQuestion("");
     setSelectedDocIds([]);
-    setClarificationQuestion(null);
+    setAttachOpen(false);
   }
 
   return (
@@ -201,117 +245,176 @@ export default function AskDashboard() {
         </div>
       )}
 
-      <div className="bg-panel border border-line rounded-[4px] p-4 mb-8">
-        <div className="flex items-center gap-3 mb-3">
-          <label className="text-[12.5px] text-ink-soft shrink-0">Data source</label>
-          <select
-            value={sourceValue}
-            onChange={(e) => setSourceValue(e.target.value)}
-            disabled={!!clarificationQuestion}
-            className="text-[13px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink flex-1 disabled:opacity-60"
-          >
-            {connections.length === 0 && documents.length === 0 && (
-              <option value="">No data sources or documents available</option>
-            )}
-            {connections.length > 0 && (
-              <optgroup label="Databases">
-                {connections.map((c) => (
-                  <option key={c.id} value={`conn:${c.id}`}>
-                    {c.name} ({c.database})
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {documents.length > 0 && (
-              <optgroup label="Documents">
-                {documents.map((d) => (
-                  <option key={d.id} value={`doc:${d.id}`}>
-                    {d.filename}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
+      {/* ---------- Thread ---------- */}
+      {turns.length > 0 && (
+        <div className="flex flex-col gap-8 mb-6">
+          {turns.map((turn) => {
+            const nextQuestion =
+              turn.result && !("error" in turn.result.insight) ? turn.result.insight.next_question : null;
+            const showSteps = turn.steps.length > 0 && (!turn.result || turn.steps.some((s) => s.status === "error"));
+            return (
+              <div key={turn.id} className="flex flex-col gap-3">
+                {/* User message */}
+                <div className="self-end max-w-[85%]">
+                  <div className="bg-teal-deep text-white text-[13.5px] rounded-[10px] rounded-br-[3px] px-4 py-2.5 whitespace-pre-wrap">
+                    {turn.question}
+                  </div>
+                  <div className="text-[11px] text-ink-soft mt-1 text-right">{turn.sourceLabel}</div>
+                </div>
+
+                {/* Assistant content */}
+                <div className="flex items-start gap-2.5">
+                  <span className="shrink-0 mt-0.5 w-6 h-6 rounded-full bg-teal-deep text-white text-[11px] font-medium flex items-center justify-center">
+                    M
+                  </span>
+                  <div className="flex-1 min-w-0 flex flex-col gap-3">
+                    {showSteps && <ProgressTrace steps={turn.steps} />}
+                    {turn.clarificationQuestion && !turn.result && (
+                      <ClarificationPrompt
+                        question={turn.clarificationQuestion}
+                        busy={running}
+                        onAnswer={(answer) => answerClarification(turn, answer)}
+                        onSkip={() => skipClarification(turn)}
+                      />
+                    )}
+                    {turn.clarificationAnswer && (
+                      <div className="text-[12px] text-ink-soft italic">You answered: “{turn.clarificationAnswer}”</div>
+                    )}
+                    {turn.result && <ResultView result={turn.result} />}
+                    {nextQuestion && (
+                      <button
+                        onClick={() => askText(nextQuestion, !!conversationId)}
+                        disabled={inputLocked}
+                        className="self-start text-[12.5px] px-3 py-1.5 rounded-full border border-teal text-teal hover:bg-teal hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {nextQuestion} →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div ref={threadEndRef} />
         </div>
+      )}
+
+      {/* ---------- Composer ---------- */}
+      <div className="sticky bottom-4 bg-panel border border-line rounded-[8px] shadow-sm p-4">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <span className="text-[11.5px] text-ink-soft shrink-0">Source:</span>
+          {connections.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setSourceValue(`conn:${c.id}`)}
+              disabled={inputLocked}
+              className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                sourceValue === `conn:${c.id}`
+                  ? "bg-teal-deep text-white border-teal-deep"
+                  : "border-line text-ink-soft hover:border-teal hover:text-teal"
+              }`}
+            >
+              {c.name}
+            </button>
+          ))}
+          {documents.map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => setSourceValue(`doc:${d.id}`)}
+              disabled={inputLocked}
+              className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                sourceValue === `doc:${d.id}`
+                  ? "bg-teal-deep text-white border-teal-deep"
+                  : "border-line text-ink-soft hover:border-teal hover:text-teal"
+              }`}
+            >
+              {d.filename}
+            </button>
+          ))}
+          {connections.length === 0 && documents.length === 0 && (
+            <span className="text-[12px] text-ink-soft">No data sources or documents available</span>
+          )}
+        </div>
+
         {documentIsSource && (
-          <div className="text-[11.5px] text-ink-soft mb-3 -mt-1">
+          <div className="text-[11.5px] text-ink-soft mb-2">
             Analysing this document&apos;s content directly — no database query involved.
           </div>
         )}
-        <textarea
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAsk(!!conversationId);
-          }}
-          disabled={!!clarificationQuestion}
-          placeholder={
-            conversationId
-              ? "Ask a follow-up — e.g. what about last month specifically?"
-              : "e.g. Why did South-East revenue fall last quarter?"
-          }
-          rows={3}
-          className="w-full text-[14px] border border-line rounded-[3px] px-3 py-2.5 bg-panel text-ink placeholder:text-ink-soft/70 resize-none focus:outline-none focus:ring-1 focus:ring-teal disabled:opacity-60"
-        />
 
-        {!conversationId && !documentIsSource && documents.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-line">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[12px] text-ink-soft">
-                Attach a document for this question to reference (optional):
-              </div>
-              <Link href="/documents" className="text-[11.5px] text-teal hover:text-teal-deep transition-colors">
-                Manage documents
-              </Link>
+        <div className="flex items-end gap-2">
+          {!conversationId && !documentIsSource && documents.length > 0 && (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setAttachOpen((v) => !v)}
+                disabled={inputLocked}
+                title="Attach a document for this question to reference"
+                className={`w-9 h-9 rounded-full border flex items-center justify-center text-[13px] transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                  selectedDocIds.length > 0
+                    ? "border-teal-deep text-teal-deep"
+                    : "border-line text-ink-soft hover:border-teal hover:text-teal"
+                }`}
+              >
+                📎{selectedDocIds.length > 0 && <span className="ml-0.5">{selectedDocIds.length}</span>}
+              </button>
+              {attachOpen && (
+                <div className="absolute bottom-11 left-0 w-64 bg-panel border border-line rounded-[6px] shadow-sm p-3 z-10">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[11.5px] text-ink-soft">Attach documents (optional)</div>
+                    <Link href="/documents" className="text-[11px] text-teal hover:text-teal-deep transition-colors">
+                      Manage
+                    </Link>
+                  </div>
+                  <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                    {documents.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => toggleDoc(d.id)}
+                        className={`text-left text-[12px] px-2 py-1.5 rounded-[3px] transition-colors ${
+                          selectedDocIds.includes(d.id) ? "bg-teal-deep text-white" : "text-ink-soft hover:bg-paper"
+                        }`}
+                      >
+                        {d.filename}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              {documents.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  onClick={() => toggleDoc(d.id)}
-                  className={`text-[12px] px-2.5 py-1 rounded-[3px] border transition-colors ${
-                    selectedDocIds.includes(d.id)
-                      ? "bg-teal-deep text-white border-teal-deep"
-                      : "border-line text-ink-soft hover:border-teal hover:text-teal"
-                  }`}
-                >
-                  {d.filename}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex justify-end mt-3">
+          )}
+          <textarea
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleAsk();
+              }
+            }}
+            disabled={inputLocked}
+            placeholder={
+              conversationId
+                ? "Ask a follow-up — e.g. what about last month specifically?"
+                : "e.g. Why did South-East revenue fall last quarter?"
+            }
+            rows={1}
+            className="flex-1 text-[14px] border border-line rounded-[8px] px-3 py-2 bg-panel text-ink placeholder:text-ink-soft/70 resize-none focus:outline-none focus:ring-1 focus:ring-teal disabled:opacity-60 max-h-32"
+          />
           <button
-            onClick={() => handleAsk(!!conversationId)}
-            disabled={running || !question.trim() || !source || !!clarificationQuestion}
-            className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-teal transition-colors"
+            onClick={handleAsk}
+            disabled={inputLocked || !question.trim() || !source}
+            className="shrink-0 w-9 h-9 rounded-full bg-teal-deep text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-teal transition-colors flex items-center justify-center"
+            title={running ? "Analysing…" : "Send"}
           >
-            {running ? "Analysing…" : conversationId ? "Ask follow-up" : "Ask"}
+            {running ? "…" : "↑"}
           </button>
         </div>
+        <div className="text-[10.5px] text-ink-soft mt-1.5">Enter to send · Shift+Enter for a new line</div>
       </div>
-
-      {clarificationQuestion && (
-        <div className="mb-8">
-          <ClarificationPrompt
-            question={clarificationQuestion}
-            busy={running}
-            onAnswer={answerClarification}
-            onSkip={skipClarification}
-          />
-        </div>
-      )}
-
-      {steps.length > 0 && (
-        <div className="mb-8">
-          <ProgressTrace steps={steps} />
-        </div>
-      )}
-
-      {result && <ResultView result={result} />}
     </div>
   );
 }
