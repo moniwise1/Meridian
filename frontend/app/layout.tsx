@@ -21,11 +21,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             No cookies, no cross-site tracking, nothing sent to any other
             third party - see the Privacy Policy's "Third parties we rely
             on" section. strategy="afterInteractive" so this never
-            competes with the actual page's own load. */}
+            competes with the actual page's own load.
+            data-exclude-search strips query strings from every tracked
+            URL - reset-password, accept-invite, and mfa-recovery all carry
+            a real one-time secret token as a "?token=..." query param, and
+            without this a routine page-view would otherwise send that
+            token to Umami's servers along with the URL. */}
         <Script
           defer
           src="https://cloud.umami.is/script.js"
           data-website-id="e57bb3d3-e95f-4063-90d8-6f5cc4e23bd8"
+          data-exclude-search="true"
           strategy="afterInteractive"
         />
         <AuthGate>
