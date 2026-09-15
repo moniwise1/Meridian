@@ -137,6 +137,7 @@ export default function PrivacyPolicyPage() {
                 <li><strong className="text-ink font-medium">Paystack</strong> — processes subscription payments; Meridian never sees or stores your card details directly.</li>
                 <li><strong className="text-ink font-medium">Resend</strong> — delivers transactional emails (welcome, invites, security notifications).</li>
                 <li><strong className="text-ink font-medium">Railway</strong> — hosts the application and its database.</li>
+                <li><strong className="text-ink font-medium">Umami</strong> — provides internal, privacy-focused analytics on our own website (page visits, approximate location by country, and specific actions like signing up or subscribing). Cookie-free, and used only by Meridian to understand and improve the site — never sold, shared, or used for advertising.</li>
               </ul>
               <p>None of these providers is permitted to use your data for its own purposes beyond providing its service to us.</p>
             </Section>
@@ -155,7 +156,9 @@ export default function PrivacyPolicyPage() {
               <p>
                 Meridian uses only the minimum browser storage required to keep you signed in during a
                 session and to remember interface preferences (such as a collapsed panel). We do not
-                use third-party advertising or cross-site tracking cookies.
+                use third-party advertising or cross-site tracking cookies. Our internal website
+                analytics (Umami, see &quot;Third parties we rely on&quot; above) works without cookies
+                entirely.
               </p>
             </Section>
 

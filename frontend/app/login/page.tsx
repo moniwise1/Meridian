@@ -8,6 +8,7 @@ import {
 } from "@/lib/api";
 import { saveSession, loadSession } from "@/lib/auth";
 import { getTenantSubdomain } from "@/lib/subdomain";
+import { track } from "@/lib/analytics";
 import MfaEnroll from "@/components/MfaEnroll";
 
 const APEX_DOMAIN = process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com";
@@ -127,6 +128,7 @@ function LoginPageInner() {
     try {
       if (effectiveMode === "register") {
         const auth = await register(companyName, email, password);
+        track("signup_completed");
         saveSession({
           token: auth.access_token, tenantId: auth.tenant_id, userId: auth.user_id,
           role: auth.role, email,

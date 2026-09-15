@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getBillingStatus, listPlans, subscribe, cancelSubscription, type BillingStatus, type Plan } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
+import { track } from "@/lib/analytics";
 
 const STATUS_LABEL: Record<string, string> = {
   none: "No subscription",
@@ -63,6 +64,7 @@ export default function BillingPage() {
     setBusy(planKey);
     setError("");
     try {
+      track("subscribe_clicked", { plan: planKey });
       const callbackUrl = `${window.location.origin}/billing/callback`;
       const result = await subscribe(planKey, callbackUrl);
       // Off to Paystack's hosted checkout (an external origin) - a full
