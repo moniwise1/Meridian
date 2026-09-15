@@ -11,6 +11,8 @@ from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 from app.config import settings
 
 # Same palette as the web app (frontend/app/globals.css), the branded HTML
@@ -155,36 +157,60 @@ def _add_text_slide(prs, title, text):
     return slide
 
 
-def _add_table_slide(prs, title, headers, rows):
+_CHART_PALETTE = [_TEAL_DEEP, _TEAL, RGBColor.from_string("A5691F"), RGBColor.from_string("33506B"),
+                  RGBColor.from_string("9C3B2E"), _INK_SOFT]
+
+
+def _add_chart_slide(prs, title, labels, values, chart_type="bar"):
+    """A real, native PowerPoint chart object (editable in PowerPoint
+    itself, not a picture) rather than the plain data table this used to
+    fall back to - the same gap report_generator.py's _draw_bar_chart /
+    _draw_line_chart close for the PDF, so a downloaded deck actually
+    shows the chart ResultView.tsx shows on screen, not just its numbers."""
     slide = prs.slides.add_slide(prs.slide_layouts[5])
     slide.shapes.title.text = title
     _style_title(slide.shapes.title)
     _add_accent_bar(prs, slide)
-    rows_n = min(len(rows), 12) + 1
-    cols_n = len(headers)
-    table_shape = slide.shapes.add_table(rows_n, cols_n, Inches(0.5), Inches(1.6), Inches(9), Inches(0.4 * rows_n))
-    table = table_shape.table
-    # python-pptx tables come with a built-in banded theme by default,
-    # which looks fine but doesn't carry a single brand color anywhere -
-    # explicit header/row fills below replace it with one that does.
-    for c, h in enumerate(headers):
-        cell = table.cell(0, c)
-        cell.text = str(h)
-        cell.fill.solid()
-        cell.fill.fore_color.rgb = _TEAL_DEEP
-        para = cell.text_frame.paragraphs[0]
-        _style_run(para.runs[0], _PAPER, size=Pt(14), bold=True)
-    for r, row in enumerate(rows[:12], start=1):
-        for c, val in enumerate(row):
-            cell = table.cell(r, c)
-            cell.text = str(val)
-            cell.fill.solid()
-            # Alternating row banding on a light paper tint - the same
-            # "scan a long table without losing your place" job zebra
-            # striping plays in the PDF report's own Breakdown table.
-            cell.fill.fore_color.rgb = _PAPER if r % 2 == 0 else RGBColor.from_string("FFFFFF")
-            para = cell.text_frame.paragraphs[0]
-            _style_run(para.runs[0], _INK, size=Pt(13))
+
+    chart_data = CategoryChartData()
+    chart_data.categories = [str(l) for l in labels]
+    chart_data.add_series("Value", [v if isinstance(v, (int, float)) else 0 for v in values])
+
+    xl_type = XL_CHART_TYPE.LINE_MARKERS if chart_type == "line" else (
+        XL_CHART_TYPE.PIE if chart_type == "pie" else XL_CHART_TYPE.COLUMN_CLUSTERED
+    )
+    graphic_frame = slide.shapes.add_chart(
+        xl_type, Inches(0.5), Inches(1.6), Inches(9), Inches(5), chart_data,
+    )
+    chart = graphic_frame.chart
+    plot = chart.plots[0]
+    plot.has_data_labels = True
+    plot.data_labels.number_format = "#,##0.0"
+    plot.data_labels.number_format_is_linked = False
+    plot.data_labels.font.size = Pt(10)
+    plot.data_labels.font.color.rgb = _INK_SOFT
+
+    if chart_type == "pie":
+        # One series, but each point needs its own fill - a single
+        # series-level color would tint every slice the same, unlike the
+        # bar/line cases where one brand color for the one series is
+        # exactly right. Same palette order ResultView.tsx's PieChart
+        # uses, so a pie here matches what's on screen.
+        chart.has_legend = True
+        chart.legend.position = XL_LEGEND_POSITION.RIGHT
+        chart.legend.include_in_layout = False
+        for i, point in enumerate(plot.series[0].points):
+            point.format.fill.solid()
+            point.format.fill.fore_color.rgb = _CHART_PALETTE[i % len(_CHART_PALETTE)]
+    else:
+        chart.has_legend = False
+        series = plot.series[0]
+        series.format.fill.solid()
+        series.format.fill.fore_color.rgb = _TEAL_DEEP
+        if chart_type == "line":
+            series.format.line.color.rgb = _TEAL_DEEP
+            series.smooth = False
+
     _add_branding(prs, slide)
     return slide
 
@@ -259,19 +285,18 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
 
     if charts:
         # v2 document-only charts (see insight_agent.py's render_chart
-        # tool) - one table slide per named chart, rather than the single
-        # implicit bar+pie pair `by_group` produces.
+        # tool) - one native chart slide per named chart, rather than the
+        # single implicit bar+pie pair `by_group` produces.
         for chart in charts:
             heading = "Breakdown"
             if chart.get("title"):
                 heading += f' — {chart["title"]}'
-            rows = list(zip(chart.get("labels", []), chart.get("values", [])))
-            _add_table_slide(prs, heading, ["Group", "Total"], [[label, f"{value:,.2f}"] for label, value in rows])
+            _add_chart_slide(
+                prs, heading, chart.get("labels", []), chart.get("values", []),
+                chart_type=chart.get("chart_type", "bar"),
+            )
     elif by_group:
-        _add_table_slide(
-            prs, "Breakdown", ["Group", "Total"],
-            [[row["group"], f"{row['total']:,.2f}"] for row in by_group],
-        )
+        _add_chart_slide(prs, "Breakdown", [row["group"] for row in by_group], [row["total"] for row in by_group])
 
     if anomalies:
         _add_bullets_slide(prs, "Risks & anomalies", [

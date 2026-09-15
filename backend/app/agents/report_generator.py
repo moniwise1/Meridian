@@ -201,31 +201,110 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
         ))
         pdf.ln(4)
 
-    def _breakdown_table(rows: list[tuple[str, float]]):
-        # Shared by both branches below - a chart's {labels, values} and
-        # by_group's {group, total} both reduce to the same (label,
-        # number) pairs by the time they reach here.
-        col1, col2 = 100, 60
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_fill_color(*_TEAL_DEEP)
-        pdf.set_text_color(*_PAPER)
-        pdf.cell(col1, 8, "Group", border=0, fill=True)
-        pdf.cell(col2, 8, "Total", border=0, fill=True, align="R", ln=1)
-        pdf.set_font("Helvetica", "", 10)
-        pdf.set_text_color(*_INK)
-        for i, (label, value) in enumerate(rows[:15]):
-            # Alternating row banding (a very light paper tint on every
-            # other row) - the same "scan a long list without losing your
-            # place" job zebra-striping does in any real table, purely
-            # cosmetic and never touches a value.
-            fill = i % 2 == 1
-            if fill:
-                pdf.set_fill_color(*_PAPER)
-            pdf.cell(col1, 7, _safe(str(label)), border=0, fill=fill)
-            pdf.cell(col2, 7, f"{value:,.2f}", border=0, fill=fill, align="R", ln=1)
+    def _chart_labels(labels: list, max_chars: int) -> list[str]:
+        out = []
+        for label in labels:
+            s = str(label)
+            out.append(s if len(s) <= max_chars else s[: max(1, max_chars - 1)] + "…")
+        return out
+
+    def _ensure_room(height: float) -> float:
+        # fpdf2's auto_page_break only fires on cell()/multi_cell() text
+        # writes, not on raw rect()/line()/ellipse() calls - a chart drawn
+        # with those primitives too close to the bottom margin would
+        # otherwise silently spill past the page edge, uncaught. Forces the
+        # same new-page behavior a text cell of this height would have
+        # gotten for free, then returns the y to actually draw at.
+        y = pdf.get_y()
+        if y + height > pdf.page_break_trigger:
+            pdf.add_page()
+            y = pdf.get_y()
+        return y
+
+    def _draw_bar_chart(labels: list, values: list) -> None:
+        # A real drawn chart (rects for bars) rather than a data table -
+        # this is what makes the exported PDF actually match what
+        # ResultView.tsx's GroupBars/ChartPanel show on screen, instead of
+        # requiring the reader to read a number and mentally picture the
+        # bar it represents.
+        if not labels or not values:
+            return
+        n = len(labels)
+        width = pdf.w - pdf.l_margin - pdf.r_margin
+        chart_h = 55.0
+        x0 = pdf.l_margin
+        y0 = _ensure_room(chart_h + 14)
+        baseline_y = y0 + chart_h
+        gap = 3.0
+        bar_w = max((width - gap * (n - 1)) / n, 3.0) if n else width
+        max_val = max((v for v in values if isinstance(v, (int, float))), default=0)
+        max_val = max_val if max_val > 0 else 1  # an all-zero/negative series still draws (flat bars), never divides by zero
+
         pdf.set_draw_color(*_LINE)
-        pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + col1 + col2, pdf.get_y())
-        pdf.ln(4)
+        pdf.set_line_width(0.2)
+        pdf.line(x0, baseline_y, x0 + width, baseline_y)
+
+        chart_labels = _chart_labels(labels, max(3, int(bar_w / 1.6)))
+        for i, (label, value) in enumerate(zip(chart_labels, values)):
+            v = value if isinstance(value, (int, float)) else 0
+            bar_h = max((v / max_val) * (chart_h - 10), 0.0)
+            bx = x0 + i * (bar_w + gap)
+            by = baseline_y - bar_h
+            pdf.set_fill_color(*_TEAL_DEEP)
+            pdf.rect(bx, by, bar_w, bar_h, style="F")
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*_INK_SOFT)
+            pdf.set_xy(bx - gap, max(by - 5, y0), )
+            pdf.cell(bar_w + gap * 2, 4, _safe(f"{v:,.1f}"), align="C")
+            pdf.set_xy(bx - gap, baseline_y + 1.5)
+            pdf.cell(bar_w + gap * 2, 4, _safe(label), align="C")
+        pdf.set_text_color(*_INK)
+        pdf.set_y(baseline_y + 7)
+
+    def _draw_line_chart(labels: list, values: list) -> None:
+        if not labels or not values:
+            return
+        n = len(labels)
+        width = pdf.w - pdf.l_margin - pdf.r_margin
+        chart_h = 55.0
+        x0 = pdf.l_margin
+        y0 = _ensure_room(chart_h + 14)
+        baseline_y = y0 + chart_h
+        plot_h = chart_h - 10
+
+        numeric = [v if isinstance(v, (int, float)) else 0 for v in values]
+        max_val, min_val = max(numeric), min(numeric)
+        if max_val == min_val:
+            max_val = min_val + 1  # a flat series still draws a straight line, never divides by zero
+
+        pdf.set_draw_color(*_LINE)
+        pdf.set_line_width(0.2)
+        pdf.line(x0, baseline_y, x0 + width, baseline_y)
+
+        step_x = width / (n - 1) if n > 1 else 0
+        points = [
+            (x0 + i * step_x, baseline_y - ((v - min_val) / (max_val - min_val)) * plot_h)
+            for i, v in enumerate(numeric)
+        ]
+        pdf.set_draw_color(*_TEAL_DEEP)
+        pdf.set_line_width(0.6)
+        for (x1, y1), (x2, y2) in zip(points, points[1:]):
+            pdf.line(x1, y1, x2, y2)
+
+        chart_labels = _chart_labels(labels, 6)
+        pdf.set_fill_color(*_TEAL_DEEP)
+        for (px, py), label, v in zip(points, chart_labels, numeric):
+            r = 1.0
+            pdf.ellipse(px - r, py - r, r * 2, r * 2, style="F")
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*_INK_SOFT)
+            pdf.set_xy(px - 9, max(py - 6, y0))
+            pdf.cell(18, 4, _safe(f"{v:,.1f}"), align="C")
+            pdf.set_xy(px - 9, baseline_y + 1.5)
+            pdf.cell(18, 4, _safe(label), align="C")
+        pdf.set_text_color(*_INK)
+        pdf.set_line_width(0.2)
+        pdf.set_y(baseline_y + 7)
 
     if charts:
         # v2 document-only charts (see insight_agent.py's render_chart
@@ -239,13 +318,21 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
             if chart.get("title"):
                 heading += f' — {chart["title"]}'
             section(heading)
-            _breakdown_table(list(zip(chart.get("labels", []), chart.get("values", []))))
+            labels, values = chart.get("labels", []), chart.get("values", [])
+            if chart.get("chart_type") == "line":
+                _draw_line_chart(labels, values)
+            else:
+                # "pie" draws as a bar too - an accurate, honest read of
+                # the same proportions without fpdf2's more involved
+                # arc/sector-fill drawing, matching ChartPanel's own
+                # fallback to GroupBars when a pie can't be shown.
+                _draw_bar_chart(labels, values)
             if chart.get("insight"):
                 _mc(pdf, 6, _safe(chart["insight"]))
                 pdf.ln(2)
     elif by_group:
         section("Breakdown")
-        _breakdown_table([(row["group"], row["total"]) for row in by_group])
+        _draw_bar_chart([row["group"] for row in by_group], [row["total"] for row in by_group])
 
     if anomalies:
         section("Notable findings")
