@@ -27,6 +27,11 @@ _LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "meridian_m
 _UNICODE_TO_LATIN1 = str.maketrans({
     "—": "-", "–": "-", "‘": "'", "’": "'",
     "“": '"', "”": '"', "…": "...",
+    # fpdf2's core fonts are Latin-1, which has no Naira glyph - without
+    # this, "₦" silently became "?" (see _safe()'s fallback below), which
+    # showed up as e.g. "?m" in a real exported report. "NGN " reads
+    # unambiguously in a plain-text PDF instead of a confusing "?".
+    "₦": "NGN ",
 })
 
 _CONFIDENCE_COLOR = {"high": _TEAL_DEEP, "moderate": _AMBER, "low": _INK_SOFT}

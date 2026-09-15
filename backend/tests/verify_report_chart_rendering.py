@@ -23,7 +23,7 @@ import pymupdf  # used here only to open the generated PDF back up and
                 # anything the app itself ships
 from pptx import Presentation
 
-from app.agents.report_generator import generate_report_pdf
+from app.agents.report_generator import generate_report_pdf, _safe
 from app.agents.presentation_generator import generate_presentation_pptx
 
 _BASE_KWARGS = dict(
@@ -111,6 +111,28 @@ for degenerate in (
     )
     assert os.path.exists(p) and os.path.getsize(p) > 0
 print("4. OK  degenerate chart data (flat series, empty, all-zero) never raises")
+
+# --- 4b. the Naira sign no longer becomes a bare "?" - a real exported
+#         report showed "December Operating Spend Breakdown by Category
+#         (?m)" because fpdf2's core fonts are Latin-1 and have no "₦"
+#         glyph; _safe() now substitutes "NGN " instead of falling through
+#         to its generic '?' replacement-char behavior. ---
+assert _safe("Category (₦m)") == "Category (NGN m)", _safe("Category (₦m)")
+assert _safe("₦80.7m") == "NGN 80.7m", _safe("₦80.7m")
+
+naira_chart = [{
+    "chart_type": "bar", "title": "December Operating Spend Breakdown by Category (₦m)",
+    "labels": ["Fuel", "Fleet"], "values": [80.7, 63.3], "unit": "₦m",
+    "insight": "Fuel leads at ₦80.7m.", "location": "table",
+}]
+naira_pdf = generate_report_pdf(
+    title="Naira test", insight=_INSIGHT, by_group=None, sql="-- n/a",
+    query_id="q-naira", charts=naira_chart, **_BASE_KWARGS,
+)
+naira_text = "".join(page.get_text() for page in pymupdf.open(naira_pdf))
+assert "NGN" in naira_text, naira_text
+assert "?" not in naira_text, naira_text
+print("4b. OK  the Naira sign (₦) renders as 'NGN' in the PDF instead of a bare '?'")
 
 # --- 5. PPTX: a "line" chart produces a real native LINE_MARKERS chart
 #        object with the right categories and values, not a table ---
