@@ -64,7 +64,7 @@ assert len(data["notifications"]) == 1, data
 n = data["notifications"][0]
 assert n["kind"] == "subscription_activated" and n["read"] is False, n
 assert n["link"] == "/billing", n
-assert "Pro" in n["body"] and "₦9,999" in n["body"], n["body"]
+assert "Pro" in n["body"] and "₦25,000" in n["body"], n["body"]
 print(f"2. OK  activation -> bell shows {n['kind']!r} (Pro, naira amount, /billing link)")
 
 # --- C. the other tenant sees none of Acme's notifications ---

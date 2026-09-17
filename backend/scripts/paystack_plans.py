@@ -33,9 +33,9 @@ BASE = "https://api.paystack.co"
 
 # (env var, plan key, Paystack plan name, default amount in kobo)
 PLAN_SPEC = [
-    ("PAYSTACK_PLAN_AMOUNT_BASIC", "basic", "Meridian Basic", 500_000),      # NGN 5,000
-    ("PAYSTACK_PLAN_AMOUNT_PRO", "pro", "Meridian Pro", 999_900),            # NGN 9,999
-    ("PAYSTACK_PLAN_AMOUNT_PREMIUM", "premium", "Meridian Premium", 2_500_000),  # NGN 25,000
+    ("PAYSTACK_PLAN_AMOUNT_BASIC", "basic", "Meridian Basic", 750_000),      # NGN 7,500
+    ("PAYSTACK_PLAN_AMOUNT_PRO", "pro", "Meridian Pro", 2_500_000),          # NGN 25,000
+    ("PAYSTACK_PLAN_AMOUNT_PREMIUM", "premium", "Meridian Premium", 7_500_000),  # NGN 75,000
 ]
 
 KEY = os.environ.get("PAYSTACK_SECRET_KEY", "").strip()
