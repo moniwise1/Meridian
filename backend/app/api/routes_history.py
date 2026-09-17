@@ -100,6 +100,9 @@ def get_analysis(query_id: str, db: Session = Depends(get_db),
         "final": True,
         "query_id": r.id,
         "pinned": pinned,
+        # None for every row saved before the analysis contract shipped -
+        # AnalystAnswer.tsx falls back to the legacy panels when it's absent.
+        "analysis": snap.get("analysis"),
         "conversation_id": r.conversation_id,
         "resolved_question": r.question,
         "sql": snap.get("sql", r.generated_sql),

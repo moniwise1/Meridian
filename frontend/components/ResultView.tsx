@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ResultEvent, Investigation, Forecast } from "@/lib/api";
+import AnalystAnswer from "@/components/AnalystAnswer";
 import ArtifactActions from "@/components/ArtifactActions";
 
 function ConfidenceBadge({ level }: { level: string }) {
@@ -317,6 +318,13 @@ export default function ResultView({ result }: { result: ResultEvent }) {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* The analyst brief leads, when the result carries one - exact
+          computed measures, the two confidence judgements, the scope the
+          numbers hold within, and the source each figure came from. Every
+          panel below it is unchanged; this is added in front of them, not
+          instead of them. */}
+      {result.analysis && <AnalystAnswer analysis={result.analysis} />}
+
       {insight ? (
         <div className="bg-panel border border-line rounded-[4px] p-5">
           <div className="flex items-center justify-between gap-4 mb-3">

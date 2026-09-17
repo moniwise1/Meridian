@@ -11,12 +11,14 @@ time and again in routes_ask.py at ask time, the same defense-in-depth
 pattern "querying" already gets: a capability revoked after upload
 shouldn't let a stale document_id still be usable in a question.
 """
+import hashlib
 import os
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.agents.analyst_workspace import enqueue_upload_check, run_pending_checks
 from app.db.models import User, UploadedDocument
 from app.security.auth import get_current_user, AuthContext
 from app.agents.document_intelligence import (
@@ -35,7 +37,8 @@ def _require_capability(user: User | None):
 
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db),
+async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = File(...),
+                           db: Session = Depends(get_db),
                            ctx: AuthContext = Depends(get_current_user)):
     user = db.query(User).filter_by(id=ctx.user_id).first()
     _require_capability(user)
@@ -121,6 +124,12 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
     doc = UploadedDocument(
         tenant_id=ctx.tenant_id, user_id=ctx.user_id,
         filename=file.filename or safe_name, kind=kind, file_path=path,
+        # Identifies WHICH version of a file a finding or an analysis was
+        # computed against - re-uploading a corrected spreadsheet under the
+        # same name produces a different document row and a different hash,
+        # so a stale finding can never be shown as if it described the new
+        # file (see app/agents/analyst_workspace.py).
+        content_sha256=hashlib.sha256(file_bytes).hexdigest(),
         extracted_text=extraction.text, extraction_truncated=extraction.truncated,
         char_count=len(extraction.text), ocr_pages_used=extraction.ocr_pages_used,
         images_described=extraction.images_described,
@@ -131,6 +140,14 @@ async def upload_document(file: UploadFile = File(...), db: Session = Depends(ge
                        "ocr_pages_used": doc.ocr_pages_used, "images_described": doc.images_described})
     db.commit()
     db.refresh(doc)
+
+    # Queue the plausibility check on the uploaded snapshot. enqueue only
+    # writes a job row; the scan itself runs after the response is sent,
+    # on its own session (a request-scoped session must never escape into
+    # a background task), and never calls a paid model.
+    enqueue_upload_check(db, doc)
+    db.commit()
+    background_tasks.add_task(run_pending_checks, ctx.tenant_id, ctx.user_id)
 
     return {
         "id": doc.id, "filename": doc.filename, "kind": doc.kind,

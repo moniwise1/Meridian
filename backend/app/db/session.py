@@ -45,6 +45,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 # by reasoning about it in the abstract - see the git history for the
 # specific real regression this fixed before it ever reached production.
 _ADDED_COLUMNS = [
+    ("uploaded_documents", "content_sha256", "VARCHAR"),
     ("users", "created_at", "TIMESTAMP"),
     ("tenants", "subscription_expires_at", "TIMESTAMP"),
     ("data_source_connections", "extra_config", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),

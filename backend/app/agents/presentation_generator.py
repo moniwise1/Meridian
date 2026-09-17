@@ -126,7 +126,7 @@ def _add_bullets_slide(prs, title, bullets):
     _add_accent_bar(prs, slide)
     body = slide.placeholders[1].text_frame
     body.clear()
-    for i, b in enumerate(bullets):
+    for i, b in enumerate(b for b in bullets if b and str(b).strip()):
         p = body.paragraphs[0] if i == 0 else body.add_paragraph()
         p.text = b
         _style_run(p.runs[0], _INK, size=Pt(16))
@@ -218,7 +218,7 @@ def _add_chart_slide(prs, title, labels, values, chart_type="bar"):
 def generate_presentation_pptx(title: str, question: str, insight: dict, metrics: dict,
                                  by_group: list[dict] | None, data_quality: dict,
                                  anomalies: list[dict], query_id: str,
-                                 charts: list[dict] | None = None) -> str:
+                                 charts: list[dict] | None = None, analysis: dict | None = None) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
     path = os.path.join(settings.artifacts_dir, f"presentation-{uuid.uuid4().hex}.pptx")
 
@@ -302,6 +302,24 @@ def generate_presentation_pptx(title: str, question: str, insight: dict, metrics
         _add_bullets_slide(prs, "Risks & anomalies", [
             f"{a['what']} — {a['magnitude']} [{a['confidence']} confidence]" for a in anomalies[:5]
         ])
+
+    # Additive, exactly like report_generator.py's matching block - the
+    # deck above is unchanged and these are appended as closing slides.
+    if analysis:
+        _add_bullets_slide(prs, "How much to trust this", [
+            f"{name.title()} confidence: {confidence['level'].replace('_', ' ')} — {confidence['reason']}"
+            for name, confidence in (analysis.get("confidence") or {}).items()
+        ])
+        scope = analysis.get("scope") or {}
+        notes = [scope.get("metric_definition") or "The metric definition was not independently established.",
+                 *(scope.get("assumptions") or []),
+                 *((analysis.get("quality") or {}).get("limitations") or [])]
+        for offset in range(0, len(notes), 5):
+            _add_bullets_slide(prs, "Scope and limitations", notes[offset:offset + 5])
+        sources = [f"{e.get('filename') or e['source_id']} — {e['method']}, calculation {e['computation_id']}"
+                   for e in (analysis.get("evidence") or [])]
+        for offset in range(0, len(sources), 5):
+            _add_bullets_slide(prs, "Sources", sources[offset:offset + 5])
 
     prs.save(path)
     return path

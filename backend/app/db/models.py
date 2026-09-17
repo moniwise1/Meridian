@@ -292,6 +292,7 @@ class UploadedDocument(Base):
     # otherwise) - see app/agents/document_intelligence.py. Surfaced in
     # the UI so OCR'd text (real, but lower-confidence than a native text
     # layer) is never presented identically to a clean extraction.
+    content_sha256 = Column(String, nullable=True)
     ocr_pages_used = Column(Integer, default=0)
     # How many real embedded pictures (PDF/PPTX only, always 0 for
     # DOCX/XLSX) got a real AI-generated description folded into
@@ -467,3 +468,38 @@ class Invite(Base):
     expires_at = Column(DateTime, nullable=False)
     status = Column(String, nullable=False, default="pending")  # pending | accepted | revoked | expired
     accepted_at = Column(DateTime, nullable=True)
+
+
+class AskMemory(Base):
+    __tablename__ = "ask_memories"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    source_key = Column(String, nullable=False, index=True)
+    kind = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AskFinding(Base):
+    __tablename__ = "ask_findings"
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    document_id = Column(String, nullable=False, index=True)
+    source_version = Column(String, nullable=True)
+    payload = Column(JSON, default=dict)
+    status = Column(String, default="new", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AskScanJob(Base):
+    __tablename__ = "ask_scan_jobs"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    document_id = Column(String, nullable=False, unique=True)
+    status = Column(String, default="pending", nullable=False)
+    attempts = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)

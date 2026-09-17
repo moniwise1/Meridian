@@ -34,6 +34,7 @@ import json
 from dataclasses import dataclass
 from anthropic import Anthropic
 from app.config import settings
+from app.agents.analyst_prompt import ANALYST_RULES
 
 _client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
 
@@ -211,7 +212,7 @@ def _parse_json_response(text_out: str) -> dict:
 
 
 def explain(question: str, metrics: dict, quality_notes: list[str],
-            documents: list[dict] | None = None) -> Insight:
+            documents: list[dict] | None = None, business_context: list[dict] | None = None) -> Insight:
     if _client is None:
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
 
@@ -220,13 +221,15 @@ def explain(question: str, metrics: dict, quality_notes: list[str],
         "computed_metrics": metrics,
         "data_quality_notes": quality_notes,
     }
+    if business_context:
+        payload["confirmed_business_context"] = business_context
     if documents:
         payload["reference_documents"] = documents
     resp = _client.messages.create(
         model=settings.llm_model_reasoning,
         max_tokens=2048,  # raised from 800 - billed by tokens actually used, not this ceiling
         thinking=_THINKING_DISABLED,
-        system=SYSTEM_PROMPT,
+        system=ANALYST_RULES + SYSTEM_PROMPT,
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
     parsed = _parse_json_response(_extract_text(resp))
@@ -383,7 +386,7 @@ def explain_document_only(question: str, documents: list[dict], computed_profile
         # explain()'s input (which already comes with computed_metrics/quality_notes doing some
         # of the summarizing work) needs to produce.
         thinking=_THINKING_DISABLED,
-        system=SYSTEM_PROMPT_DOCUMENT_ONLY,
+        system=ANALYST_RULES + SYSTEM_PROMPT_DOCUMENT_ONLY,
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
     parsed = _parse_json_response(_extract_text(resp))
@@ -758,7 +761,7 @@ _MAX_TOOL_LOOP_ITERATIONS = 6  # generous - parallel tool use means every chart 
 
 def explain_document_only_v2(
     question: str, documents: list[dict], computed_profile: dict | None = None,
-    force_answer: bool = False,
+    force_answer: bool = False, business_context: list[dict] | None = None,
 ) -> tuple[DocumentInsight, list[dict]]:
     """Returns (insight, model_charts) - model_charts is whatever the model
     called render_chart with, sanitized, in call order; planner.py is what
@@ -770,6 +773,13 @@ def explain_document_only_v2(
         raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
 
     payload = {"question": question, "reference_documents": documents}
+    if business_context:
+        # Definitions the user explicitly confirmed for this source. Handed
+        # over under its own key as reference DATA, exactly like
+        # reference_documents above and for exactly the same reason: a
+        # "definition" is free text a user typed, so it can say anything.
+        # ANALYST_RULES is what tells the model that.
+        payload["confirmed_business_context"] = business_context
     if computed_profile:
         payload["computed_profile"] = computed_profile
     if force_answer:
@@ -798,7 +808,7 @@ def explain_document_only_v2(
             # time rather than by a small increment.
             max_tokens=16000,
             thinking=_THINKING_DISABLED,
-            system=SYSTEM_PROMPT_DOCUMENT_ONLY_V2,
+            system=ANALYST_RULES + SYSTEM_PROMPT_DOCUMENT_ONLY_V2,
             tools=[RENDER_CHART_TOOL, COMPUTE_AGGREGATE_TOOL],
             messages=messages,
         )
