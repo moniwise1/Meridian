@@ -88,6 +88,13 @@ def generate_sql(question: str, schema_text: str, force_answer: bool = False,
     resp = _client.messages.create(
         model=settings.llm_model_fast,
         max_tokens=1000,
+        # Deliberately NOT cached. This call runs on settings.llm_model_fast
+        # (Haiku), whose minimum cacheable prefix is 2048 tokens - twice
+        # Sonnet's - and ANALYST_RULES + SYSTEM_PROMPT is only ~1.1k. A
+        # cache_control here would be silently ignored, so adding one would
+        # buy nothing and just imply a saving that is not happening. It is
+        # also the cheap half of a question (Haiku input is a fraction of
+        # Sonnet's); the expensive path is insight_agent.py, which is cached.
         system=ANALYST_RULES + SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )

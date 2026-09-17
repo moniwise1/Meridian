@@ -59,6 +59,53 @@ _client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_ap
 # need this parameter.
 _THINKING_DISABLED = {"type": "disabled"}
 
+
+# --- prompt caching ---------------------------------------------------------
+# Every call below re-sends a system prompt that is byte-identical on each
+# one, and explain_document_only_v2's tool loop additionally re-sends the
+# ENTIRE conversation - including up to MAX_EXTRACTED_CHARS of document text
+# (~12.5k tokens) - on every iteration. Without caching that text is billed
+# at full input price again on each round-trip, which is the single largest
+# line in this app's model spend.
+#
+# A cache_control breakpoint marks the end of a cacheable prefix. Anthropic
+# assembles that prefix in a fixed order - tools, then system, then messages
+# - so ONE breakpoint at the end of `system` already covers the tool schemas
+# sitting in front of it; there is no need to mark the tools separately.
+#
+# Economics, so the tradeoff is on the record rather than assumed: a cache
+# WRITE costs 1.25x normal input and a cache READ costs 0.1x. A prefix that
+# is written and never read is therefore a 25% loss on those tokens, and one
+# that is read costs 90% less. Break-even is about a 22% hit rate. The system
+# prompts clear that easily - they are identical for every tenant and every
+# question, so any two questions within the cache TTL share them - and inside
+# the v2 tool loop the second call is a guaranteed hit on both breakpoints.
+#
+# Not a tenant-isolation hole: a cache entry is only ever read when the
+# prefix matches byte for byte. The system prompts contain no tenant data at
+# all, and the document breakpoint below can only be hit by a request
+# carrying the very same document text, i.e. the same tenant's own follow-up
+# or the next iteration of its own tool loop. A different tenant sends
+# different bytes and simply misses.
+_CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _cached_system(text: str) -> list[dict]:
+    """`system` as a single cache-marked block instead of a bare string.
+    Below the model's minimum cacheable length (1024 tokens for Sonnet,
+    2048 for Haiku) the breakpoint is ignored rather than rejected, so this
+    is always safe to apply - it just stops paying off on short prompts.
+    See _CACHED_SYSTEM_MIN_CHARS for which call sites actually clear it."""
+    return [{"type": "text", "text": text, "cache_control": _CACHE_CONTROL}]
+
+
+# Rough lower bound on the characters needed to reach Sonnet's 1024-token
+# minimum. Only used by tests/verify_prompt_caching.py to catch a future
+# edit that trims a system prompt below the point where caching still works
+# - the API would not complain, the breakpoint would just silently stop
+# doing anything and the bill would quietly go back up.
+_CACHED_SYSTEM_MIN_CHARS = 4096
+
 SYSTEM_PROMPT = """You are the insight-explanation component of a secure analytics system.
 You will be given: the user's original question, computed metrics (already
 calculated deterministically — you must not invent or recompute numbers),
@@ -229,7 +276,7 @@ def explain(question: str, metrics: dict, quality_notes: list[str],
         model=settings.llm_model_reasoning,
         max_tokens=2048,  # raised from 800 - billed by tokens actually used, not this ceiling
         thinking=_THINKING_DISABLED,
-        system=ANALYST_RULES + SYSTEM_PROMPT,
+        system=_cached_system(ANALYST_RULES + SYSTEM_PROMPT),
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
     parsed = _parse_json_response(_extract_text(resp))
@@ -386,7 +433,7 @@ def explain_document_only(question: str, documents: list[dict], computed_profile
         # explain()'s input (which already comes with computed_metrics/quality_notes doing some
         # of the summarizing work) needs to produce.
         thinking=_THINKING_DISABLED,
-        system=ANALYST_RULES + SYSTEM_PROMPT_DOCUMENT_ONLY,
+        system=_cached_system(ANALYST_RULES + SYSTEM_PROMPT_DOCUMENT_ONLY),
         messages=[{"role": "user", "content": json.dumps(payload)}],
     )
     parsed = _parse_json_response(_extract_text(resp))
@@ -789,7 +836,13 @@ def explain_document_only_v2(
         # how uncertain, stating any assumption made instead of blocking on
         # it a second time (mirrors query_generator.py's identical rule).
         payload["clarification_already_offered"] = True
-    messages = [{"role": "user", "content": json.dumps(payload)}]
+    # Second breakpoint, after the document text. Everything appended to
+    # `messages` below (assistant turns, tool results) lands AFTER it, so
+    # this prefix stays stable for the whole loop and iterations 2..n read
+    # the document back at a tenth of the price instead of re-sending it.
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": json.dumps(payload), "cache_control": _CACHE_CONTROL},
+    ]}]
     model_charts: list[dict] = []
     resp = None
     for _ in range(_MAX_TOOL_LOOP_ITERATIONS):
@@ -808,7 +861,7 @@ def explain_document_only_v2(
             # time rather than by a small increment.
             max_tokens=16000,
             thinking=_THINKING_DISABLED,
-            system=ANALYST_RULES + SYSTEM_PROMPT_DOCUMENT_ONLY_V2,
+            system=_cached_system(ANALYST_RULES + SYSTEM_PROMPT_DOCUMENT_ONLY_V2),
             tools=[RENDER_CHART_TOOL, COMPUTE_AGGREGATE_TOOL],
             messages=messages,
         )
