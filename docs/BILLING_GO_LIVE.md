@@ -42,9 +42,18 @@ PAYSTACK_SECRET_KEY=sk_live_xxxxx python scripts/paystack_plans.py --yes
 ```
 
 It prints the three new `PLN_…` codes and the exact env vars to set. If you
-want different prices than the ₦5,000 / ₦9,999 / ₦25,000 defaults, set
+want different prices than the ₦7,500 / ₦25,000 / ₦75,000 defaults, set
 `PAYSTACK_PLAN_AMOUNT_BASIC` / `_PRO` / `_PREMIUM` (in kobo) before running
 it, and set the same values on the backend.
+
+> **A price lives in two places and they must agree.** The amount on the
+> Paystack plan itself is what actually gets charged on renewal; the
+> `PAYSTACK_PLAN_AMOUNT_*` the backend holds is what it shows on the pricing
+> cards and passes on checkout. Changing one without the other means the site
+> advertises one price and the customer's card is debited another. Paystack
+> plans are not editable in place for price — to reprice, create new plans and
+> point the `PAYSTACK_PLAN_CODE_*` env vars at them. Anyone already subscribed
+> stays on the old plan's price until they resubscribe.
 
 ## 3. Swap the env vars on Railway
 

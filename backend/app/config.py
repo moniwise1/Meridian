@@ -190,12 +190,22 @@ class Settings(BaseSettings):
     # no live account to test against) behavior of inferring the amount
     # from the plan code alone. See app/billing/plans.py for where these
     # combine with each plan's seat limit and feature copy.
+    # Priced against the real marginal cost of a question, not against
+    # seats. A document-backed question sends the whole extracted text
+    # (up to MAX_EXTRACTED_CHARS, ~12.5k tokens) to the reasoning model
+    # and resends it on every tool round-trip, so it costs roughly 7x a
+    # database-backed question. The earlier ladder (NGN 5,000/50q,
+    # 9,999/150q, 25,000/unlimited) went cash-negative partway through
+    # every tier once a tenant used documents, which is the feature this
+    # product is actually differentiated on - the more they used it, the
+    # more each customer cost. These caps are set so a tenant at 100% of
+    # their allowance is still profitable on the expensive path.
     paystack_plan_code_basic: str = ""
-    paystack_plan_amount_basic: int = 500_000  # NGN 5,000
+    paystack_plan_amount_basic: int = 750_000  # NGN 7,500
     paystack_plan_code_pro: str = ""
-    paystack_plan_amount_pro: int = 999_900  # NGN 9,999
+    paystack_plan_amount_pro: int = 2_500_000  # NGN 25,000
     paystack_plan_code_premium: str = ""
-    paystack_plan_amount_premium: int = 2_500_000  # NGN 25,000
+    paystack_plan_amount_premium: int = 7_500_000  # NGN 75,000
 
     # "Your subscription renews in N days" reminder (in-app notification +
     # email). How many days before subscription_expires_at the reminder

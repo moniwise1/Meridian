@@ -18,6 +18,18 @@ routes_artifacts.py's create_report|create_presentation|create_export),
 plus price. A card's "features" list states this plainly rather than
 implying Basic gets a worse product.
 
+Seats and connections are unlimited on Premium because they cost
+nothing to serve. QUESTIONS are not, and are capped on every tier
+including Premium: each one is a real, variable API spend, and a
+document-backed question costs several times a database-backed one
+(it ships the whole extracted document text to the reasoning model,
+and again on every tool round-trip). An uncapped tier on a variable
+cost is an open-ended liability, not a generous feature - see
+app/config.py's paystack_plan_amount_* comment for the arithmetic.
+document_limit stays unlimited on Premium because generating a report
+from an already-computed snapshot makes no model call at all
+(report_generator.py / presentation_generator.py are pure rendering).
+
 Free (no paid plan) isn't in PLANS at all - it's the tenant's default
 state (Tenant.tier == "free"), already gated out of the core paid actions
 entirely by require_active_subscription (app/security/auth.py), with its
@@ -57,7 +69,7 @@ def _build_plans() -> dict[str, Plan]:
             key="basic", label="Basic", amount=settings.paystack_plan_amount_basic,
             paystack_plan_code=settings.paystack_plan_code_basic,
             seat_limit=3, connection_limit=3,
-            query_limit=50, document_limit=20,
+            query_limit=25, document_limit=20,
             tagline="For a small team getting started with AI-driven analytics.",
             features=[
                 "Ask & Risk Scan across your connected data",
@@ -66,7 +78,7 @@ def _build_plans() -> dict[str, Plan]:
                 "Full hash-chained audit trail",
                 "Up to 3 team seats",
                 "Up to 3 connected data sources",
-                "Up to 50 questions a month",
+                "Up to 25 questions a month",
                 "Up to 20 report/presentation downloads a month",
             ],
         ),
@@ -74,13 +86,13 @@ def _build_plans() -> dict[str, Plan]:
             key="pro", label="Pro", amount=settings.paystack_plan_amount_pro,
             paystack_plan_code=settings.paystack_plan_code_pro,
             seat_limit=10, connection_limit=10,
-            query_limit=150, document_limit=100,
+            query_limit=100, document_limit=100,
             tagline="For a growing team working across more data and more people.",
             features=[
                 "Everything in Basic",
                 "Up to 10 team seats",
                 "Up to 10 connected data sources",
-                "Up to 150 questions a month",
+                "Up to 100 questions a month",
                 "Up to 100 report/presentation downloads a month",
             ],
         ),
@@ -88,13 +100,13 @@ def _build_plans() -> dict[str, Plan]:
             key="premium", label="Premium", amount=settings.paystack_plan_amount_premium,
             paystack_plan_code=settings.paystack_plan_code_premium,
             seat_limit=None, connection_limit=None,
-            query_limit=None, document_limit=None,
+            query_limit=300, document_limit=None,
             tagline="For larger teams that need the whole organization on it.",
             features=[
                 "Everything in Pro",
                 "Unlimited team seats",
                 "Unlimited connected data sources",
-                "Unlimited questions a month",
+                "Up to 300 questions a month",
                 "Unlimited report/presentation downloads a month",
             ],
         ),
