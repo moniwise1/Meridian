@@ -11,6 +11,7 @@ import {
   type StepEvent,
   type ResultEvent,
 } from "@/lib/api";
+import AnalystWorkspace from "@/components/AnalystWorkspace";
 import ClarificationPrompt from "@/components/ClarificationPrompt";
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
@@ -57,6 +58,10 @@ export default function AskDashboard() {
   const [loadError, setLoadError] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
+  // `running` is state, so two clicks landing in the same React batch both
+  // read the pre-update value and both fire a request. A ref updates
+  // synchronously, which is what actually makes the guard hold.
+  const requestRunning = useRef(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -120,7 +125,8 @@ export default function AskDashboard() {
     questionText: string,
     opts: { followUp: boolean; skipClarification: boolean; turnId?: number },
   ) {
-    if (!source) return;
+    if (!source || requestRunning.current) return;
+    requestRunning.current = true;
     setRunning(true);
 
     const id = opts.turnId ?? Date.now();
@@ -134,16 +140,22 @@ export default function AskDashboard() {
       setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
     }
 
+    // Resuming a turn after a clarification: clear the question that was
+    // asked, so the prompt disappears the moment the retry starts rather
+    // than sitting there until the first event arrives.
+    patch((t) => ({ ...t, clarificationQuestion: null }));
     try {
       await askStream(
         {
           connection_id: source.type === "connection" ? source.id : null,
           question: questionText,
           conversation_id: opts.followUp ? conversationId : null,
-          // Attaching/selecting documents forces a fresh (non-follow-up)
-          // question server-side too, but keep the UI consistent with
-          // that rule.
-          document_ids: opts.followUp ? [] : documentIsSource ? [source.id] : selectedDocIds,
+          // Always sent, including on a follow-up. A document-only
+          // conversation is now bound to its documents server-side (see
+          // planner.py's document_ids check), so dropping them on a
+          // follow-up would make the thread fail to match its own
+          // conversation instead of continuing it.
+          document_ids: documentIsSource ? [source.id] : selectedDocIds,
           skip_clarification: opts.skipClarification,
         },
         (evt) => {
@@ -165,6 +177,7 @@ export default function AskDashboard() {
         steps: [...t.steps, { type: "step", step: "error", status: "error", detail: (e as Error).message }],
       }));
     } finally {
+      requestRunning.current = false;
       setRunning(false);
     }
   }
@@ -175,7 +188,7 @@ export default function AskDashboard() {
   }
 
   function handleAsk() {
-    if (!question.trim()) return;
+    if (!question.trim() || inputLocked || !source) return;
     const text = question;
     setQuestion("");
     askText(text, !!conversationId);
@@ -194,12 +207,16 @@ export default function AskDashboard() {
     if (!turn.clarificationQuestion) return;
     setTurns((prev) => prev.map((t) => (t.id === turn.id ? { ...t, clarificationAnswer: answer } : t)));
     const combined = `${turn.question}\n\n(Clarifying question: "${turn.clarificationQuestion}" — Answer: "${answer}")`;
-    runAsk(combined, { followUp: false, skipClarification: true, turnId: turn.id });
+    // Stays in the thread it was asked in. Before conversations were bound
+    // to a source this had to start fresh; now that a clarification can
+    // land mid-conversation, forcing followUp:false would silently fork a
+    // second thread out of one question.
+    runAsk(combined, { followUp: !!conversationId, skipClarification: true, turnId: turn.id });
   }
 
   function skipClarification(turn: Turn) {
     setTurns((prev) => prev.map((t) => (t.id === turn.id ? { ...t, clarificationAnswer: "Skipped — best guess" } : t)));
-    runAsk(turn.question, { followUp: false, skipClarification: true, turnId: turn.id });
+    runAsk(turn.question, { followUp: !!conversationId, skipClarification: true, turnId: turn.id });
   }
 
   function startNewConversation() {
@@ -211,7 +228,7 @@ export default function AskDashboard() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-8 py-12">
+    <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-medium text-ink tracking-tight">What do you want to understand?</h1>
@@ -223,7 +240,8 @@ export default function AskDashboard() {
         {conversationId && (
           <button
             onClick={startNewConversation}
-            className="shrink-0 text-[12.5px] text-teal hover:text-teal-deep transition-colors whitespace-nowrap"
+            disabled={running}
+            className="shrink-0 text-[12.5px] text-teal hover:text-teal-deep transition-colors whitespace-nowrap disabled:opacity-40"
           >
             New conversation
           </button>
@@ -245,12 +263,41 @@ export default function AskDashboard() {
         </div>
       )}
 
+      {sourceValue && (
+        // Remounted per source (key) - notes, saved conversations and
+        // upload findings are all scoped to one source on the backend, so
+        // switching sources must not briefly show the previous one's.
+        <AnalystWorkspace
+          key={sourceValue}
+          sourceKey={sourceValue}
+          disabled={inputLocked}
+          revision={turns.filter((t) => t.result).length}
+          onResume={(c) => {
+            setConversationId(c.id);
+            setSelectedDocIds(c.document_ids);
+            setQuestion("");
+            setTurns(
+              c.turns.map((t, i) => ({
+                id: i,
+                question: t.question,
+                sourceLabel: currentSourceLabel(),
+                steps: [],
+                result: t.result,
+                clarificationQuestion: null,
+                clarificationAnswer: null,
+              })),
+            );
+          }}
+        />
+      )}
+
       {/* ---------- Thread ---------- */}
       {turns.length > 0 && (
         <div className="flex flex-col gap-8 mb-6">
           {turns.map((turn) => {
             const nextQuestion =
-              turn.result && !("error" in turn.result.insight) ? turn.result.insight.next_question : null;
+              turn.result?.analysis?.follow_ups[0]?.question ??
+              (turn.result && !("error" in turn.result.insight) ? turn.result.insight.next_question : null);
             const showSteps = turn.steps.length > 0 && (!turn.result || turn.steps.some((s) => s.status === "error"));
             return (
               <div key={turn.id} className="flex flex-col gap-3">
@@ -307,7 +354,13 @@ export default function AskDashboard() {
             <button
               key={c.id}
               type="button"
-              onClick={() => setSourceValue(`conn:${c.id}`)}
+              // A conversation belongs to one source server-side, so
+              // switching source has to start a new thread - continuing the
+              // old one against a different source is rejected.
+              onClick={() => {
+                startNewConversation();
+                setSourceValue(`conn:${c.id}`);
+              }}
               disabled={inputLocked}
               className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                 sourceValue === `conn:${c.id}`
@@ -322,7 +375,10 @@ export default function AskDashboard() {
             <button
               key={d.id}
               type="button"
-              onClick={() => setSourceValue(`doc:${d.id}`)}
+              onClick={() => {
+                startNewConversation();
+                setSourceValue(`doc:${d.id}`);
+              }}
               disabled={inputLocked}
               className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                 sourceValue === `doc:${d.id}`
@@ -390,7 +446,9 @@ export default function AskDashboard() {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              // isComposing: mid-IME-composition Enter commits the
+              // candidate text, it does not mean "send".
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 handleAsk();
               }

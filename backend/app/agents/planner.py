@@ -48,6 +48,8 @@ from app.agents.context_resolver import resolve as resolve_followup, build_conte
 from app.agents import query_cache
 from app.agents.column_heuristics import guess_columns
 from app.agents import tabular_analysis
+from app.agents.analyst_contract import build_analysis
+from app.agents.analyst_workspace import memories_for, policy_signature
 from app.audit import logger as audit
 from app.config import settings
 
@@ -133,15 +135,19 @@ DOCUMENT_ONLY_SOURCE_ID = "document-only"
 
 def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
                                  question: str, documents: list[UploadedDocument], query_id: str,
-                                 force_answer: bool = False):
+                                 force_answer: bool = False, conversation=None,
+                                 original_question: str | None = None,
+                                 business_context: list[dict] | None = None):
     """The document-only path: no DataSourceConnection at all, one or more
     uploaded documents selected as the thing being analysed directly (as
     opposed to attached as supplementary context to a database-backed
-    question - see the other branch in run_analysis). Always a fresh
-    question, never a follow-up: the same reason document-attached
-    questions already opt out of the result cache and conversation
-    chaining (see the comment where run_analysis checks document_ids for
-    that) applies even more directly when the document IS the source.
+    question - see the other branch in run_analysis). A document-only
+    question now keeps a Conversation like every other analysis, so the
+    workspace can reopen it and a follow-up can be resolved against what
+    was asked before. Every follow-up is still recomputed: a document
+    result is never served from the query cache, for the same reason
+    document-attached questions aren't (see the comment where run_analysis
+    checks document_ids for that).
 
     Emits the same StepEvent step names as the database path so the
     frontend's progress trace needs no document-only special-casing.
@@ -262,6 +268,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     try:
         insight, model_charts = explain_document_only_v2(
             question, document_payload, computed_profile=profile_dict, force_answer=force_answer,
+            **({"business_context": business_context} if business_context else {}),
         )
         if insight.clarification_question:
             yield ClarificationEvent(question=insight.clarification_question)
@@ -350,10 +357,35 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "preview_rows": [],
     }
 
+    snapshot["forced_assumption"] = force_answer
+    snapshot["analysis"] = build_analysis(
+        query_id, question, snapshot, profile=profile_dict, computed=profile is not None,
+        sources=[{"id": d.id, "filename": d.filename,
+                  "version": getattr(d, "content_sha256", None) or d.id,
+                  "truncated": d.extraction_truncated, "ocr": bool(d.ocr_pages_used)} for d in documents],
+    )
+
+    # connection_id is the DOCUMENT_ONLY_SOURCE_ID sentinel here, not a real
+    # DataSourceConnection - the Conversation exists to carry the document
+    # ids and the last question forward, not a database link.
+    if not conversation:
+        conversation = Conversation(tenant_id=tenant_id, user_id=user_id,
+                                    connection_id=DOCUMENT_ONLY_SOURCE_ID, context={})
+        db.add(conversation)
+        db.flush()
+    conversation.context = {
+        "source_key": "doc:" + documents[0].id,
+        "document_ids": [d.id for d in documents],
+        "last_question": original_question or question,
+        "resolved_question": question,
+        "last_finding": str(insight_dict.get("what") or "")[:1000],
+    }
+    conversation.updated_at = datetime.utcnow()
     db.add(QueryRecord(
         id=query_id, tenant_id=tenant_id, user_id=user_id, connection_id=DOCUMENT_ONLY_SOURCE_ID,
-        conversation_id=None, question=question, generated_sql=snapshot["sql"],
-        row_count=0, duration_ms=0, result_snapshot=snapshot,
+        conversation_id=conversation.id, question=original_question or question,
+        generated_sql=snapshot["sql"],
+        row_count=row_count, duration_ms=0, result_snapshot=snapshot,
     ))
     # Whether real structured data was actually used is exactly the
     # question a real user needed answered after a wrong-sounding answer
@@ -371,7 +403,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     yield {
         "final": True,
         "query_id": query_id,
-        "conversation_id": None,
+        "conversation_id": conversation.id,
         "resolved_question": question,
         **snapshot,
     }
@@ -397,13 +429,31 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
             .filter(UploadedDocument.id.in_(document_ids), UploadedDocument.tenant_id == tenant_id)
             .all()
         )
+        # Preserve the order the user selected them in - .in_() returns rows
+        # in whatever order the database chose, and "the first document" is
+        # what names the conversation source_key below.
+        documents.sort(key=lambda d: document_ids.index(d.id))
+        if len(documents) != len(set(document_ids)):
+            raise PolicyViolation("One or more selected documents are unavailable.")
 
     if not connection_id:
         # A document IS the data source here, not a database - see
         # _run_document_only_analysis above. routes_ask.py already
         # rejects a request with neither connection_id nor document_ids
         # before this is ever called.
-        yield from _run_document_only_analysis(db, tenant_id, user_id, question, documents, query_id, force_answer)
+        conversation = None
+        resolved_question = question
+        if conversation_id:
+            conversation = db.query(Conversation).filter_by(
+                id=conversation_id, tenant_id=tenant_id, user_id=user_id).first()
+            if not conversation or set((conversation.context or {}).get("document_ids", [])) != {d.id for d in documents}:
+                raise PolicyViolation("This conversation does not match the selected documents.")
+            resolved_question = resolve_followup(question, conversation.context).resolved_question
+        business_context = memories_for(db, tenant_id, user_id, "doc:" + documents[0].id)
+        yield from _run_document_only_analysis(
+            db, tenant_id, user_id, resolved_question, documents, query_id, force_answer,
+            conversation=conversation, original_question=question, business_context=business_context,
+        )
         return
 
     conn_row = db.query(DataSourceConnection).filter_by(id=connection_id, tenant_id=tenant_id).first()
@@ -411,9 +461,17 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         yield StepEvent("understanding", "error", "Connection not found or not authorized for this tenant.")
         return
 
+    business_context = memories_for(db, tenant_id, user_id, "conn:" + connection_id)
     conversation = None
     if conversation_id:
         conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id, user_id=user_id).first()
+        if not conversation or conversation.connection_id != connection_id:
+            raise PolicyViolation("This conversation does not match this source.")
+        # Access can be narrowed after a conversation has started. Continuing
+        # a thread built under wider permissions would let the earlier
+        # context steer an answer the user can no longer see for themselves.
+        if (conversation.context or {}).get("policy_signature") != policy_signature(conn_row, row_scope):
+            raise PolicyViolation("Source permissions changed. Start a new conversation.")
 
     resolved_question = question
     if conversation and conversation.context:
@@ -431,12 +489,15 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     # are excluded. Documents are excluded for the same reason: the cached
     # insight would have been shaped by whatever document text was attached
     # when it was computed, and the cache key doesn't account for that.
-    if conversation_id is None and not document_ids:
+    if conversation_id is None and not document_ids and not business_context and not force_answer:
         cached = query_cache.get(
             tenant_id, connection_id, conn_row.table_allowlist, conn_row.column_policy,
             row_scope, resolved_question,
         )
         if cached is not None:
+            cached = dict(cached)
+            cached["analysis"] = build_analysis(query_id, resolved_question, cached,
+                                                sources=[{"id": connection_id}])
             yield StepEvent("finding_data", "done", "Served from cache.")
             yield StepEvent(
                 "running_analysis", "done",
@@ -451,12 +512,20 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
             # entry in Analyses history and "Create from this analysis"
             # (report/presentation/export) still works from a real,
             # independently-generated report_generation of the underlying
-            # snapshot. No Conversation row is created here, so a cached
-            # answer can't be chained into a follow-up directly - ask a new
-            # question to continue, which runs fresh.
+            # snapshot. It gets its own Conversation now too, so a cached
+            # answer can be continued like any other - the follow-up itself
+            # is always a real, uncached run, since conversation_id is set
+            # by then and this whole branch is skipped.
+            conversation = Conversation(
+                tenant_id=tenant_id, user_id=user_id, connection_id=connection_id,
+                context={"source_key": "conn:" + connection_id, "last_question": question,
+                         "document_ids": [], "policy_signature": policy_signature(conn_row, row_scope)},
+            )
+            db.add(conversation)
+            db.flush()
             db.add(QueryRecord(
                 id=query_id, tenant_id=tenant_id, user_id=user_id, connection_id=connection_id,
-                conversation_id=None, question=resolved_question, generated_sql=cached["sql"],
+                conversation_id=conversation.id, question=resolved_question, generated_sql=cached["sql"],
                 row_count=cached["row_count"], duration_ms=cached["duration_ms"],
                 result_snapshot=cached,
             ))
@@ -467,7 +536,7 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
             yield {
                 "final": True,
                 "query_id": query_id,
-                "conversation_id": None,
+                "conversation_id": conversation.id,
                 "resolved_question": resolved_question,
                 **cached,
             }
@@ -493,7 +562,8 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     yield StepEvent("finding_data", "done", f"{len(tables)} authorized table(s) available.")
 
     yield StepEvent("running_analysis", "running")
-    generated = generate_sql(resolved_question, schema_text, force_answer=force_answer)
+    generated = generate_sql(resolved_question, schema_text, force_answer=force_answer,
+                             **({"business_context": business_context} if business_context else {}))
     if generated.clarification_question:
         yield ClarificationEvent(question=generated.clarification_question)
         return
@@ -583,7 +653,8 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         {"filename": d.filename, "kind": d.kind, "text": d.extracted_text} for d in documents
     ] or None
     try:
-        insight = explain(resolved_question, insight_metrics, quality.notes, document_payload)
+        insight = explain(resolved_question, insight_metrics, quality.notes, document_payload,
+                          **({"business_context": business_context} if business_context else {}))
         insight_dict = asdict(insight)
         # Both always None here - see Insight.by_group's and Insight.body's docstrings
         insight_dict.pop("by_group", None)
@@ -617,6 +688,10 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         "preview_rows": _json_safe(df.head(20).to_dict(orient="records")) if allowed_cols is not False else [],
     }
 
+    snapshot["forced_assumption"] = force_answer
+    snapshot["analysis"] = build_analysis(query_id, resolved_question, snapshot,
+                                          sources=[{"id": connection_id}])
+
     # Create (and flush) the Conversation BEFORE building the QueryRecord
     # that references it. Conversation.id's default is a Python-side
     # uuid.uuid4() callable that SQLAlchemy only resolves at flush time, so
@@ -633,9 +708,15 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         )
         db.add(conversation)
         db.flush()
-    conversation.context = build_context_snapshot(
-        resolved_question, table_hint, value_col, group_col, date_col, metrics.by_group,
-    )
+    conversation.context = {
+        **build_context_snapshot(
+            resolved_question, table_hint, value_col, group_col, date_col, metrics.by_group,
+        ),
+        "source_key": "conn:" + connection_id,
+        "last_question": question,
+        "document_ids": [d.id for d in documents],
+        "policy_signature": policy_signature(conn_row, row_scope),
+    }
     conversation.updated_at = datetime.utcnow()
 
     db.add(QueryRecord(
@@ -649,7 +730,7 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
               {"row_count": len(df), "duration_ms": result.duration_ms, "table": table_hint})
     db.commit()
 
-    if conversation_id is None:
+    if conversation_id is None and not document_ids and not business_context and not force_answer:
         query_cache.put(
             tenant_id, connection_id, conn_row.table_allowlist, conn_row.column_policy,
             row_scope, resolved_question, snapshot,

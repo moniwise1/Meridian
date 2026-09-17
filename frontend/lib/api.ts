@@ -1,3 +1,4 @@
+import type { AnalystAnalysis } from "@/lib/analyst";
 import { loadSession, clearSession } from "@/lib/auth";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
@@ -779,6 +780,10 @@ export type Forecast = {
 };
 
 export type ResultEvent = {
+  // The analyst brief (backend/app/agents/analyst_contract.py). Absent on
+  // every result saved before it shipped, so ResultView renders its
+  // existing panels either way and only ADDS this one when it's present.
+  analysis?: AnalystAnalysis | null;
   type: "result";
   final: true;
   query_id: string;
@@ -1160,6 +1165,37 @@ export type AuditVerification = {
   broken_at: string | null;
   reason: string;
 };
+
+export type SavedConversation = {
+  id: string;
+  source_key: string;
+  document_ids: string[];
+  turns: { question: string; result: ResultEvent }[];
+};
+
+/** Shared caller for the /ask workspace endpoints (notes, findings, saved
+ *  conversations). Reads the FastAPI `detail` string when there is one so
+ *  the user sees the real reason ("Source permissions changed...") rather
+ *  than a generic failure. */
+export async function analystRequest<T = unknown>(
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(`${API_BASE}/ask${path}`, {
+    method,
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  await handleAuthFailure(res);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      typeof payload.detail === "string" ? payload.detail : "Could not update your analyst workspace.",
+    );
+  }
+  return payload as T;
+}
 
 export async function verifyAuditChain(): Promise<AuditVerification> {
   const res = await fetch(`${API_BASE}/audit/verify`, { headers: authHeaders() });

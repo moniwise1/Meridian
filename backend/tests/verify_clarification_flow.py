@@ -230,9 +230,13 @@ def _fake_explain_doc_only(question, document_payload, computed_profile=None, fo
 
 planner.explain_document_only_v2 = _fake_explain_doc_only
 
+# Explicit ids: these two are deliberately never added to the session (the
+# point is to avoid real file I/O), so the model default that would
+# normally assign an id at flush time never runs - and the document-only
+# path now names its conversation after documents[0].id.
 docs = [
-    UploadedDocument(tenant_id=tenant_id, filename="a.pdf", kind="pdf", file_path="/nonexistent/a.pdf", extracted_text="..."),
-    UploadedDocument(tenant_id=tenant_id, filename="b.pdf", kind="pdf", file_path="/nonexistent/b.pdf", extracted_text="..."),
+    UploadedDocument(id="clarification-a", tenant_id=tenant_id, filename="a.pdf", kind="pdf", file_path="/nonexistent/a.pdf", extracted_text="..."),
+    UploadedDocument(id="clarification-b", tenant_id=tenant_id, filename="b.pdf", kind="pdf", file_path="/nonexistent/b.pdf", extracted_text="..."),
 ]
 
 

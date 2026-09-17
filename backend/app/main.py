@@ -10,7 +10,7 @@ from app.api import (
     routes_connections, routes_ask, routes_audit, routes_auth, routes_artifacts,
     routes_history, routes_scan, routes_documents, routes_billing,
     routes_platform, routes_support, routes_status, routes_mfa, routes_monitor,
-    routes_notifications,
+    routes_notifications, routes_analyst,
 )
 
 _IS_PRODUCTION = settings.environment == "production"
@@ -95,6 +95,7 @@ app.include_router(routes_auth.router)
 app.include_router(routes_mfa.router)
 app.include_router(routes_connections.router)
 app.include_router(routes_ask.router)
+app.include_router(routes_analyst.router)
 app.include_router(routes_audit.router)
 app.include_router(routes_artifacts.router)
 app.include_router(routes_history.router)

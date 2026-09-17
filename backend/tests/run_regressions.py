@@ -29,6 +29,12 @@ def main() -> int:
 
     env = {**__import__("os").environ, "PYTHONPATH": str(BACKEND_DIR)}
     env.setdefault("APP_SECRET_KEY", "dGVzdC1vbmx5LWZlcm5ldC1rZXktMzJieXRlcy0wMDA=")  # 32 b64 bytes, test-only
+    # Several checks print a Naira sign in their pass message. A child
+    # process writing to a pipe picks its encoding from the locale, which on
+    # a Windows dev machine is cp1252 - the print() then raises
+    # UnicodeEncodeError and a script that actually passed every assertion
+    # is reported as FAIL. CI runs under a UTF-8 locale and never saw this.
+    env["PYTHONIOENCODING"] = "utf-8"
 
     failures = []
     for script in scripts:

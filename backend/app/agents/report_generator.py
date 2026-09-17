@@ -88,7 +88,7 @@ def _mc(pdf: FPDF, h: float, text: str) -> None:
 def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
                           by_group: list[dict] | None, data_quality: dict,
                           anomalies: list[dict], sql: str, query_id: str,
-                          charts: list[dict] | None = None) -> str:
+                          charts: list[dict] | None = None, analysis: dict | None = None) -> str:
     os.makedirs(settings.artifacts_dir, exist_ok=True)
     path = os.path.join(settings.artifacts_dir, f"report-{uuid.uuid4().hex}.pdf")
 
@@ -349,6 +349,42 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict,
     _mc(pdf, 6, _safe(f"Completeness: {data_quality.get('completeness_pct', 100)}%"))
     for note in data_quality.get("notes", []):
         _mc(pdf, 6, _safe(f"- {note}"))
+
+    # The analysis contract (app/agents/analyst_contract.py), when the
+    # snapshot carries one. Deliberately ADDITIVE: everything above still
+    # renders exactly as before, including the real chart graphics. What
+    # this adds is the part a printed report could never show before -
+    # measurement confidence stated separately from explanation
+    # confidence, the scope the numbers are actually true within, and the
+    # source each figure came from.
+    if analysis:
+        for name, confidence in (analysis.get("confidence") or {}).items():
+            section(f"{name.title()} confidence: {confidence['level'].replace('_', ' ')}")
+            _mc(pdf, 6, _safe(confidence["reason"]))
+
+        scope = analysis.get("scope") or {}
+        notes = [scope.get("metric_definition") or "The metric definition was not independently established.",
+                 *(scope.get("assumptions") or []),
+                 *((analysis.get("quality") or {}).get("limitations") or [])]
+        section("Scope and limitations")
+        for note in notes:
+            _mc(pdf, 6, _safe(f"- {note}"))
+
+        findings = analysis.get("findings") or []
+        if findings:
+            section("Findings by kind")
+            for finding in findings:
+                _mc(pdf, 6, _safe(f"- [{finding['kind']}] {finding['text']}"))
+
+        evidence = analysis.get("evidence") or []
+        if evidence:
+            section("Sources")
+            for source in evidence:
+                _mc(pdf, 6, _safe(
+                    f"- {source.get('filename') or source['source_id']} | {source['method']} "
+                    f"| calculation {source['computation_id']} "
+                    f"| version {source.get('source_version') or 'unavailable'}"
+                ))
 
     section("Methodology")
     pdf.set_font("Helvetica", "", 9)
