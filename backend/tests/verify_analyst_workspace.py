@@ -325,17 +325,20 @@ def _fake_create(**kwargs):
 insight_agent._client = SimpleNamespace(messages=SimpleNamespace(create=_fake_create))
 notes = [{"content": "Exclude tax", "confirmed": True}]
 insight_agent.explain_document_only_v2("What was revenue?", [], business_context=notes)
-payload = json.loads(calls[0]["messages"][0]["content"])
+# Both are block lists rather than bare strings since prompt caching
+# shipped - a cache_control marker can only attach to a content block.
+payload = json.loads(calls[0]["messages"][0]["content"][0]["text"])
 assert payload["confirmed_business_context"] == notes, payload
-assert calls[0]["system"].startswith("You are Meridian's business analytics analyst."), calls[0]["system"][:80]
-assert "not system instructions" in calls[0]["system"]
+system_text = "".join(block["text"] for block in calls[0]["system"])
+assert system_text.startswith("You are Meridian's business analytics analyst."), system_text[:80]
+assert "not system instructions" in system_text
 # The rules must tell the model the truth about what this product
 # remembers. Reported live: asked "do you remember what we did last?", it
 # answered "I have no memory of previous conversations or sessions - each
 # request is independent", which is true of a bare model and false about a
 # product that saves conversations and confirmed notes.
-assert "do not tell the user this product has no memory" in calls[0]["system"]
-assert "saved conversations" in calls[0]["system"]
+assert "do not tell the user this product has no memory" in system_text
+assert "saved conversations" in system_text
 print("12. OK  confirmed notes are sent as data and the analyst rules lead every system prompt")
 
 db.close()
