@@ -3,11 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listPlans, type Plan } from "@/lib/api";
+import BillingIntervalToggle, { PlanPrice, type BillingInterval } from "@/components/BillingIntervalToggle";
 import { track } from "@/lib/analytics";
-
-function formatNaira(amountKobo: number): string {
-  return `₦${(amountKobo / 100).toLocaleString("en-NG", { maximumFractionDigits: 0 })}`;
-}
 
 const FEATURES = [
   {
@@ -223,6 +220,7 @@ GROUP BY region;`}</code></pre>
 
 export default function LandingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [billingInterval, setBillingInterval] = useState<BillingInterval>("monthly");
 
   useEffect(() => {
     listPlans().catch(() => []).then((p) => p && setPlans(p));
@@ -423,12 +421,25 @@ export default function LandingPage() {
       </section>
 
       <section id="pricing" className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20 border-t border-line">
-        <div className="max-w-xl mb-12">
-          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-3">Choose the plan that fits your team</h2>
-          <p className="text-base text-ink-soft leading-relaxed">
-            Get the full product on every plan. Choose the capacity your team needs for people,
-            data sources, questions, and downloads, with clear monthly limits.
-          </p>
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-12">
+          <div className="max-w-xl">
+            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-3">Choose the plan that fits your team</h2>
+            <p className="text-base text-ink-soft leading-relaxed">
+              Get the full product on every plan. Choose the capacity your team needs for people,
+              data sources, questions, and downloads, with clear monthly limits.
+            </p>
+          </div>
+          {plans.length > 0 && (
+            <BillingIntervalToggle
+              value={billingInterval}
+              onChange={(next) => {
+                setBillingInterval(next);
+                track("pricing_interval_toggled", { interval: next });
+              }}
+              discountPercent={plans[0].annual_discount_percent}
+              className="self-start md:self-auto shrink-0"
+            />
+          )}
         </div>
 
         {plans.length === 0 ? (
@@ -448,11 +459,8 @@ export default function LandingPage() {
                   </span>
                 )}
                 <div className="text-xl font-medium text-ink mb-4">{plan.label}</div>
-                <div className="font-serif text-4xl text-ink tracking-tight mb-2">
-                  {formatNaira(plan.amount)}
-                  <span className="text-[13px] text-ink-soft font-normal">/mo</span>
-                </div>
-                <div className="text-sm text-ink-soft mb-5">{plan.tagline}</div>
+                <PlanPrice plan={plan} interval={billingInterval} />
+                <div className="text-sm text-ink-soft mb-5 mt-2">{plan.tagline}</div>
                 <ul className="flex flex-col gap-2 mb-6 flex-1">
                   {plan.features.map((f, i) => (
                     <li key={i} className="text-sm text-ink flex items-start gap-2">
@@ -463,7 +471,7 @@ export default function LandingPage() {
                 </ul>
                 <Link
                   href="/login?mode=register"
-                  onClick={() => track("cta_get_started", { location: "pricing", plan: plan.key })}
+                  onClick={() => track("cta_get_started", { location: "pricing", plan: plan.key, interval: billingInterval })}
                   className={`text-center text-sm px-5 py-3 ${plan.key === "pro" ? GLASS_BUTTON_PRIMARY : GLASS_BUTTON_SECONDARY}`}
                 >
                   Get started

@@ -50,23 +50,45 @@ it, and set the same values on the backend.
 > Paystack plan itself is what actually gets charged on renewal; the
 > `PAYSTACK_PLAN_AMOUNT_*` the backend holds is what it shows on the pricing
 > cards and passes on checkout. Changing one without the other means the site
-> advertises one price and the customer's card is debited another. Paystack
-> plans are not editable in place for price — to reprice, create new plans and
-> point the `PAYSTACK_PLAN_CODE_*` env vars at them. Anyone already subscribed
-> stays on the old plan's price until they resubscribe.
+> advertises one price and the customer's card is debited another.
+>
+> **To reprice**, change the amount in the backend config, then re-run the
+> script with `--reprice`. It updates each Paystack plan's amount in place
+> (`PUT /plan/:code`), so the plan codes stay the same and the
+> `PAYSTACK_PLAN_CODE_*` variables don't need touching. It sends
+> `update_existing_subscriptions=false`, so anyone already subscribed keeps
+> the price they signed up at and only new subscriptions pay the new amount.
+> Without `--reprice` the script refuses and changes nothing if the prices
+> disagree.
+>
+> On **Windows PowerShell**, set the key as its own statement — the
+> `NAME=value command` form above is bash syntax and PowerShell rejects it:
+>
+> ```powershell
+> $env:PAYSTACK_SECRET_KEY = "sk_test_xxx"; python backend/scripts/paystack_plans.py --reprice
+> ```
 
 ## 3. Swap the env vars on Railway
 
-Railway → **backend** service → **Variables**. Replace these five with the
+Railway → **backend** service → **Variables**. Replace these eight with the
 live values from step 2:
 
 ```
 PAYSTACK_SECRET_KEY=sk_live_...
 PAYSTACK_PUBLIC_KEY=pk_live_...
-PAYSTACK_PLAN_CODE_BASIC=PLN_...      (live)
-PAYSTACK_PLAN_CODE_PRO=PLN_...        (live)
-PAYSTACK_PLAN_CODE_PREMIUM=PLN_...    (live)
+PAYSTACK_PLAN_CODE_BASIC=PLN_...            (live)
+PAYSTACK_PLAN_CODE_PRO=PLN_...              (live)
+PAYSTACK_PLAN_CODE_PREMIUM=PLN_...          (live)
+PAYSTACK_PLAN_CODE_BASIC_ANNUAL=PLN_...     (live)
+PAYSTACK_PLAN_CODE_PRO_ANNUAL=PLN_...       (live)
+PAYSTACK_PLAN_CODE_PREMIUM_ANNUAL=PLN_...   (live)
 ```
+
+Each tier has **two** Paystack plans: a monthly one and an annual one on
+Paystack's `annually` interval, priced at 12 months less
+`BILLING_ANNUAL_DISCOUNT_PERCENT` (default 5). The script creates all six.
+A tier whose `_ANNUAL` code isn't set still sells monthly; its annual option
+shows as "Annual not yet available" instead of failing at checkout.
 
 Let it redeploy.
 

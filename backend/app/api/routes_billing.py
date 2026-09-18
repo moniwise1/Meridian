@@ -27,7 +27,8 @@ from app.billing import paystack
 from app.billing.paystack import PaystackError
 from app.billing.plans import (
     PLANS, get_plan, query_limit_for, document_limit_for, plan_key_for_paystack_code,
-    format_naira,
+    interval_for_paystack_code, plan_code_for, amount_for, price_label, period_days,
+    BillingInterval,
 )
 from app.billing.usage import count_queries_this_month, count_documents_this_month
 from app.audit import logger as audit
@@ -51,6 +52,13 @@ class PlanOut(BaseModel):
     features: list[str]
     tagline: str
     configured: bool  # False if this plan's Paystack plan code isn't set yet - lets the frontend disable "Subscribe" with a clear reason instead of a confusing checkout failure
+    # A year paid up front (12 x amount less annual_discount_percent), and
+    # whether that separate annual Paystack plan exists yet - the same
+    # "disable with a reason, never a confusing checkout failure" role
+    # `configured` plays for monthly.
+    annual_amount: int
+    annual_configured: bool
+    annual_discount_percent: int
 
 
 @router.get("/plans", response_model=list[PlanOut])
@@ -69,6 +77,9 @@ def list_plans():
             connection_limit=p.connection_limit, query_limit=p.query_limit,
             document_limit=p.document_limit, features=p.features, tagline=p.tagline,
             configured=bool(p.paystack_plan_code),
+            annual_amount=p.annual_amount,
+            annual_configured=bool(p.paystack_annual_plan_code),
+            annual_discount_percent=settings.billing_annual_discount_percent,
         )
         for p in PLANS.values()
     ]
@@ -82,6 +93,7 @@ class BillingStatus(BaseModel):
     refund_eligible_until: str | None
     subscription_expires_at: str | None
     plan_code: str | None
+    billing_interval: str  # "monthly" | "annual" - NULL on the tenant reads as monthly
     # This calendar month's usage against the plan's caps (see
     # app/billing/plans.py / app/billing/usage.py) - *_limit is None for
     # unlimited (Premium, or no cap at all), matching seat_limit/
@@ -109,6 +121,7 @@ def _status_for(db: Session, tenant: Tenant) -> BillingStatus:
             tenant.subscription_expires_at.isoformat() if tenant.subscription_expires_at else None
         ),
         plan_code=tenant.paystack_plan_code,
+        billing_interval=tenant.billing_interval or "monthly",
         queries_used=count_queries_this_month(db, tenant.id),
         query_limit=query_limit_for(plan_key),
         documents_used=count_documents_this_month(db, tenant.id),
@@ -127,6 +140,10 @@ def get_status(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_cur
 class SubscribeRequest(BaseModel):
     plan: str  # "basic" | "pro" | "premium" - see app/billing/plans.py
     callback_url: str
+    # Optional, so every client written before annual billing existed keeps
+    # getting exactly what it got before. Literal, so anything else is a
+    # 422 rather than silently treated as monthly.
+    interval: BillingInterval = "monthly"
 
 
 @router.post("/subscribe")
@@ -142,14 +159,16 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
     plan = get_plan(body.plan)
     if not plan:
         raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}.")
-    if not plan.paystack_plan_code:
-        raise HTTPException(500, f"The {plan.label} plan is not configured yet (missing its Paystack plan code).")
+    plan_code = plan_code_for(plan, body.interval)
+    if not plan_code:
+        which = "annual " if body.interval == "annual" else ""
+        raise HTTPException(500, f"The {plan.label} {which}plan is not configured yet (missing its Paystack plan code).")
 
     try:
         result = paystack.initialize_subscription_transaction(
-            email=user.email, plan_code=plan.paystack_plan_code,
-            amount=plan.amount, callback_url=body.callback_url,
-            metadata={"tenant_id": tenant.id},
+            email=user.email, plan_code=plan_code,
+            amount=amount_for(plan, body.interval), callback_url=body.callback_url,
+            metadata={"tenant_id": tenant.id, "interval": body.interval},
         )
     except PaystackError as e:
         audit.log(db, ctx.tenant_id, "subscription_initialize_failed", ctx.user_id,
@@ -164,10 +183,11 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
     # happens to echo a plan code back in a form this app could otherwise
     # parse.
     tenant.plan = body.plan
+    tenant.billing_interval = body.interval
     tenant.last_transaction_reference = result["reference"]
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_checkout_started", ctx.user_id,
-               detail={"reference": result["reference"], "plan": body.plan})
+               detail={"reference": result["reference"], "plan": body.plan, "interval": body.interval})
     return {"authorization_url": result["authorization_url"], "reference": result["reference"]}
 
 
@@ -195,19 +215,25 @@ def _activate(db: Session, tenant: Tenant, transaction_data: dict, source: str,
         resolved_key = plan_key_for_paystack_code(plan_code)
         if resolved_key:
             tenant.plan = resolved_key
+        # Same for the billing interval: what was actually paid for wins
+        # over what /subscribe recorded. This is what makes an annual
+        # payment buy a year - not a 30-day period that then lapses.
+        resolved_interval = interval_for_paystack_code(plan_code)
+        if resolved_interval:
+            tenant.billing_interval = resolved_interval
     if not tenant.paid_at:
         tenant.paid_at = datetime.utcnow()
     # Unlike paid_at (anchors the refund window - set once, ever), this
     # advances on EVERY successful charge including renewals, so it always
     # reflects the current period's actual end rather than the first one.
-    # Approximated as a 30-day cycle since there's no live Paystack account
-    # here to confirm the plan's real billing interval or read a renewal
-    # date back from - see app/billing/paystack.py's module docstring for
-    # the same honest caveat about not being verified against a real
-    # account. A production deployment with real recurring billing should
-    # instead read the actual next-charge date off the
-    # subscription.create / invoice events Paystack sends.
-    tenant.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+    # One period from now: 30 days monthly, 365 annual (plans.period_days).
+    # Approximated rather than read off Paystack since there's no live
+    # Paystack account here to confirm a renewal date against - see
+    # app/billing/paystack.py's module docstring for the same honest caveat
+    # about not being verified against a real account. A production
+    # deployment with real recurring billing should instead read the actual
+    # next-charge date off the subscription.create / invoice events.
+    tenant.subscription_expires_at = datetime.utcnow() + timedelta(days=period_days(tenant.billing_interval))
     # A fresh activation re-arms the expiry reminder (a previous period's
     # "already reminded" marker must not suppress the reminder for this
     # new one) - see app/api/routes_notifications.py's run_expiry_reminders.
@@ -228,7 +254,7 @@ def _announce_activation(db: Session, tenant: Tenant) -> None:
     turn a successful payment into a failed request."""
     plan = get_plan(tenant.plan) if tenant.plan else None
     plan_label = plan.label if plan else "your plan"
-    amount = format_naira(plan.amount) if plan else ""
+    amount = price_label(plan, tenant.billing_interval) if plan else ""
     renews_on = (
         tenant.subscription_expires_at.strftime("%d %B %Y")
         if tenant.subscription_expires_at else "the next billing date"
@@ -238,7 +264,7 @@ def _announce_activation(db: Session, tenant: Tenant) -> None:
         title="Subscription active",
         body=(
             f"{plan_label} is now active"
-            + (f" at {amount}/month" if amount else "")
+            + (f" at {amount}" if amount else "")
             + f". Renews on {renews_on}."
         ),
         link="/billing",
@@ -336,6 +362,9 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
         tenant.paystack_email_token = data.get("email_token")
         plan = data.get("plan") or {}
         tenant.paystack_plan_code = plan.get("plan_code", tenant.paystack_plan_code)
+        resolved_interval = interval_for_paystack_code(tenant.paystack_plan_code)
+        if resolved_interval:
+            tenant.billing_interval = resolved_interval
         db.commit()
         audit.log(db, tenant.id, "subscription_created",
                    detail={"subscription_code": tenant.paystack_subscription_code})
@@ -357,16 +386,16 @@ async def webhook(request: Request, db: Session = Depends(get_db)):
             db, tenant.id, "subscription_renewal_failed",
             title="Renewal payment failed",
             body=(
-                "We couldn't charge your card for this month's renewal. Update your "
-                "payment method in Billing to avoid losing access."
+                "We couldn't charge your card for your subscription renewal. Update "
+                "your payment method in Billing to avoid losing access."
             ),
             link="/billing",
         )
         notify_owners(
             tenant_admin_emails(db, tenant.id),
             "Action needed: your Meridian renewal payment failed",
-            "We couldn't charge your card for this month's Meridian renewal. Please "
-            "update your payment method in Billing to avoid an interruption.",
+            "We couldn't charge your card for your Meridian subscription renewal. "
+            "Please update your payment method in Billing to avoid an interruption.",
         )
     else:
         audit.log(db, tenant.id, "webhook_unhandled_event", detail={"event": event})

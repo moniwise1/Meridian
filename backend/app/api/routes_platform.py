@@ -37,7 +37,7 @@ import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
 from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
-from app.billing.plans import PLANS, get_plan, format_naira
+from app.billing.plans import PLANS, get_plan, price_label
 from app.billing import paystack
 from app.billing.paystack import PaystackError
 from app.invites import create_invite, get_invite_by_token, list_invites, revoke_invite, mark_accepted
@@ -433,7 +433,7 @@ def _tenant_out(db: Session, t: Tenant) -> TenantOut:
                           created_at=u.created_at.isoformat() if u.created_at else "")
             for u in users
         ],
-        plan_amount_naira=f"{format_naira(plan_obj.amount)}/mo" if plan_obj else None,
+        plan_amount_naira=price_label(plan_obj, t.billing_interval) if plan_obj else None,
         last_transaction_reference=t.last_transaction_reference,
         paystack_customer_code=t.paystack_customer_code,
     )

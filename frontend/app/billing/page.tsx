@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getBillingStatus, listPlans, subscribe, cancelSubscription, type BillingStatus, type Plan } from "@/lib/api";
+import BillingIntervalToggle, { PlanPrice, type BillingInterval } from "@/components/BillingIntervalToggle";
 import { loadSession } from "@/lib/auth";
 import { track } from "@/lib/analytics";
 
@@ -45,6 +46,7 @@ export default function BillingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string | null>(null); // plan key currently subscribing, or "cancel"
+  const [billingInterval, setBillingInterval] = useState<BillingInterval>("monthly");
   const isAdmin = loadSession()?.role === "admin";
 
   function refresh() {
@@ -64,9 +66,9 @@ export default function BillingPage() {
     setBusy(planKey);
     setError("");
     try {
-      track("subscribe_clicked", { plan: planKey });
+      track("subscribe_clicked", { plan: planKey, interval: billingInterval });
       const callbackUrl = `${window.location.origin}/billing/callback`;
-      const result = await subscribe(planKey, callbackUrl);
+      const result = await subscribe(planKey, callbackUrl, billingInterval);
       // Off to Paystack's hosted checkout (an external origin) - a full
       // navigation, not a client-side route change.
       window.location.assign(result.authorization_url);
@@ -139,7 +141,8 @@ export default function BillingPage() {
 
               {status.subscription_expires_at && status.subscription_status === "active" && (
                 <div className="text-[12.5px] text-ink-soft mb-2">
-                  Renews: {new Date(status.subscription_expires_at).toLocaleDateString()}
+                  Renews: {new Date(status.subscription_expires_at).toLocaleDateString()} ·{" "}
+                  {status.billing_interval === "annual" ? "billed yearly" : "billed monthly"}
                 </div>
               )}
 
@@ -193,8 +196,27 @@ export default function BillingPage() {
                   Only an admin can manage billing for this organization.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                  {plans.map((plan) => (
+                <>
+                {plans.length > 0 && (
+                  <BillingIntervalToggle
+                    value={billingInterval}
+                    onChange={(next) => {
+                      setBillingInterval(next);
+                      track("pricing_interval_toggled", { interval: next, location: "billing" });
+                    }}
+                    discountPercent={plans[0].annual_discount_percent}
+                    className="mb-6"
+                  />
+                )}
+                {/* lg, not sm: the app sidebar already takes ~240px, so at sm (640px)
+                    three columns left each card ~100px against ~146px of content and
+                    pushed the page sideways. Same breakpoint as the landing page. */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+                  {plans.map((plan) => {
+                    // Availability is per interval: a tier's annual Paystack
+                    // plan can exist or not independently of its monthly one.
+                    const available = billingInterval === "annual" ? plan.annual_configured : plan.configured;
+                    return (
                     <div
                       key={plan.key}
                       className={`relative bg-panel border rounded-[4px] p-5 flex flex-col ${
@@ -207,11 +229,8 @@ export default function BillingPage() {
                         </span>
                       )}
                       <div className="text-[15px] font-medium text-ink mb-1">{plan.label}</div>
-                      <div className="text-[22px] font-medium text-ink tracking-tight mb-1">
-                        {formatNaira(plan.amount)}
-                        <span className="text-[13px] text-ink-soft font-normal">/mo</span>
-                      </div>
-                      <div className="text-[12.5px] text-ink-soft mb-4">{plan.tagline}</div>
+                      <PlanPrice plan={plan} interval={billingInterval} size="md" />
+                      <div className="text-[12.5px] text-ink-soft mb-4 mt-1">{plan.tagline}</div>
 
                       <ul className="flex flex-col gap-2 mb-5 flex-1">
                         {plan.features.map((f, i) => (
@@ -224,19 +243,33 @@ export default function BillingPage() {
 
                       <button
                         onClick={() => handleSubscribe(plan.key)}
-                        disabled={busy !== null || !plan.configured}
-                        title={!plan.configured ? "This plan isn't available for checkout yet." : undefined}
+                        disabled={busy !== null || !available}
+                        title={
+                          !available
+                            ? billingInterval === "annual"
+                              ? "Annual billing isn't available for this plan yet - choose Monthly."
+                              : "This plan isn't available for checkout yet."
+                            : undefined
+                        }
                         className={`text-[13px] px-4 py-1.5 rounded-[3px] transition-colors disabled:opacity-40 ${
                           plan.key === "pro"
                             ? "bg-teal-deep text-white hover:bg-teal"
                             : "border border-line text-ink hover:border-teal hover:text-teal"
                         }`}
                       >
-                        {busy === plan.key ? "Redirecting to checkout…" : !plan.configured ? "Not yet available" : `Subscribe to ${plan.label}`}
+                        {busy === plan.key
+                          ? "Redirecting to checkout…"
+                          : !available
+                            ? billingInterval === "annual" ? "Annual not yet available" : "Not yet available"
+                            : billingInterval === "annual"
+                              ? `Subscribe yearly · ${formatNaira(plan.annual_amount)}`
+                              : `Subscribe to ${plan.label}`}
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                </>
               )}
               {isAdmin && (
                 <div className="flex items-center gap-2.5 text-[12px] text-ink-soft border border-line rounded-[4px] px-4 py-3 max-w-md mb-8">
