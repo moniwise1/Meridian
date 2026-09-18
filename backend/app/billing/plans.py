@@ -37,16 +37,46 @@ own 1-seat cap already enforced in routes_auth.py before this module
 existed.
 """
 from dataclasses import dataclass
+from typing import Literal
 
 from app.config import settings
+
+
+BillingInterval = Literal["monthly", "annual"]
+BILLING_INTERVALS: tuple[str, ...] = ("monthly", "annual")
+
+# How far one successful charge advances subscription_expires_at. Monthly
+# stays the 30-day approximation it has always been (see routes_billing.py
+# _activate for why it isn't read off Paystack); a year is 365 days. A
+# renewal re-reminder fires subscription_expiry_reminder_days before the
+# end of either.
+_PERIOD_DAYS = {"monthly": 30, "annual": 365}
+
+
+def period_days(interval: str | None) -> int:
+    """NULL/unknown -> monthly, matching Tenant.billing_interval's own
+    NULL-means-monthly convention."""
+    return _PERIOD_DAYS.get(interval or "monthly", 30)
+
+
+def annual_amount_for(monthly_kobo: int) -> int:
+    """12 months less the configured annual discount, rounded to whole naira
+    - every price this app shows is a round naira figure (format_naira), and
+    the Paystack plan must match the displayed amount exactly. Derived, never
+    configured separately, so a monthly reprice carries the annual price
+    with it (see app/config.py billing_annual_discount_percent)."""
+    discounted = monthly_kobo * 12 * (100 - settings.billing_annual_discount_percent) / 100
+    return int(round(discounted / 100)) * 100
 
 
 @dataclass
 class Plan:
     key: str  # "basic" | "pro" | "premium" - stored on Tenant.plan once subscribed
     label: str
-    amount: int  # smallest currency unit (kobo for NGN)
-    paystack_plan_code: str
+    amount: int  # smallest currency unit (kobo for NGN) - the MONTHLY price
+    paystack_plan_code: str  # the monthly Paystack plan
+    annual_amount: int  # a year up front, see annual_amount_for
+    paystack_annual_plan_code: str  # a separate Paystack plan on the "annually" interval
     seat_limit: int | None  # None = unlimited
     connection_limit: int | None  # None = unlimited
     # Calendar-month usage caps (see app/billing/usage.py for how "this
@@ -68,6 +98,8 @@ def _build_plans() -> dict[str, Plan]:
         "basic": Plan(
             key="basic", label="Basic", amount=settings.paystack_plan_amount_basic,
             paystack_plan_code=settings.paystack_plan_code_basic,
+            annual_amount=annual_amount_for(settings.paystack_plan_amount_basic),
+            paystack_annual_plan_code=settings.paystack_plan_code_basic_annual,
             seat_limit=3, connection_limit=3,
             query_limit=25, document_limit=20,
             tagline="For a small team getting started with AI-driven analytics.",
@@ -85,6 +117,8 @@ def _build_plans() -> dict[str, Plan]:
         "pro": Plan(
             key="pro", label="Pro", amount=settings.paystack_plan_amount_pro,
             paystack_plan_code=settings.paystack_plan_code_pro,
+            annual_amount=annual_amount_for(settings.paystack_plan_amount_pro),
+            paystack_annual_plan_code=settings.paystack_plan_code_pro_annual,
             seat_limit=10, connection_limit=10,
             query_limit=100, document_limit=100,
             tagline="For a growing team working across more data and more people.",
@@ -99,6 +133,8 @@ def _build_plans() -> dict[str, Plan]:
         "premium": Plan(
             key="premium", label="Premium", amount=settings.paystack_plan_amount_premium,
             paystack_plan_code=settings.paystack_plan_code_premium,
+            annual_amount=annual_amount_for(settings.paystack_plan_amount_premium),
+            paystack_annual_plan_code=settings.paystack_plan_code_premium_annual,
             seat_limit=None, connection_limit=None,
             query_limit=300, document_limit=None,
             tagline="For larger teams that need the whole organization on it.",
@@ -130,19 +166,51 @@ def format_naira(kobo: int) -> str:
     return f"₦{kobo // 100:,}"
 
 
-def plan_key_for_paystack_code(code: str | None) -> str | None:
-    """The reverse of Plan.paystack_plan_code: which of our own plan keys
-    ("basic"/"pro"/"premium") a Paystack plan_code corresponds to, or None
-    if it matches none. Used by billing activation to set Tenant.plan from
-    what a verified transaction actually paid for, rather than trusting the
-    value /subscribe optimistically wrote before payment. An unconfigured
-    plan's code is "" and must never match, hence the truthiness guard."""
+def plan_code_for(plan: Plan, interval: str | None) -> str:
+    return plan.paystack_annual_plan_code if interval == "annual" else plan.paystack_plan_code
+
+
+def amount_for(plan: Plan, interval: str | None) -> int:
+    return plan.annual_amount if interval == "annual" else plan.amount
+
+
+def price_label(plan: Plan, interval: str | None) -> str:
+    """"₦85,500/year" or "₦7,500/month" - for notices, emails and the
+    platform panel, so none of them can say "/month" to an annual payer."""
+    return f"{format_naira(amount_for(plan, interval))}/{'year' if interval == 'annual' else 'month'}"
+
+
+def _resolve_paystack_code(code: str | None) -> tuple[str, str] | None:
+    """(plan key, interval) for a Paystack plan_code, checking both the
+    monthly and the annual code of every plan. An unconfigured plan's code
+    is "" and must never match, hence the truthiness guards."""
     if not code:
         return None
     for plan in PLANS.values():
         if plan.paystack_plan_code and plan.paystack_plan_code == code:
-            return plan.key
+            return plan.key, "monthly"
+        if plan.paystack_annual_plan_code and plan.paystack_annual_plan_code == code:
+            return plan.key, "annual"
     return None
+
+
+def plan_key_for_paystack_code(code: str | None) -> str | None:
+    """The reverse of Plan.paystack_plan_code / paystack_annual_plan_code:
+    which of our own plan keys ("basic"/"pro"/"premium") a Paystack
+    plan_code corresponds to, or None if it matches none. Used by billing
+    activation to set Tenant.plan from what a verified transaction actually
+    paid for, rather than trusting the value /subscribe optimistically
+    wrote before payment."""
+    resolved = _resolve_paystack_code(code)
+    return resolved[0] if resolved else None
+
+
+def interval_for_paystack_code(code: str | None) -> str | None:
+    """"monthly" / "annual" for a Paystack plan_code, or None if it matches
+    no configured plan - same verified-over-optimistic reconciliation as
+    plan_key_for_paystack_code, for Tenant.billing_interval."""
+    resolved = _resolve_paystack_code(code)
+    return resolved[1] if resolved else None
 
 
 def seat_limit_for(plan_key: str | None) -> int | None:

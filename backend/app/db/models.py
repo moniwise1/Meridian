@@ -42,6 +42,14 @@ class Tenant(Base):
     # when the subscription is created, not a secret this app generates.
     paystack_email_token = Column(String, nullable=True)
     paystack_plan_code = Column(String, nullable=True)
+    # "monthly" | "annual" - how this tenant's CURRENT subscription is
+    # billed. NULL means monthly: every tenant that subscribed before
+    # annual billing existed was necessarily monthly. Set optimistically
+    # at /billing/subscribe and then reconciled at activation from the
+    # Paystack plan code that was actually paid for - the same
+    # optimistic-then-verified pattern `plan` already follows. Drives the
+    # length of the period subscription_expires_at is advanced by.
+    billing_interval = Column(String, nullable=True)
     # The transaction a within-window cancel would refund.
     last_transaction_reference = Column(String, nullable=True)
     # Anchors the refund window - set on first successful charge, never

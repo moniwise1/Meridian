@@ -70,16 +70,25 @@ it, and set the same values on the backend.
 
 ## 3. Swap the env vars on Railway
 
-Railway → **backend** service → **Variables**. Replace these five with the
+Railway → **backend** service → **Variables**. Replace these eight with the
 live values from step 2:
 
 ```
 PAYSTACK_SECRET_KEY=sk_live_...
 PAYSTACK_PUBLIC_KEY=pk_live_...
-PAYSTACK_PLAN_CODE_BASIC=PLN_...      (live)
-PAYSTACK_PLAN_CODE_PRO=PLN_...        (live)
-PAYSTACK_PLAN_CODE_PREMIUM=PLN_...    (live)
+PAYSTACK_PLAN_CODE_BASIC=PLN_...            (live)
+PAYSTACK_PLAN_CODE_PRO=PLN_...              (live)
+PAYSTACK_PLAN_CODE_PREMIUM=PLN_...          (live)
+PAYSTACK_PLAN_CODE_BASIC_ANNUAL=PLN_...     (live)
+PAYSTACK_PLAN_CODE_PRO_ANNUAL=PLN_...       (live)
+PAYSTACK_PLAN_CODE_PREMIUM_ANNUAL=PLN_...   (live)
 ```
+
+Each tier has **two** Paystack plans: a monthly one and an annual one on
+Paystack's `annually` interval, priced at 12 months less
+`BILLING_ANNUAL_DISCOUNT_PERCENT` (default 5). The script creates all six.
+A tier whose `_ANNUAL` code isn't set still sells monthly; its annual option
+shows as "Annual not yet available" instead of failing at checkout.
 
 Let it redeploy.
 

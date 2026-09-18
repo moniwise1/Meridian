@@ -207,6 +207,20 @@ class Settings(BaseSettings):
     paystack_plan_code_premium: str = ""
     paystack_plan_amount_premium: int = 7_500_000  # NGN 75,000
 
+    # Annual billing. Each tier gets a SECOND Paystack plan on the
+    # "annually" interval - Paystack bills a plan at exactly one interval,
+    # so "pay yearly" cannot be the monthly plan charged twelve times up
+    # front. The annual price is not configured separately: it is always
+    # derived as 12 x the monthly amount less this discount (see
+    # app/billing/plans.py annual_amount_for), so repricing a tier
+    # can never leave its annual price behind. Empty annual plan code =
+    # annual checkout for that tier is unavailable, the same convention
+    # the monthly codes above use.
+    billing_annual_discount_percent: int = 5
+    paystack_plan_code_basic_annual: str = ""
+    paystack_plan_code_pro_annual: str = ""
+    paystack_plan_code_premium_annual: str = ""
+
     # "Your subscription renews in N days" reminder (in-app notification +
     # email). How many days before subscription_expires_at the reminder
     # goes out.

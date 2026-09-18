@@ -631,6 +631,7 @@ export type BillingStatus = {
   refund_eligible_until: string | null;
   subscription_expires_at: string | null;
   plan_code: string | null;
+  billing_interval: "monthly" | "annual";
   // This calendar month's usage against the plan's caps - *_limit is null
   // for unlimited (Premium, or no cap at all).
   queries_used: number;
@@ -658,6 +659,12 @@ export type Plan = {
   features: string[];
   tagline: string;
   configured: boolean;
+  // A year paid up front - 12 x `amount` less annual_discount_percent -
+  // and whether that separate annual Paystack plan exists yet (the same
+  // "disable with a reason" role `configured` plays for monthly).
+  annual_amount: number;
+  annual_configured: boolean;
+  annual_discount_percent: number;
 };
 
 export async function listPlans(): Promise<Plan[]> {
@@ -676,11 +683,15 @@ export async function listPlans(): Promise<Plan[]> {
   return body;
 }
 
-export async function subscribe(plan: string, callbackUrl: string): Promise<{ authorization_url: string; reference: string }> {
+export async function subscribe(
+  plan: string,
+  callbackUrl: string,
+  interval: "monthly" | "annual" = "monthly",
+): Promise<{ authorization_url: string; reference: string }> {
   const res = await fetch(`${API_BASE}/billing/subscribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ plan, callback_url: callbackUrl }),
+    body: JSON.stringify({ plan, callback_url: callbackUrl, interval }),
   });
   await handleAuthFailure(res);
   const body = await res.json();
