@@ -124,17 +124,25 @@ def send_invite_email(to_email: str, org_label: str, inviter_email: str, role: s
 
 
 def send_subscription_confirmation(
-    to_email: str, company_name: str, plan_label: str, amount_naira: str, renews_on: str
+    to_email: str, company_name: str, plan_label: str, amount_naira: str, renews_on: str,
+    refund_days: int | None = None,
 ) -> None:
+    """`amount_naira` already carries its own period ("NGN 7,500/month",
+    "NGN 85,500/year" - see plans.price_label), so this must not append one:
+    it used to add " / month", which after annual billing shipped read
+    "NGN 85,500/year / month". `refund_days` is the window for THIS
+    subscription's interval; it falls back to the monthly window for any
+    caller that doesn't pass it."""
     subject = "Your Meridian subscription is active"
+    days = refund_days if refund_days is not None else settings.billing_refund_window_days
     body = (
         f"Hi,\n\n"
         f"{company_name}'s Meridian subscription is now active.\n\n"
         f"Plan: {plan_label}\n"
-        f"Amount: {amount_naira} / month\n"
+        f"Amount: {amount_naira}\n"
         f"Renews on: {renews_on}\n\n"
         f"You can review or cancel your plan any time from Billing in the app. "
-        f"A cancellation within the first {settings.billing_refund_window_days} "
+        f"A cancellation within the first {days} "
         f"days is a full self-serve refund.\n\n"
         f"Thanks for choosing Meridian.\n\n"
         f"{FOUNDER_NAME}\n"

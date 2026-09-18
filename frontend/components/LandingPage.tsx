@@ -428,6 +428,15 @@ export default function LandingPage() {
               Get the full product on every plan. Choose the capacity your team needs for people,
               data sources, questions, and downloads, with clear monthly limits.
             </p>
+            {plans.length > 0 && (
+              // Straight from the backend policy (/billing/plans), so this can't
+              // drift from what /billing/cancel actually refunds.
+              <p className="mt-3 text-sm text-ink-soft leading-relaxed">
+                Pay monthly, or yearly and save {plans[0].annual_discount_percent}%. Not for you? Cancel
+                within {plans[0].refund_window_days} days for a full refund
+                ({plans[0].annual_refund_window_days} days on annual plans).
+              </p>
+            )}
           </div>
           {plans.length > 0 && (
             <BillingIntervalToggle

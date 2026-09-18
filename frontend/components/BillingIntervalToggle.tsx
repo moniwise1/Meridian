@@ -122,15 +122,32 @@ export function PlanPrice({
           </span>
         )}
       </div>
-      <div key={`${plan.key}-${interval}-note`} className="mt-1 text-[12.5px] text-ink-soft min-h-[1.25rem] motion-safe:animate-price-in">
-        {annual ? (
-          <>
+      {/* Both notes are always rendered, stacked in the same grid cell, with
+          the inactive one invisible. The box is therefore always as tall as
+          the TALLER of the two at the current width, so flipping the toggle
+          can never shift the text below it - whichever one wraps, and at
+          whatever card width. (A fixed line count broke on narrow cards: a
+          nowrap line overflowed; a wrapping one changed height.) */}
+      <div className="mt-1 grid text-[12.5px] text-ink-soft leading-5">
+        <div
+          key={`${plan.key}-monthly-${interval}`}
+          aria-hidden={annual}
+          className={`[grid-area:1/1] ${annual ? "invisible" : "motion-safe:animate-price-in"}`}
+        >
+          <div>Billed monthly · cancel any time</div>
+          <div>{plan.refund_window_days}-day full refund</div>
+        </div>
+        <div
+          key={`${plan.key}-annual-${interval}`}
+          aria-hidden={!annual}
+          className={`[grid-area:1/1] ${annual ? "motion-safe:animate-price-in" : "invisible"}`}
+        >
+          <div>
             {formatNaira(plan.annual_amount)} billed yearly ·{" "}
             <span className="text-teal-deep font-medium">save {formatNaira(saving)}</span>
-          </>
-        ) : (
-          "Billed monthly · cancel any time"
-        )}
+          </div>
+          <div>{plan.annual_refund_window_days}-day full refund</div>
+        </div>
       </div>
     </div>
   );

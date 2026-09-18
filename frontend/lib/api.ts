@@ -665,6 +665,9 @@ export type Plan = {
   annual_amount: number;
   annual_configured: boolean;
   annual_discount_percent: number;
+  // Full-refund windows in days, straight from the backend policy.
+  refund_window_days: number;
+  annual_refund_window_days: number;
 };
 
 export async function listPlans(): Promise<Plan[]> {

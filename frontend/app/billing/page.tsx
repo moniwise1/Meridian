@@ -105,8 +105,12 @@ export default function BillingPage() {
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Billing</h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
         Meridian is billed from the moment you subscribe — there&apos;s no delayed-billing free
-        trial. If it&apos;s not for you, cancel within 7 days of subscribing for a full refund; after
-        that, cancelling stops future billing but the current period isn&apos;t refunded.
+        trial. If it&apos;s not for you, cancel within{" "}
+        {plans[0]
+          ? `${plans[0].refund_window_days} days (${plans[0].annual_refund_window_days} days on an annual plan)`
+          : "the refund window"}{" "}
+        of subscribing for a full refund; after that, cancelling stops future billing but the
+        current period isn&apos;t refunded.
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}

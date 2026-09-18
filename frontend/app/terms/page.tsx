@@ -96,9 +96,12 @@ export default function TermsOfServicePage() {
             <Section id="billing" title="4. Subscriptions and billing">
               <p>
                 Paid plans are billed from the moment you subscribe via Paystack — there is no
-                delayed-billing free trial. If you are not satisfied, you may cancel within 7 days of
-                subscribing for a full refund; after that window, cancelling stops future billing but
-                the current billing period is not refunded. Plan limits (seats, connected data sources,
+                delayed-billing free trial. Plans are billed monthly or annually; an annual plan is
+                paid for the full year up front. If you are not satisfied, you may cancel for a full
+                refund within 7 days of subscribing to a monthly plan, or within 30 days of subscribing
+                to an annual plan. After that window, cancelling stops future billing but the current
+                billing period is not refunded. The refund window applies to your first payment only,
+                not to renewals. Plan limits (seats, connected data sources,
                 monthly questions, and monthly downloads) are described on our pricing page and enforced
                 automatically. All payment processing is handled by Paystack under its own terms and
                 security standards — see our{" "}

@@ -34,6 +34,7 @@ from app.db.session import SessionLocal, init_db
 from app.db.models import Tenant, User, Notification
 from app.security.auth import hash_password, create_access_token
 from app.billing import paystack
+from app.agents import notifications
 from app.billing.plans import PLANS, annual_amount_for, interval_for_paystack_code
 
 init_db()
@@ -61,6 +62,14 @@ def _fake_initialize(email, plan_code, amount, callback_url, metadata=None, clie
 
 
 paystack.initialize_subscription_transaction = _fake_initialize
+
+sent_emails = []
+notifications._send_best_effort = lambda to, subject, body, *a, **k: sent_emails.append(
+    {"to": to, "subject": subject, "body": body})
+
+refunds = []
+paystack.refund_transaction = lambda reference, client=None: refunds.append(reference) or {"status": True}
+paystack.disable_subscription = lambda code, token, client=None: {"status": True}
 
 
 def _signed_webhook(payload):
@@ -114,7 +123,11 @@ assert status["billing_interval"] == "annual", status
 notice = db.query(Notification).filter_by(tenant_id=tenant.id, kind="subscription_activated").one()
 assert "₦285,000/year" in notice.body, notice.body
 assert "/month" not in notice.body, notice.body
-print(f"4. OK  annual payment -> active for {days_left + 1} days, status + notice both say annual")
+email = next(e for e in sent_emails if e["to"] == "a@annualco.com")
+assert "Amount: \u20a6285,000/year\n" in email["body"], email["body"]
+assert "/year / month" not in email["body"] and "/month / month" not in email["body"], email["body"]
+assert "within the first 30 days" in email["body"], email["body"]
+print(f"4. OK  annual payment -> active for {days_left + 1} days; status, notice and email all say annual")
 
 
 # --- 5. the verified plan code wins over what /subscribe recorded ----------
@@ -158,7 +171,10 @@ db.expire_all()
 t4 = db.get(Tenant, tenant4.id)
 assert t4.billing_interval == "monthly"
 assert 29 <= (t4.subscription_expires_at - datetime.utcnow()).days <= 30
-print("7. OK  no interval -> monthly plan, monthly price, 30-day period (old clients unaffected)")
+email = next(e for e in sent_emails if e["to"] == "a@monthlyco.com")
+assert "Amount: \u20a67,500/month\n" in email["body"], email["body"]
+assert "within the first 7 days" in email["body"], email["body"]
+print("7. OK  no interval -> monthly plan, monthly price, 30-day period, 7-day refund in the email")
 
 
 # --- 8. anything other than monthly/annual is rejected, not guessed --------
@@ -173,6 +189,48 @@ assert interval_for_paystack_code("") is None and interval_for_paystack_code(Non
 assert interval_for_paystack_code("PLN_nobody") is None
 assert annual_amount_for(750_000) == 8_550_000
 print("9. OK  empty/unknown plan codes resolve to nothing")
+
+# --- 10. the refund window is 30 days on annual, 7 on monthly --------------
+plans = {p["key"]: p for p in client.get("/billing/plans").json()}
+assert plans["pro"]["refund_window_days"] == 7 and plans["pro"]["annual_refund_window_days"] == 30
+status = client.get("/billing/status", headers=H).json()     # the annual tenant from check 3/4
+t = db.get(Tenant, tenant.id)
+until = datetime.fromisoformat(status["refund_eligible_until"])
+assert abs((until - t.paid_at) - timedelta(days=30)) < timedelta(seconds=5), (until, t.paid_at)
+print("10. OK  /billing/plans states both windows; an annual tenant's refund deadline is paid_at + 30 days")
+
+
+def _cancel_after(label, email, interval, plan_code, days_since_paid):
+    """A real /billing/cancel on a tenant whose first payment was N days ago."""
+    tn, hdr = mk_admin(label, email)
+    tn.subscription_status, tn.plan, tn.billing_interval = "active", "pro", interval
+    tn.paid_at = datetime.utcnow() - timedelta(days=days_since_paid)
+    tn.subscription_expires_at = datetime.utcnow() + timedelta(days=10)
+    tn.paystack_plan_code = plan_code
+    tn.paystack_subscription_code, tn.paystack_email_token = "SUB_x", "tok_x"
+    tn.last_transaction_reference = f"ref-{label}"
+    db.commit()
+    before = len(refunds)
+    r = client.post("/billing/cancel", headers=hdr)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    return db.get(Tenant, tn.id).subscription_status, len(refunds) > before
+
+
+# --- 11. day 20: an annual plan is refunded, a monthly one is not ----------
+state, refunded = _cancel_after("Annual20", "a@annual20.com", "annual", "PLN_pro_yr", 20)
+assert refunded and state == "refunded", (state, refunded)
+state, refunded = _cancel_after("Monthly20", "a@monthly20.com", "monthly", "PLN_pro", 20)
+assert not refunded and state == "cancelled", (state, refunded)
+print("11. OK  cancelling on day 20: annual -> full refund, monthly -> cancelled, no refund")
+
+# --- 12. day 31: past the annual window too ---------------------------------
+state, refunded = _cancel_after("Annual31", "a@annual31.com", "annual", "PLN_pro_yr", 31)
+assert not refunded and state == "cancelled", (state, refunded)
+# and monthly still refunds inside its own 7 days
+state, refunded = _cancel_after("Monthly5", "a@monthly5.com", "monthly", "PLN_pro", 5)
+assert refunded and state == "refunded", (state, refunded)
+print("12. OK  day 31 annual -> no refund; day 5 monthly -> refund (monthly window unchanged)")
 
 db.close()
 print("\nALL ANNUAL BILLING CHECKS PASSED")

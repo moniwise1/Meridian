@@ -59,6 +59,16 @@ def period_days(interval: str | None) -> int:
     return _PERIOD_DAYS.get(interval or "monthly", 30)
 
 
+def refund_window_days(interval: str | None) -> int:
+    """Full self-serve refund window after the FIRST payment, by billing
+    interval. NULL/unknown -> monthly, matching Tenant.billing_interval.
+    The window is anchored on Tenant.paid_at, which is set once ever, so
+    renewals - monthly or annual - never reopen it."""
+    if interval == "annual":
+        return settings.billing_refund_window_days_annual
+    return settings.billing_refund_window_days
+
+
 def annual_amount_for(monthly_kobo: int) -> int:
     """12 months less the configured annual discount, rounded to whole naira
     - every price this app shows is a round naira figure (format_naira), and

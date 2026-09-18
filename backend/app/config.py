@@ -176,10 +176,16 @@ class Settings(BaseSettings):
     # Billing (app/billing/paystack.py, app/billing/plans.py,
     # app/api/routes_billing.py). Paid-from-onset model: a tenant is
     # charged immediately on subscribe, with a self-serve full refund if
-    # they cancel within billing_refund_window_days.
+    # they cancel within the refund window for their billing interval.
     paystack_secret_key: str = ""
     paystack_public_key: str = ""
     billing_refund_window_days: int = 7
+    # Annual plans get longer. An annual customer pays up to twelve months
+    # in one charge, so the same 7 days would put a whole year's money
+    # beyond recall a week after signing up. See plans.refund_window_days.
+    # frontend/app/terms/page.tsx states both numbers in legal text - it is
+    # deliberately static, so change it too if either value changes.
+    billing_refund_window_days_annual: int = 30
 
     # Three plans (Basic/Pro/Premium), each its own real Paystack Plan
     # object - not one plan reused at different prices, since Paystack's
