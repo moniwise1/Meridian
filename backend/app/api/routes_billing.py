@@ -28,7 +28,7 @@ from app.billing.paystack import PaystackError
 from app.billing.plans import (
     PLANS, get_plan, query_limit_for, document_limit_for, plan_key_for_paystack_code,
     interval_for_paystack_code, plan_code_for, amount_for, price_label, period_days,
-    BillingInterval,
+    refund_window_days, BillingInterval,
 )
 from app.billing.usage import count_queries_this_month, count_documents_this_month
 from app.audit import logger as audit
@@ -59,6 +59,10 @@ class PlanOut(BaseModel):
     annual_amount: int
     annual_configured: bool
     annual_discount_percent: int
+    # Full-refund windows, so the pricing and billing copy can state them
+    # without hardcoding a number that could drift from the real policy.
+    refund_window_days: int
+    annual_refund_window_days: int
 
 
 @router.get("/plans", response_model=list[PlanOut])
@@ -80,6 +84,8 @@ def list_plans():
             annual_amount=p.annual_amount,
             annual_configured=bool(p.paystack_annual_plan_code),
             annual_discount_percent=settings.billing_annual_discount_percent,
+            refund_window_days=refund_window_days("monthly"),
+            annual_refund_window_days=refund_window_days("annual"),
         )
         for p in PLANS.values()
     ]
@@ -108,7 +114,7 @@ def _status_for(db: Session, tenant: Tenant) -> BillingStatus:
     refund_eligible_until = None
     if tenant.paid_at and tenant.subscription_status == "active":
         refund_eligible_until = (
-            tenant.paid_at + timedelta(days=settings.billing_refund_window_days)
+            tenant.paid_at + timedelta(days=refund_window_days(tenant.billing_interval))
         ).isoformat()
     plan_key = tenant.plan if tenant.tier == "pro" else None
     return BillingStatus(
@@ -270,7 +276,8 @@ def _announce_activation(db: Session, tenant: Tenant) -> None:
         link="/billing",
     )
     for email in tenant_admin_emails(db, tenant.id):
-        send_subscription_confirmation(email, tenant.name, plan_label, amount or "-", renews_on)
+        send_subscription_confirmation(email, tenant.name, plan_label, amount or "-", renews_on,
+                                       refund_window_days(tenant.billing_interval))
 
 
 @router.get("/verify")
@@ -413,7 +420,7 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
 
     within_refund_window = (
         tenant.paid_at is not None
-        and datetime.utcnow() - tenant.paid_at <= timedelta(days=settings.billing_refund_window_days)
+        and datetime.utcnow() - tenant.paid_at <= timedelta(days=refund_window_days(tenant.billing_interval))
     )
 
     if tenant.paystack_subscription_code and tenant.paystack_email_token:
