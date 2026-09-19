@@ -187,6 +187,18 @@ class Settings(BaseSettings):
     # deliberately static, so change it too if either value changes.
     billing_refund_window_days_annual: int = 30
 
+    # Public "Register your interest" form (app/api/routes_leads.py) ->
+    # Google Sheet. The webhook URL is a Google Apps Script Web App
+    # deployment that appends a row; the shared secret is checked by that
+    # script so nobody who guesses the URL can write to the sheet. Both
+    # empty = the form still works and still stores every lead, it just
+    # doesn't mirror them anywhere. See docs/LEADS_SHEET.md.
+    leads_sheet_webhook_url: str = ""
+    leads_sheet_shared_secret: str = ""
+    # A public, unauthenticated form is a spam target: cap submissions per
+    # IP per hour (the same shape as register_rate_limit_per_ip_per_hour).
+    lead_form_rate_limit_per_ip_per_hour: int = 12
+
     # Three plans (Basic/Pro/Premium), each its own real Paystack Plan
     # object - not one plan reused at different prices, since Paystack's
     # own model is "a plan has one price". Amount is the smallest currency

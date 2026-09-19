@@ -477,3 +477,94 @@ export async function getAnalytics(): Promise<Analytics> {
   if (!res.ok) throw new Error("Could not load analytics.");
   return res.json();
 }
+
+
+// ---------- Leads (sales CRM) ----------
+
+export type LeadComment = {
+  id: string;
+  kind: "note" | "status";
+  body: string;
+  staff_email: string | null;
+  created_at: string;
+};
+
+export type Lead = {
+  id: string;
+  full_name: string;
+  business_name: string | null;
+  email: string;
+  phone: string;
+  message: string | null;
+  source: string | null;
+  campaign: string | null;
+  status: "open" | "won" | "not_interested" | "closed";
+  created_at: string;
+  updated_at: string;
+  consented: boolean;
+  in_sheet: boolean;
+  sheet_error: string | null;
+  comments: LeadComment[];
+};
+
+async function platformJson<T>(path: string, init?: RequestInit, fallback = "Something went wrong."): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
+  });
+  await handleAuthFailure(res);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail ?? fallback);
+  return body as T;
+}
+
+export async function listLeads(status?: string, search?: string): Promise<Lead[]> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (search) params.set("search", search);
+  const query = params.toString();
+  return platformJson<Lead[]>(`/platform/leads${query ? `?${query}` : ""}`, undefined, "Could not load leads.");
+}
+
+export async function setLeadStatus(leadId: string, status: string, note?: string): Promise<Lead> {
+  return platformJson<Lead>(`/platform/leads/${leadId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, note: note ?? null }),
+  }, "Could not update this lead.");
+}
+
+export async function addLeadComment(leadId: string, body: string): Promise<Lead> {
+  return platformJson<Lead>(`/platform/leads/${leadId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  }, "Could not save that note.");
+}
+
+// ---------- My profile ----------
+
+export type StaffProfile = {
+  id: string;
+  email: string;
+  role: string;
+  full_name: string | null;
+  phone: string | null;
+  job_title: string | null;
+  address: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  complete: boolean;
+};
+
+export async function getMyProfile(): Promise<StaffProfile> {
+  return platformJson<StaffProfile>("/platform/me", undefined, "Could not load your profile.");
+}
+
+export async function saveMyProfile(body: {
+  full_name: string; phone: string; job_title: string;
+  address?: string | null; emergency_contact_name?: string | null; emergency_contact_phone?: string | null;
+}): Promise<StaffProfile> {
+  return platformJson<StaffProfile>("/platform/me/profile", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  }, "Could not save your profile.");
+}

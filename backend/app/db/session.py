@@ -45,6 +45,13 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 # by reasoning about it in the abstract - see the git history for the
 # specific real regression this fixed before it ever reached production.
 _ADDED_COLUMNS = [
+    ("platform_staff", "full_name", "VARCHAR"),
+    ("platform_staff", "phone", "VARCHAR"),
+    ("platform_staff", "job_title", "VARCHAR"),
+    ("platform_staff", "address", "TEXT"),
+    ("platform_staff", "emergency_contact_name", "VARCHAR"),
+    ("platform_staff", "emergency_contact_phone", "VARCHAR"),
+    ("platform_staff", "profile_updated_at", "TIMESTAMP"),
     ("tenants", "billing_interval", "VARCHAR"),
     ("uploaded_documents", "content_sha256", "VARCHAR"),
     ("users", "created_at", "TIMESTAMP"),
