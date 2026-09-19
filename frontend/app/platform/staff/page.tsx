@@ -2,8 +2,16 @@
 
 import { useEffect, useState } from "react";
 import {
-  listStaff, inviteStaff, listStaffInvites, revokeStaffInvite, updateStaffRole, deleteStaff,
-  type Staff, type StaffInvite,
+  listStaff,
+  inviteStaff,
+  listStaffInvites,
+  revokeStaffInvite,
+  updateStaffRole,
+  deleteStaff,
+  type Staff,
+  type StaffInvite,
+  listStaffRoles,
+  type StaffRole,
 } from "@/lib/platformApi";
 import { loadPlatformSession } from "@/lib/platformAuth";
 
@@ -14,6 +22,7 @@ export default function PlatformStaffPage() {
   const [error, setError] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("support");
+  const [roles, setRoles] = useState<StaffRole[]>([]);
   const [busy, setBusy] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -23,6 +32,12 @@ export default function PlatformStaffPage() {
     listStaff()
       .then(setStaff)
       .catch((e) => setError(e.message));
+    listStaffRoles()
+      .then(setRoles)
+      .catch(() => {
+        /* The dropdowns fall back to whatever is already loaded rather
+           than blocking the page; the server validates the role anyway. */
+      });
     listStaffInvites()
       .then(setInvites)
       .catch(() => {
@@ -96,11 +111,16 @@ export default function PlatformStaffPage() {
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Staff</h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
         Meridian&apos;s own internal team — separate from any customer&apos;s users, with its own
-        login at /platform/login. <strong className="text-ink font-medium">Owner</strong> has full
-        access, including managing staff and deleting tenants.{" "}
-        <strong className="text-ink font-medium">Support</strong> can handle tenants and tickets but
-        can&apos;t manage staff or delete a tenant.
+        login at /platform/login.
       </p>
+
+      <ul className="mb-8 flex flex-col gap-1.5 text-[12.5px] text-ink-soft">
+        {roles.map((r) => (
+          <li key={r.key}>
+            <strong className="text-ink font-medium">{r.label}</strong> — {r.description}
+          </li>
+        ))}
+      </ul>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
 
@@ -122,8 +142,9 @@ export default function PlatformStaffPage() {
             onChange={(e) => setRole(e.target.value)}
             className="text-[13px] border border-line rounded-[3px] px-2 py-1.5 bg-panel text-ink"
           >
-            <option value="support">Support</option>
-            <option value="owner">Owner</option>
+            {roles.map((r) => (
+              <option key={r.key} value={r.key}>{r.label}</option>
+            ))}
           </select>
         </div>
         <div className="flex items-center justify-end">
@@ -208,8 +229,9 @@ export default function PlatformStaffPage() {
                   onChange={(e) => handleRoleChange(s.id, e.target.value)}
                   className="text-[12px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink"
                 >
-                  <option value="support">Support</option>
-                  <option value="owner">Owner</option>
+                  {roles.map((r) => (
+                    <option key={r.key} value={r.key}>{r.label}</option>
+                  ))}
                 </select>
                 <button
                   onClick={() => setRemovingId(removingId === s.id ? null : s.id)}

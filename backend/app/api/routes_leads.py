@@ -76,9 +76,14 @@ def register_interest(body: LeadIn, request: Request, background_tasks: Backgrou
 
     email = body.email.strip().lower()
     now = datetime.utcnow()
+    # Same person, same day, still live: one lead. A CLOSED lead is
+    # deliberately excluded - closing is final (routes_platform_leads.py),
+    # so someone who was closed off and writes in again is a fresh
+    # enquiry rather than a silent edit to a finished record.
     existing = (
         db.query(Lead)
-        .filter(Lead.email == email, Lead.created_at >= now - _DUPLICATE_WINDOW)
+        .filter(Lead.email == email, Lead.created_at >= now - _DUPLICATE_WINDOW,
+                Lead.status != "closed")
         .order_by(Lead.created_at.desc())
         .first()
     )

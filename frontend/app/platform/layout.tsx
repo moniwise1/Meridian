@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { clearPlatformSession } from "@/lib/platformAuth";
 import { usePlatformSession, useHydrated } from "@/lib/useSession";
@@ -23,6 +24,19 @@ const NAV = [
 ];
 
 const FULL_ACCESS_ROLES = ["owner", "support"];
+
+// Mirrors RESTRICTED_ROLE_ALLOWED_PREFIXES in
+// app/security/platform_auth.py, in page terms rather than API terms
+// (/platform/profile is the page; /platform/me is the endpoint behind it).
+// The server is what enforces this; showing "Not authorized" here just
+// means a restricted account gets a plain answer instead of a page that
+// loads and then fails to fetch anything.
+const RESTRICTED_ALLOWED_PAGES = ["/platform/leads", "/platform/tickets", "/platform/profile"];
+
+function allowedForRole(pathname: string, role: string): boolean {
+  if (FULL_ACCESS_ROLES.includes(role)) return true;
+  return RESTRICTED_ALLOWED_PAGES.some((prefix) => pathname.startsWith(prefix));
+}
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -71,7 +85,7 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
           <div className="text-[12px] border-t border-line pt-3">
             <div className="text-ink truncate">{session.email}</div>
             <div className="text-ink-soft mt-0.5 flex items-center justify-between">
-              <span className="capitalize">{session.role}</span>
+              <span className="capitalize">{session.role.replace("_", " ")}</span>
               <button onClick={handleLogout} className="text-teal hover:text-teal-deep transition-colors">
                 Sign out
               </button>
@@ -82,7 +96,23 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
           </div>
         </div>
       </aside>
-      <main className="flex-1 min-w-0">{children}</main>
+      <main className="flex-1 min-w-0">
+        {allowedForRole(pathname, session.role) ? (
+          children
+        ) : (
+          <div className="max-w-xl mx-auto px-8 py-16">
+            <h1 className="text-[22px] font-medium text-ink tracking-tight mb-2">Not authorized</h1>
+            <p className="text-[13.5px] text-ink-soft leading-relaxed">
+              Your account doesn&apos;t have access to this part of the console. You can open{" "}
+              <Link href="/platform/leads" className="text-teal hover:text-teal-deep transition-colors">Leads</Link>,{" "}
+              <Link href="/platform/tickets" className="text-teal hover:text-teal-deep transition-colors">Tickets</Link>{" "}
+              and{" "}
+              <Link href="/platform/profile" className="text-teal hover:text-teal-deep transition-colors">My profile</Link>.
+              If you need more, ask an owner.
+            </p>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

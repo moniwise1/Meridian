@@ -47,6 +47,11 @@ function LeadCard({ lead, onChanged }: { lead: Lead; onChanged: (next: Lead) => 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
+  // Collapsed by default: with a page full of enquiries, the summary row
+  // is enough to decide whether to open one, and it still carries the
+  // phone number and Copy button so a call needs no clicks first.
+  const [expanded, setExpanded] = useState(false);
+  const closed = lead.status === "closed";
 
   async function run(action: () => Promise<Lead>) {
     setBusy(true);
@@ -62,18 +67,44 @@ function LeadCard({ lead, onChanged }: { lead: Lead; onChanged: (next: Lead) => 
 
   return (
     <div className="bg-panel border border-line rounded-[4px] p-4">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="min-w-0">
-          <div className="text-[14px] text-ink font-medium">{lead.full_name}</div>
-          <div className="text-[12.5px] text-ink-soft">
-            {lead.business_name || <span className="italic">No business name given</span>}
-          </div>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="flex items-start gap-2 min-w-0 text-left group"
+        >
+          <span
+            aria-hidden
+            className={`mt-1 text-ink-soft transition-transform duration-300 ease-glide motion-reduce:transition-none ${expanded ? "rotate-90" : ""}`}
+          >
+            ▸
+          </span>
+          <span className="min-w-0">
+            <span className="block text-[14px] text-ink font-medium group-hover:text-teal transition-colors">
+              {lead.full_name}
+            </span>
+            <span className="block text-[12.5px] text-ink-soft">
+              {lead.business_name || <span className="italic">No business name given</span>}
+              {!expanded && <> · {new Date(lead.created_at).toLocaleDateString()}</>}
+            </span>
+          </span>
+        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {!expanded && (
+            <a href={`tel:${lead.phone}`} className="text-[12.5px] text-teal hover:text-teal-deep transition-colors font-[family-name:var(--font-mono)]">
+              {lead.phone}
+            </a>
+          )}
+          {!expanded && <CopyButton value={lead.phone} label="number" />}
+          <span className={`text-[11px] px-2 py-0.5 rounded-[3px] ${STATUS_STYLE[lead.status]}`}>
+            {STATUSES.find((s) => s.value === lead.status)?.label ?? lead.status}
+          </span>
         </div>
-        <span className={`text-[11px] px-2 py-0.5 rounded-[3px] shrink-0 ${STATUS_STYLE[lead.status]}`}>
-          {STATUSES.find((s) => s.value === lead.status)?.label ?? lead.status}
-        </span>
       </div>
 
+      {!expanded ? null : (
+      <>
       <div className="mt-3 flex flex-col gap-1.5 text-[12.5px]">
         <div className="flex items-center gap-2 flex-wrap">
           <a href={`tel:${lead.phone}`} className="text-teal hover:text-teal-deep transition-colors font-[family-name:var(--font-mono)]">
@@ -106,14 +137,27 @@ function LeadCard({ lead, onChanged }: { lead: Lead; onChanged: (next: Lead) => 
       </div>
 
       <div className="mt-4">
-        <GlideSegmented
-          ariaLabel={`Status for ${lead.full_name}`}
-          options={STATUSES.map((s) => ({ value: s.value, label: s.label }))}
-          value={lead.status}
-          onChange={(next) => {
-            if (next !== lead.status) void run(() => setLeadStatus(lead.id, next));
-          }}
-        />
+        {closed ? (
+          <div className="text-[12.5px] text-ink-soft bg-paper rounded-[3px] px-3 py-2">
+            This lead is <span className="text-ink font-medium">closed</span> and can&apos;t be
+            reopened. If they get in touch again it will come in as a new lead.
+          </div>
+        ) : (
+          <GlideSegmented
+            ariaLabel={`Status for ${lead.full_name}`}
+            options={STATUSES.map((s) => ({ value: s.value, label: s.label }))}
+            value={lead.status}
+            onChange={(next) => {
+              if (next === lead.status) return;
+              // Closing can't be undone, so it asks first. Every other
+              // status is freely changeable and doesn't interrupt.
+              if (next === "closed" && !window.confirm(
+                `Close ${lead.full_name}? This can't be undone — the lead can't be reopened afterwards.`,
+              )) return;
+              void run(() => setLeadStatus(lead.id, next));
+            }}
+          />
+        )}
       </div>
 
       <button
@@ -166,6 +210,8 @@ function LeadCard({ lead, onChanged }: { lead: Lead; onChanged: (next: Lead) => 
       )}
 
       {error && <div role="alert" className="mt-2 text-[12px] text-red">{error}</div>}
+      </>
+      )}
     </div>
   );
 }
@@ -210,13 +256,36 @@ export default function PlatformLeadsPage() {
         className="mb-6"
       />
 
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search by name, business, email or phone…"
-        className="w-full mb-6 text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
-      />
+      <form
+        className="flex gap-2 mb-6"
+        onSubmit={(e) => {
+          e.preventDefault();
+          refresh();   // pressing Search (or Enter) looks now rather than waiting
+        }}
+      >
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name, business, email or phone…"
+          className="flex-1 min-w-0 text-[13px] border border-line rounded-[3px] px-2.5 py-1.5 bg-panel text-ink placeholder:text-ink-soft/50 focus:outline-none focus:ring-1 focus:ring-teal"
+        />
+        <button
+          type="submit"
+          className="text-[13px] px-4 py-1.5 rounded-[3px] bg-teal-deep text-white hover:bg-teal transition-colors"
+        >
+          Search
+        </button>
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            className="text-[13px] px-3 py-1.5 rounded-[3px] border border-line text-ink-soft hover:text-ink hover:border-ink-soft transition-colors"
+          >
+            Clear
+          </button>
+        )}
+      </form>
 
       {error && <div role="alert" className="mb-4 text-[13px] text-red">{error}</div>}
 
@@ -228,6 +297,10 @@ export default function PlatformLeadsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-3">
+          <div className="text-[12px] text-ink-soft">
+            {leads.length} {leads.length === 1 ? "lead" : "leads"}
+            {leads.length >= 500 && " (showing the most recent 500)"}
+          </div>
           {leads.map((lead) => (
             <LeadCard
               key={lead.id}

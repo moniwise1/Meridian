@@ -27,7 +27,7 @@ from app.db.models import Lead, LeadComment, PlatformStaff
 from app.security.auth import hash_password
 from app.security.platform_auth import create_platform_access_token, path_allowed_for_staff_role
 from app.leads import sheets
-from app.api.routes_platform import VALID_STAFF_ROLES
+from app.api.routes_platform import VALID_STAFF_ROLES, STAFF_ROLES
 
 init_db()
 client = TestClient(app)
@@ -63,6 +63,7 @@ sheets._push = fake_push
 OWNER = staff("owner", "owner@meridian.test")
 SALES = staff("sales", "sales@meridian.test")
 SUPPORT = staff("support", "support@meridian.test")
+SOCIAL = staff("social_media", "smm@meridian.test")
 
 
 # --- 1. the public form stores a lead, with its campaign --------------------
@@ -165,15 +166,15 @@ assert client.patch(f"/platform/leads/{lead_id}", headers=SALES, json={"status":
 print("8. OK  status changes and notes are kept with the author, and a bad status is refused")
 
 
-# --- 9. a salesperson is confined to leads, tickets and their own profile ---
-allowed = ["/platform/leads", "/platform/tickets", "/platform/me"]
-for path in allowed:
-    assert client.get(path, headers=SALES).status_code == 200, path
-for path in ["/platform/tenants", "/platform/analytics", "/platform/audit", "/platform/staff",
-             "/platform/health-snapshot", "/platform/incidents"]:
-    assert client.get(path, headers=SALES).status_code == 403, f"sales reached {path}"
-    assert client.get(path, headers=SUPPORT).status_code != 403, f"support was blocked from {path}"
-print("9. OK  sales is blocked from tenants, revenue, the audit trail and staff; support is not")
+# --- 9. restricted roles see leads and their own profile, nothing else ---
+for headers, who in [(SALES, "sales"), (SOCIAL, "social media manager")]:
+    for path in ["/platform/leads", "/platform/tickets", "/platform/me"]:
+        assert client.get(path, headers=headers).status_code == 200, (who, path)
+    for path in ["/platform/tenants", "/platform/analytics", "/platform/audit",
+                 "/platform/staff", "/platform/staff/roles", "/platform/health-snapshot", "/platform/incidents"]:
+        assert client.get(path, headers=headers).status_code == 403, f"{who} reached {path}"
+        assert client.get(path, headers=SUPPORT).status_code != 403, f"support was blocked from {path}"
+print("9. OK  sales and social media see leads, tickets and their profile - and nothing else")
 
 
 # --- 10. EVERY platform route is default-deny for a restricted role --------
@@ -181,14 +182,27 @@ print("9. OK  sales is blocked from tenants, revenue, the audit trail and staff;
 #         would leak customer data to sales fails this test rather than
 #         shipping.
 platform_paths = [p for p in app.openapi()["paths"] if p.startswith("/platform")]
-reachable = sorted(p for p in platform_paths if path_allowed_for_staff_role(p, "sales"))
-assert reachable == sorted([
-    "/platform/leads", "/platform/leads/{lead_id}", "/platform/leads/{lead_id}/comments",
-    "/platform/me", "/platform/me/profile",
-    "/platform/tickets", "/platform/tickets/{ticket_id}", "/platform/tickets/{ticket_id}/messages",
-]), reachable
+for role in ("sales", "social_media"):
+    reachable = sorted(p for p in platform_paths if path_allowed_for_staff_role(p, role))
+    assert reachable == sorted([
+        "/platform/leads", "/platform/leads/{lead_id}", "/platform/leads/{lead_id}/comments",
+        "/platform/me", "/platform/me/profile",
+        "/platform/tickets", "/platform/tickets/{ticket_id}", "/platform/tickets/{ticket_id}/messages",
+    ]), (role, reachable)
 assert len(platform_paths) - len(reachable) >= 15, "expected many owner/support-only routes"
 print(f"10. OK  of {len(platform_paths)} console routes, a restricted role can reach exactly {len(reachable)}")
+
+
+# --- 10b. the console's role dropdown is served, not hardcoded -------------
+#          "sales" existed on the server for a day while the Staff page's
+#          hardcoded <option> list didn't have it, so it couldn't be
+#          assigned to anyone. One list now, served to the page.
+served = client.get("/platform/staff/roles", headers=OWNER).json()
+assert [r["key"] for r in served] == [r["key"] for r in STAFF_ROLES]
+assert {r["key"] for r in served} == VALID_STAFF_ROLES, (served, VALID_STAFF_ROLES)
+assert all(r["label"] and r["description"] for r in served), served
+assert {"sales", "social_media"} <= {r["key"] for r in served}
+print("10b. OK  every assignable role is served to the console, including sales and social media")
 
 
 # --- 11. staff fill in their own profile, and only their own --------------
@@ -208,8 +222,8 @@ assert db.query(PlatformStaff).filter_by(email="owner@meridian.test").one().full
 print("11. OK  a staff member fills in their own details; nobody else's row is touched")
 
 
-# --- 12. the owner can see who is who, and can invite a salesperson -------
-assert "sales" in VALID_STAFF_ROLES
+# --- 12. the owner can see who is who, and can invite the new roles -------
+assert {"sales", "social_media"} <= VALID_STAFF_ROLES
 listing = {s["email"]: s for s in client.get("/platform/staff", headers=OWNER).json()}
 assert listing["sales@meridian.test"]["full_name"] == "Chidi Sales"
 assert listing["sales@meridian.test"]["job_title"] == "Sales executive"
@@ -222,6 +236,37 @@ codes = [submit("9.9.9.9", email=f"flood{i}@example.com").status_code for i in r
 assert 429 in codes, codes
 assert codes.count(200) <= 12, codes
 print(f"13. OK  the public form is capped per IP ({codes.count(200)} accepted, then 429)")
+
+# --- 14. closing a lead is final ------------------------------------------
+r = client.post("/leads", json={"full_name": "Final Test", "email": "final@example.com",
+                                "phone": "08012349999"}, headers={"x-forwarded-for": "14.14.14.14"})
+assert r.status_code == 200, r.text
+lead_id = [l for l in client.get("/platform/leads", headers=SALES).json()
+           if l["email"] == "final@example.com"][0]["id"]
+assert client.patch(f"/platform/leads/{lead_id}", headers=SALES, json={"status": "closed"}).status_code == 200
+for attempt in ("open", "won", "not_interested"):
+    r = client.patch(f"/platform/leads/{lead_id}", headers=SALES, json={"status": attempt})
+    assert r.status_code == 400 and "can't be reopened" in r.json()["detail"], (attempt, r.text)
+db.expire_all()
+assert db.query(Lead).filter_by(id=lead_id).one().status == "closed"
+# Re-closing is not an error, and notes can still be added afterwards.
+assert client.patch(f"/platform/leads/{lead_id}", headers=SALES, json={"status": "closed"}).status_code == 200
+assert client.post(f"/platform/leads/{lead_id}/comments", headers=SALES,
+                   json={"body": "Filed away."}).status_code == 200
+print("14. OK  a closed lead cannot be reopened, but can still be annotated")
+
+
+# --- 15. a closed lead who writes in again becomes a NEW lead -------------
+before = db.query(Lead).filter_by(email="final@example.com").count()
+r = client.post("/leads", json={"full_name": "Final Test", "email": "final@example.com",
+                                "phone": "08012349999", "message": "Changed my mind"},
+                headers={"x-forwarded-for": "15.15.15.15"})
+assert r.status_code == 200, r.text
+db.expire_all()
+rows = db.query(Lead).filter_by(email="final@example.com").order_by(Lead.created_at).all()
+assert len(rows) == before + 1, "a closed lead should not be silently reopened by a new enquiry"
+assert rows[0].status == "closed" and rows[-1].status == "open"
+print("15. OK  someone who was closed off and writes in again arrives as a new, open lead")
 
 db.close()
 print("\nALL LEADS CRM CHECKS PASSED")

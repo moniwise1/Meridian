@@ -178,16 +178,37 @@ class StaffOut(BaseModel):
                     full_name=s.full_name, job_title=s.job_title, phone=s.phone)
 
 
+@router.get("/staff/roles")
+def list_staff_roles(ctx: PlatformAuthContext = Depends(get_current_staff)):
+    """What roles can be assigned, for the invite and role-change dropdowns.
+    Served rather than hardcoded in the frontend so the two can't disagree."""
+    return STAFF_ROLES
+
+
 @router.get("/staff", response_model=list[StaffOut])
 def list_staff(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends(get_current_staff)):
     rows = db.query(PlatformStaff).order_by(PlatformStaff.created_at.asc()).all()
     return [StaffOut.from_staff(s) for s in rows]
 
 
-# "sales" is a RESTRICTED role: it can reach the leads CRM, support
-# tickets and its own profile, and nothing else - enforced centrally in
-# app/security/platform_auth.py, not here.
-VALID_STAFF_ROLES = {"owner", "support", "sales"}
+# The only definition of what staff roles exist. The console's dropdowns
+# read this through GET /platform/staff/roles rather than keeping their own
+# copy - a role that existed here but not in the frontend list could not be
+# assigned to anyone, which is exactly what happened when "sales" was added.
+#
+# Which AREAS each role may reach is not here: that is
+# app/security/platform_auth.py, default-deny, enforced on every request.
+STAFF_ROLES = [
+    {"key": "owner", "label": "Owner",
+     "description": "Full access, including managing staff and deleting tenants."},
+    {"key": "support", "label": "Support",
+     "description": "Tenants and tickets, but cannot manage staff or delete a tenant."},
+    {"key": "sales", "label": "Sales",
+     "description": "Leads, tickets and their own profile. No tenants, revenue or staff."},
+    {"key": "social_media", "label": "Social media manager",
+     "description": "Leads, tickets and their own profile. No tenants, revenue or staff."},
+]
+VALID_STAFF_ROLES = {r["key"] for r in STAFF_ROLES}
 
 
 # ---------- Staff invites ----------
