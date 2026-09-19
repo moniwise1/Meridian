@@ -32,7 +32,7 @@ unauthenticated request specifically because no staff exist yet to
 authenticate as; every one after that requires an existing "owner" to
 create it.
 """
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 import jwt
@@ -66,7 +66,32 @@ class PlatformAuthContext:
         self.role = role
 
 
+# Which parts of the internal console each kind of staff account may
+# reach. "owner" and "support" see all of it; every OTHER role is confined
+# to the prefixes below.
+#
+# Deliberately default-DENY, and enforced here rather than route by route:
+# a new restricted role, or a new platform route added later, is locked
+# down by default instead of being quietly reachable because somebody
+# forgot a decorator. tests/verify_leads_crm.py walks every registered
+# /platform route and asserts exactly which ones a sales account can reach,
+# so adding a route that leaks customer data to sales fails the build.
+FULL_ACCESS_STAFF_ROLES = ("owner", "support")
+RESTRICTED_ROLE_ALLOWED_PREFIXES = (
+    "/platform/leads",    # the sales CRM itself
+    "/platform/tickets",  # support conversations
+    "/platform/me",       # their own profile
+)
+
+
+def path_allowed_for_staff_role(path: str, role: str) -> bool:
+    if role in FULL_ACCESS_STAFF_ROLES:
+        return True
+    return path.startswith(RESTRICTED_ROLE_ALLOWED_PREFIXES)
+
+
 def get_current_staff(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> PlatformAuthContext:
@@ -90,6 +115,13 @@ def get_current_staff(
     staff = db.query(PlatformStaff).filter_by(id=staff_id).first()
     if not staff:
         raise HTTPException(401, "Staff account no longer exists.")
+
+    # The area check belongs here, where the staff identity is
+    # established, because EVERY authenticated platform route goes through
+    # this dependency - while the public ones (login, bootstrap, accepting
+    # an invite) don't, and so stay reachable.
+    if not path_allowed_for_staff_role(request.url.path, staff.role):
+        raise HTTPException(403, "Your role doesn't have access to this part of the console.")
 
     return PlatformAuthContext(staff_id=staff.id, role=staff.role)
 

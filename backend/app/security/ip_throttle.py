@@ -25,7 +25,7 @@ from app.security.rate_limit import (
 )
 from app.security.redis_client import get_redis_client
 
-__all__ = ["client_ip", "check_register_rate_limit", "RateLimitExceeded"]
+__all__ = ["client_ip", "check_register_rate_limit", "check_lead_form_rate_limit", "RateLimitExceeded"]
 
 
 def client_ip(request: Request) -> str:
@@ -51,3 +51,12 @@ def check_register_rate_limit(ip: str) -> None:
     """Raises RateLimitExceeded if this IP has registered too many times in
     the last hour."""
     _register_limiter.check(f"register:{ip}")
+
+
+_lead_form_limiter = _make_limiter(settings.lead_form_rate_limit_per_ip_per_hour, 3600)
+
+
+def check_lead_form_rate_limit(ip: str) -> None:
+    """The public "Register your interest" form (app/api/routes_leads.py) is
+    unauthenticated, so it is throttled per IP exactly like registration."""
+    _lead_form_limiter.check(f"lead_form:{ip}")

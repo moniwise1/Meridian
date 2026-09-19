@@ -36,6 +36,7 @@ export default function Sidebar() {
   if (
     pathname === "/login" ||
     pathname === "/status" ||
+    pathname === "/interest" ||
     pathname === "/auth/handoff" ||
     pathname === "/accept-invite" ||
     pathname === "/mfa-recovery" ||

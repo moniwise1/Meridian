@@ -499,13 +499,22 @@ export default function LandingPage() {
           Bring a report or connect a database. Ask the question you need answered,
           then see what your data can tell you.
         </p>
-        <Link
-          href="/login?mode=register"
-          onClick={() => track("cta_get_started", { location: "final_cta" })}
-          className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_PRIMARY}`}
-        >
-          Start exploring free
-        </Link>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/login?mode=register"
+            onClick={() => track("cta_get_started", { location: "final_cta" })}
+            className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_PRIMARY}`}
+          >
+            Start exploring free
+          </Link>
+          <Link
+            href="/interest"
+            onClick={() => track("cta_register_interest", { location: "final_cta" })}
+            className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_SECONDARY}`}
+          >
+            Register your interest
+          </Link>
+        </div>
       </section>
 
       <footer className="border-t border-line">

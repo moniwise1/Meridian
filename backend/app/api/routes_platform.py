@@ -162,6 +162,11 @@ class StaffOut(BaseModel):
     email: str
     role: str
     created_at: str
+    # From the staff member's own profile (routes_platform_leads.py). Null
+    # until they fill it in; this listing is staff-only already.
+    full_name: str | None = None
+    job_title: str | None = None
+    phone: str | None = None
 
     class Config:
         from_attributes = True
@@ -169,7 +174,8 @@ class StaffOut(BaseModel):
     @classmethod
     def from_staff(cls, s: PlatformStaff) -> "StaffOut":
         return cls(id=s.id, email=s.email, role=s.role,
-                    created_at=s.created_at.isoformat() if s.created_at else "")
+                    created_at=s.created_at.isoformat() if s.created_at else "",
+                    full_name=s.full_name, job_title=s.job_title, phone=s.phone)
 
 
 @router.get("/staff", response_model=list[StaffOut])
@@ -178,7 +184,10 @@ def list_staff(db: Session = Depends(get_db), ctx: PlatformAuthContext = Depends
     return [StaffOut.from_staff(s) for s in rows]
 
 
-VALID_STAFF_ROLES = {"owner", "support"}
+# "sales" is a RESTRICTED role: it can reach the leads CRM, support
+# tickets and its own profile, and nothing else - enforced centrally in
+# app/security/platform_auth.py, not here.
+VALID_STAFF_ROLES = {"owner", "support", "sales"}
 
 
 # ---------- Staff invites ----------

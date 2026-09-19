@@ -1219,6 +1219,36 @@ export async function analystRequest<T = unknown>(
   return payload as T;
 }
 
+export type InterestSubmission = {
+  full_name: string;
+  business_name: string | null;
+  email: string;
+  phone: string;
+  message: string | null;
+  consent: boolean;
+  source: string | null;
+  campaign: string | null;
+  company_website: string;   // honeypot - always empty for a real person
+};
+
+/** The public "Register your interest" form. Deliberately unauthenticated:
+ *  it is filled in by people who have no account yet. */
+export async function registerInterest(body: InterestSubmission): Promise<void> {
+  const res = await fetch(`${API_BASE}/leads`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      typeof payload.detail === "string"
+        ? payload.detail
+        : "Sorry, we couldn't send that. Please check your details and try again.",
+    );
+  }
+}
+
 export async function verifyAuditChain(): Promise<AuditVerification> {
   const res = await fetch(`${API_BASE}/audit/verify`, { headers: authHeaders() });
   await handleAuthFailure(res);

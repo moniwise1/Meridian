@@ -379,8 +379,19 @@ class PlatformStaff(Base):
     id = Column(String, primary_key=True, default=_uuid)
     email = Column(String, nullable=False, unique=True)
     password_hash = Column(String, nullable=False)
-    role = Column(String, nullable=False, default="support")  # "owner" | "support"
+    role = Column(String, nullable=False, default="support")  # "owner" | "support" | "sales"
     created_at = Column(DateTime, default=datetime.utcnow)
+    # The staff member's own details, filled in by them on their profile
+    # page and stored on their own account. Nullable because every account
+    # that existed before this feature has none yet, and an invite is
+    # accepted before there's anywhere to type them.
+    full_name = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    job_title = Column(String, nullable=True)
+    address = Column(Text, nullable=True)
+    emergency_contact_name = Column(String, nullable=True)
+    emergency_contact_phone = Column(String, nullable=True)
+    profile_updated_at = Column(DateTime, nullable=True)
 
 
 class SupportTicket(Base):
@@ -476,6 +487,54 @@ class Invite(Base):
     expires_at = Column(DateTime, nullable=False)
     status = Column(String, nullable=False, default="pending")  # pending | accepted | revoked | expired
     accepted_at = Column(DateTime, nullable=True)
+
+
+class Lead(Base):
+    """Someone who asked to be contacted through the public "Register your
+    interest" form (app/api/routes_leads.py) - a prospect, NOT a Tenant or
+    a User. Deliberately platform-level and tenant-less: these are
+    Meridian's own sales enquiries, and the row exists long before there is
+    any organization to scope it to.
+
+    This table is the source of truth. The Google Sheet (app/leads/sheets.py)
+    is a copy pushed out for convenience, so a sheet that is misconfigured,
+    unreachable or deleted can never cost a lead."""
+    __tablename__ = "leads"
+    id = Column(String, primary_key=True, default=_uuid)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    full_name = Column(String, nullable=False)
+    business_name = Column(String, nullable=True)
+    email = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    message = Column(Text, nullable=True)
+    # Where the enquiry came from, straight off the link the ad used
+    # (?source=facebook&campaign=...), so spend can be judged per campaign.
+    source = Column(String, nullable=True)
+    campaign = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="open")  # open | won | not_interested | closed
+    # When they ticked the "you may contact me" box. Null for none given.
+    consented_at = Column(DateTime, nullable=True)
+    # Google Sheet delivery (app/leads/sheets.py). synced_at null with a
+    # non-null error means it failed and is waiting to be retried.
+    sheet_synced_at = Column(DateTime, nullable=True)
+    sheet_sync_error = Column(String, nullable=True)
+    sheet_attempts = Column(Integer, default=0, nullable=False)
+
+
+class LeadComment(Base):
+    """A note a staff member left on a lead, or a record of a status change.
+    Kept as its own rows rather than one free-text field on the lead so the
+    history is ordered, attributed, and never overwritten by the next
+    person to touch it."""
+    __tablename__ = "lead_comments"
+    id = Column(String, primary_key=True, default=_uuid)
+    lead_id = Column(String, ForeignKey("leads.id"), nullable=False, index=True)
+    staff_id = Column(String, nullable=True)
+    staff_email = Column(String, nullable=True)
+    kind = Column(String, nullable=False, default="note")  # note | status
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AskMemory(Base):
