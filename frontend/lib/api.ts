@@ -698,7 +698,15 @@ export async function subscribe(
   });
   await handleAuthFailure(res);
   const body = await res.json();
-  if (!res.ok) throw new Error(body.detail ?? "Could not start checkout.");
+  if (!res.ok) {
+    // The status travels with the error: a 409 here is not a failure to
+    // show in red - it's "your earlier payment went through" or "your
+    // earlier payment is still processing" (see routes_billing.py
+    // _recheck_pending_checkout), which the Billing page shows as a notice.
+    const err = new Error(body.detail ?? "Could not start checkout.") as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   return body;
 }
 

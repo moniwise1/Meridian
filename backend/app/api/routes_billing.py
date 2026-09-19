@@ -17,6 +17,7 @@ money moving deserves at least the same trail as a query running.
 """
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -143,6 +144,64 @@ def get_status(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_cur
     return _status_for(db, tenant)
 
 
+# Paystack transaction statuses that mean no money moved on that attempt,
+# so starting a fresh checkout cannot double-charge. "success" is handled
+# separately (activate instead), and anything else - "ongoing", "pending",
+# "processing", "queued", or a status Paystack adds later - may still turn
+# into a charge, so a retry is refused until it settles.
+_RETRYABLE_CHECKOUT_STATUSES = {"abandoned", "failed", "reversed"}
+
+
+def _recheck_pending_checkout(db: Session, tenant: Tenant, user_id: str) -> None:
+    """Called by /subscribe when the tenant is still "pending" from an
+    earlier checkout - i.e. they opened Paystack's payment page and never
+    came back through /billing/verify, and no webhook has arrived.
+
+    Before this existed, a tenant in that state was stuck for good: the
+    Billing page hid the plan cards for "pending" and only said "Waiting for
+    payment confirmation", so closing the payment page without paying left
+    no way to try again.
+
+    Simply allowing a new checkout would risk the opposite problem - the
+    first attempt may actually have been PAID, with the confirmation just
+    not here yet - so this asks Paystack what really happened to it first.
+    Returns normally only when a fresh checkout is safe; otherwise raises
+    an HTTPException that explains, in plain terms, what to do instead."""
+    reference = tenant.last_transaction_reference
+    if tenant.subscription_status != "pending" or not reference:
+        return
+    try:
+        data = paystack.verify_transaction(reference)
+    except PaystackError as e:
+        if "not found" in str(e).lower():
+            # Paystack has no record of that attempt at all, so nothing
+            # from it can ever be charged.
+            return
+        raise HTTPException(502, "We couldn't confirm what happened to your previous checkout "
+                                 "with Paystack. Please try again in a minute.")
+    except httpx.HTTPError:
+        raise HTTPException(502, "We couldn't reach Paystack to check your previous checkout. "
+                                 "Please try again in a minute.")
+
+    status = data.get("status")
+    if status == "success":
+        md = data.get("metadata")
+        if isinstance(md, dict) and md.get("tenant_id") and md["tenant_id"] != tenant.id:
+            audit.log(db, tenant.id, "subscription_recheck_tenant_mismatch", user_id,
+                      status="denied", detail={"reference": reference})
+            raise HTTPException(403, "That earlier payment was not for your organization.")
+        # They DID pay - honour that payment instead of taking another one.
+        _activate(db, tenant, data, source="subscribe_recheck", user_id=user_id)
+        raise HTTPException(409, "Good news - your earlier payment went through, so your "
+                                 "subscription is already active. You haven't been charged again.")
+    if status in _RETRYABLE_CHECKOUT_STATUSES:
+        audit.log(db, tenant.id, "subscription_checkout_restarted", user_id,
+                  detail={"previous_reference": reference, "previous_status": status})
+        return
+    raise HTTPException(409, "Your previous payment is still being processed by Paystack. "
+                             "Please wait a minute, then refresh this page.")
+
+
 class SubscribeRequest(BaseModel):
     plan: str  # "basic" | "pro" | "premium" - see app/billing/plans.py
     callback_url: str
@@ -161,6 +220,9 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
         raise HTTPException(404, "Tenant or user not found.")
     if tenant.subscription_status == "active":
         raise HTTPException(400, "This organization already has an active subscription.")
+    # A checkout left open or abandoned earlier: find out what became of it
+    # before starting another one (see _recheck_pending_checkout).
+    _recheck_pending_checkout(db, tenant, ctx.user_id)
 
     plan = get_plan(body.plan)
     if not plan:
