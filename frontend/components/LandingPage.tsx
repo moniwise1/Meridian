@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listPlans, type Plan } from "@/lib/api";
 import BillingIntervalToggle, { PlanPrice, type BillingInterval } from "@/components/BillingIntervalToggle";
+import InterestForm from "@/components/InterestForm";
 import { track } from "@/lib/analytics";
 
 const FEATURES = [
@@ -236,6 +237,7 @@ export default function LandingPage() {
             <a href="#features" className="hover:text-ink transition-colors">Product</a>
             <a href="#security" className="hover:text-ink transition-colors">Security</a>
             <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
+            <a href="#inquire" className="hover:text-ink transition-colors">Inquire now</a>
           </nav>
           <div className="flex items-center gap-3">
             <Link href="/login" className="text-sm text-ink-soft hover:text-ink transition-colors">
@@ -491,29 +493,29 @@ export default function LandingPage() {
         )}
       </section>
 
-      <section className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20 border-t border-line bg-panel text-center">
-        <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-4">
-          What question is holding up your next decision?
-        </h2>
-        <p className="text-base text-ink-soft leading-relaxed mb-8 max-w-xl mx-auto">
-          Bring a report or connect a database. Ask the question you need answered,
-          then see what your data can tell you.
-        </p>
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <Link
-            href="/login?mode=register"
-            onClick={() => track("cta_get_started", { location: "final_cta" })}
-            className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_PRIMARY}`}
-          >
-            Start exploring free
-          </Link>
-          <Link
-            href="/interest"
-            onClick={() => track("cta_register_interest", { location: "final_cta" })}
-            className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_SECONDARY}`}
-          >
-            Register your interest
-          </Link>
+      {/* The enquiry form itself, not a link to it: someone who has read
+          this far shouldn't have to load another page to get in touch.
+          /interest carries the same form for ad traffic. */}
+      <section id="inquire" className="scroll-mt-24 py-14 md:py-20 border-t border-line bg-panel">
+        <div className="max-w-[1200px] mx-auto px-6 md:px-8 grid gap-10 lg:grid-cols-2 lg:items-start">
+          <div className="max-w-xl">
+            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-4">
+              What question is holding up your next decision?
+            </h2>
+            <p className="text-base text-ink-soft leading-relaxed mb-6">
+              Leave your details and we&apos;ll show you what Meridian can do with your own data —
+              a report you already have, or a database you already run. No payment to start the
+              conversation.
+            </p>
+            <Link
+              href="/login?mode=register"
+              onClick={() => track("cta_get_started", { location: "final_cta" })}
+              className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_SECONDARY}`}
+            >
+              Or start exploring free
+            </Link>
+          </div>
+          <InterestForm defaultSource="landing_page" compact />
         </div>
       </section>
 
@@ -543,6 +545,7 @@ export default function LandingPage() {
               <a href="#features" className="hover:text-ink transition-colors">Product</a>
               <a href="#security" className="hover:text-ink transition-colors">Security</a>
               <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
+              <a href="#inquire" className="hover:text-ink transition-colors">Inquire now</a>
             </nav>
           </div>
 
