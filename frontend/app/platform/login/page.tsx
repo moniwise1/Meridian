@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { staffLogin, bootstrapOwner } from "@/lib/platformApi";
 import { savePlatformSession } from "@/lib/platformAuth";
+import GlideSegmented from "@/components/glide/GlideSegmented";
 
 export default function PlatformLoginPage() {
   const router = useRouter();
@@ -41,26 +42,17 @@ export default function PlatformLoginPage() {
         </div>
 
         <div className="bg-panel border border-line rounded-[4px] p-6">
-          <div className="flex gap-1 mb-5 text-[13px]">
-            <button
-              type="button"
-              onClick={() => setMode("login")}
-              className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
-                mode === "login" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
-              }`}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("bootstrap")}
-              className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
-                mode === "bootstrap" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
-              }`}
-            >
-              First-time setup
-            </button>
-          </div>
+          <GlideSegmented
+            ariaLabel="Sign in or first-time setup"
+            options={[
+              { value: "login", label: "Sign in" },
+              { value: "bootstrap", label: "First-time setup" },
+            ]}
+            value={mode}
+            onChange={setMode}
+            fullWidth
+            className="mb-5"
+          />
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
             <label className="flex flex-col gap-1">

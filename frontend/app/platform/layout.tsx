@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect } from "react";
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { clearPlatformSession } from "@/lib/platformAuth";
 import { usePlatformSession, useHydrated } from "@/lib/useSession";
+import GlideNav from "@/components/glide/GlideNav";
 
 const NAV = [
   { href: "/platform", label: "Dashboard" },
@@ -40,6 +40,12 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
     router.push("/platform/login");
   }
 
+  const navItems = NAV.filter((item) => !item.ownerOnly || session.role === "owner");
+  const activeHref =
+    navItems.find((item) =>
+      item.href === "/platform" ? pathname === "/platform" : pathname.startsWith(item.href),
+    )?.href ?? null;
+
   return (
     <div className="flex min-h-screen">
       <aside className="w-56 shrink-0 border-r border-line bg-panel px-5 py-6 flex flex-col gap-8">
@@ -48,22 +54,7 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
           <div className="text-[11px] text-ink-soft mt-0.5">Internal admin</div>
         </div>
 
-        <nav className="flex flex-col gap-1">
-          {NAV.filter((item) => !item.ownerOnly || session.role === "owner").map((item) => {
-            const active = item.href === "/platform" ? pathname === "/platform" : pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`text-[13.5px] px-2.5 py-1.5 rounded-[3px] transition-colors ${
-                  active ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink hover:bg-paper"
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+        <GlideNav items={navItems} activeHref={activeHref} />
 
         <div className="mt-auto flex flex-col gap-3">
           <div className="text-[12px] border-t border-line pt-3">

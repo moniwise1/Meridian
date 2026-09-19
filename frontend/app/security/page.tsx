@@ -7,6 +7,7 @@ import {
 } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 import MfaEnroll from "@/components/MfaEnroll";
+import GlideSwitch from "@/components/glide/GlideSwitch";
 
 export default function SecurityPage() {
   const [status, setStatus] = useState<MfaStatus | null>(null);
@@ -207,16 +208,12 @@ export default function SecurityPage() {
             Require two-factor authentication for every account on this tenant, present and future.
             Anyone not yet enrolled will be walked through setup the next time they sign in.
           </p>
-          <label className="flex items-center gap-2 text-[12.5px] text-ink cursor-pointer w-fit">
-            <input
-              type="checkbox"
-              checked={status.tenant_requires_mfa}
-              disabled={policyBusy}
-              onChange={(e) => togglePolicy(e.target.checked)}
-              className="accent-teal-deep"
-            />
-            Require two-factor authentication for everyone
-          </label>
+          <GlideSwitch
+            checked={status.tenant_requires_mfa}
+            disabled={policyBusy}
+            onChange={togglePolicy}
+            label="Require two-factor authentication for everyone"
+          />
         </div>
       )}
 

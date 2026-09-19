@@ -10,6 +10,7 @@ import { saveSession, loadSession } from "@/lib/auth";
 import { getTenantSubdomain } from "@/lib/subdomain";
 import { track } from "@/lib/analytics";
 import MfaEnroll from "@/components/MfaEnroll";
+import GlideSegmented from "@/components/glide/GlideSegmented";
 
 const APEX_DOMAIN = process.env.NEXT_PUBLIC_APEX_DOMAIN ?? "getmeridiananalytics.com";
 
@@ -335,26 +336,17 @@ function LoginPageInner() {
         {tenant ? (
           <div className="text-[15px] font-medium text-ink text-center mb-5">Sign in to {tenant.name}</div>
         ) : (
-          <div className="flex gap-1 mb-5 text-[13px]">
-            <button
-              type="button"
-              onClick={() => setMode("login")}
-              className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
-                effectiveMode === "login" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
-              }`}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("register")}
-              className={`flex-1 py-1.5 rounded-[3px] transition-colors ${
-                effectiveMode === "register" ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink"
-              }`}
-            >
-              Create account
-            </button>
-          </div>
+          <GlideSegmented
+            ariaLabel="Sign in or create an account"
+            options={[
+              { value: "login", label: "Sign in" },
+              { value: "register", label: "Create account" },
+            ]}
+            value={effectiveMode}
+            onChange={setMode}
+            fullWidth
+            className="mb-5"
+          />
         )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">

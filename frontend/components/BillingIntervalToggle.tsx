@@ -53,7 +53,7 @@ export default function BillingIntervalToggle({
           the other option. motion-reduce drops the slide, not the state. */}
       <span
         aria-hidden
-        className="absolute top-1 bottom-1 left-1 w-36 rounded-full bg-teal-deep shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_6px_16px_rgba(18,63,61,0.32)] transition-transform duration-500 ease-[cubic-bezier(0.34,1.3,0.5,1)] motion-reduce:transition-none"
+        className="absolute top-1 bottom-1 left-1 w-36 rounded-full bg-teal-deep shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_6px_16px_rgba(18,63,61,0.32)] transition-transform duration-500 ease-glide motion-reduce:transition-none"
         style={{ transform: annual ? "translateX(100%)" : "translateX(0)" }}
       />
       <button
