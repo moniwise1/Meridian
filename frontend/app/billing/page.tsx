@@ -45,6 +45,8 @@ export default function BillingPage() {
   const [status, setStatus] = useState<BillingStatus | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [error, setError] = useState("");
+  // Neutral, not an error: e.g. "your earlier payment went through".
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<string | null>(null); // plan key currently subscribing, or "cancel"
   const [billingInterval, setBillingInterval] = useState<BillingInterval>("monthly");
   const isAdmin = loadSession()?.role === "admin";
@@ -65,6 +67,7 @@ export default function BillingPage() {
   async function handleSubscribe(planKey: string) {
     setBusy(planKey);
     setError("");
+    setNotice("");
     try {
       track("subscribe_clicked", { plan: planKey, interval: billingInterval });
       const callbackUrl = `${window.location.origin}/billing/callback`;
@@ -73,7 +76,15 @@ export default function BillingPage() {
       // navigation, not a client-side route change.
       window.location.assign(result.authorization_url);
     } catch (e) {
-      setError((e as Error).message);
+      const err = e as Error & { status?: number };
+      if (err.status === 409) {
+        // Not a failure - the earlier checkout resolved one way or another
+        // (paid, or still processing). Say so plainly and show the real state.
+        setNotice(err.message);
+        refresh();
+      } else {
+        setError(err.message);
+      }
       setBusy(null);
     }
   }
@@ -97,8 +108,19 @@ export default function BillingPage() {
     new Date(status.refund_eligible_until) > new Date();
 
   const currentPlan = status?.plan ? plans.find((p) => p.key === status.plan) : null;
+  // "pending" is included: it means a checkout was started and never
+  // completed here. Hiding the plans in that state used to strand anyone who
+  // closed Paystack's payment page without paying - there was no way to try
+  // again. /billing/subscribe now checks with Paystack what happened to that
+  // earlier attempt before starting another, so showing the plans can't
+  // lead to a double charge.
+  const checkoutUnfinished = status?.subscription_status === "pending";
   const needsAPlan =
-    status !== null && (status.subscription_status === "none" || status.subscription_status === "cancelled" || status.subscription_status === "refunded");
+    status !== null &&
+    (status.subscription_status === "none" ||
+      status.subscription_status === "cancelled" ||
+      status.subscription_status === "refunded" ||
+      checkoutUnfinished);
 
   return (
     <div className="max-w-5xl mx-auto px-8 py-12">
@@ -114,6 +136,22 @@ export default function BillingPage() {
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
+      {notice && (
+        <div role="status" className="mb-6 max-w-3xl text-[13px] text-ink bg-panel border border-teal/40 rounded-[4px] px-4 py-3">
+          {notice}
+        </div>
+      )}
+      {checkoutUnfinished && !notice && isAdmin && (
+        <div role="status" className="mb-6 max-w-3xl text-[13px] text-ink-soft bg-panel border border-line rounded-[4px] px-4 py-3">
+          <span className="text-ink font-medium">Your last checkout wasn&apos;t finished.</span> If you
+          closed the payment page, choose a plan below to start again. If you did pay, it will show
+          here within a minute —{" "}
+          <button type="button" onClick={refresh} className="text-teal hover:text-teal-deep transition-colors">
+            refresh
+          </button>
+          . You won&apos;t be charged twice: we check with Paystack before starting a new payment.
+        </div>
+      )}
 
       {!status ? (
         <div className="text-[13px] text-ink-soft">Loading…</div>
