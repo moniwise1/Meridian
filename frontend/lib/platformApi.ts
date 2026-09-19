@@ -479,6 +479,20 @@ export async function getAnalytics(): Promise<Analytics> {
 }
 
 
+// ---------- Staff roles ----------
+
+export type StaffRole = { key: string; label: string; description: string };
+
+/** What roles exist, straight from the backend, so the dropdowns can't
+ *  fall behind the roles the server will actually accept. */
+export async function listStaffRoles(): Promise<StaffRole[]> {
+  const res = await fetch(`${API_BASE}/platform/staff/roles`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not load the list of roles.");
+  return body;
+}
+
 // ---------- Leads (sales CRM) ----------
 
 export type LeadComment = {

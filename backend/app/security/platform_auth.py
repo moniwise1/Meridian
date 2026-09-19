@@ -78,7 +78,7 @@ class PlatformAuthContext:
 # so adding a route that leaks customer data to sales fails the build.
 FULL_ACCESS_STAFF_ROLES = ("owner", "support")
 RESTRICTED_ROLE_ALLOWED_PREFIXES = (
-    "/platform/leads",    # the sales CRM itself
+    "/platform/leads",    # the leads CRM itself
     "/platform/tickets",  # support conversations
     "/platform/me",       # their own profile
 )

@@ -117,6 +117,14 @@ def update_lead_status(lead_id: str, body: LeadStatusUpdate, db: Session = Depen
     lead = db.query(Lead).filter_by(id=lead_id).first()
     if not lead:
         raise HTTPException(404, "Lead not found.")
+    # Closed is final. It is the one status that means "this is finished"
+    # - without that, the history becomes a record of somebody clicking
+    # back and forth and stops meaning anything. A closed lead who gets in
+    # touch again arrives as a NEW lead (see routes_leads.py), so nothing
+    # is lost by refusing this.
+    if lead.status == "closed" and body.status != "closed":
+        raise HTTPException(400, "This lead is closed and can't be reopened. "
+                                 "If they get in touch again it will come in as a new lead.")
 
     staff = db.query(PlatformStaff).filter_by(id=ctx.staff_id).first()
     was = lead.status
