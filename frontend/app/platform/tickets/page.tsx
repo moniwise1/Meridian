@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { listAllTickets, updateTicket, staffReplyToTicket, type PlatformTicket } from "@/lib/platformApi";
+import GlideSegmented from "@/components/glide/GlideSegmented";
 
 const STATUS_COLOR: Record<string, string> = {
   open: "bg-amber-soft text-amber",
@@ -72,19 +73,14 @@ export default function PlatformTicketsPage() {
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Tickets</h1>
       <p className="text-[13.5px] text-ink-soft mb-6">Across every organization on Meridian.</p>
 
-      <div className="flex items-center gap-1 mb-6 border-b border-line">
-        {["", ...STATUS_OPTIONS].map((s) => (
-          <button
-            key={s || "all"}
-            onClick={() => setFilter(s)}
-            className={`text-[13px] px-3 py-2 -mb-px border-b-2 transition-colors ${
-              filter === s ? "border-teal-deep text-ink" : "border-transparent text-ink-soft hover:text-ink"
-            }`}
-          >
-            {s ? s.replace("_", " ") : "All"}
-          </button>
-        ))}
-      </div>
+      <GlideSegmented
+        variant="underline"
+        ariaLabel="Filter tickets by status"
+        options={["", ...STATUS_OPTIONS].map((s) => ({ value: s, label: s ? s.replace("_", " ") : "All" }))}
+        value={filter}
+        onChange={setFilter}
+        className="mb-6"
+      />
 
       <input
         type="text"

@@ -12,6 +12,7 @@ import {
   type ResultEvent,
 } from "@/lib/api";
 import AnalystWorkspace from "@/components/AnalystWorkspace";
+import { useGlide } from "@/components/glide/useGlide";
 import ClarificationPrompt from "@/components/ClarificationPrompt";
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
@@ -62,6 +63,10 @@ export default function AskDashboard() {
   // read the pre-update value and both fire a request. A ref updates
   // synchronously, which is what actually makes the guard hold.
   const requestRunning = useRef(false);
+  // The selected-source pill glides between sources, including across a
+  // wrapped second row, rather than one chip switching off as another
+  // switches on (components/glide/useGlide.ts).
+  const { containerRef: sourceRowRef, indicatorRef: sourceIndicatorRef } = useGlide<HTMLDivElement>(sourceValue);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -348,7 +353,12 @@ export default function AskDashboard() {
 
       {/* ---------- Composer ---------- */}
       <div className="sticky bottom-4 bg-panel border border-line rounded-[8px] shadow-sm p-4">
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div ref={sourceRowRef} className="relative flex items-center gap-2 mb-3 flex-wrap">
+          <span
+            ref={sourceIndicatorRef}
+            aria-hidden
+            className="pointer-events-none absolute left-0 top-0 z-0 opacity-0 rounded-full bg-teal-deep shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_3px_10px_rgba(18,63,61,0.25)] transition-[transform,width,height,opacity] duration-[420ms] ease-glide motion-reduce:transition-none"
+          />
           <span className="text-[11.5px] text-ink-soft shrink-0">Source:</span>
           {connections.map((c) => (
             <button
@@ -362,9 +372,10 @@ export default function AskDashboard() {
                 setSourceValue(`conn:${c.id}`);
               }}
               disabled={inputLocked}
-              className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+              data-glide-key={`conn:${c.id}`}
+              className={`relative z-10 text-[12px] px-2.5 py-1 rounded-full border transition-colors duration-200 disabled:opacity-60 disabled:cursor-not-allowed ${
                 sourceValue === `conn:${c.id}`
-                  ? "bg-teal-deep text-white border-teal-deep"
+                  ? "text-white border-transparent [transition-delay:90ms]"
                   : "border-line text-ink-soft hover:border-teal hover:text-teal"
               }`}
             >
@@ -380,9 +391,10 @@ export default function AskDashboard() {
                 setSourceValue(`doc:${d.id}`);
               }}
               disabled={inputLocked}
-              className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+              data-glide-key={`doc:${d.id}`}
+              className={`relative z-10 text-[12px] px-2.5 py-1 rounded-full border transition-colors duration-200 disabled:opacity-60 disabled:cursor-not-allowed ${
                 sourceValue === `doc:${d.id}`
-                  ? "bg-teal-deep text-white border-teal-deep"
+                  ? "text-white border-transparent [transition-delay:90ms]"
                   : "border-line text-ink-soft hover:border-teal hover:text-teal"
               }`}
             >

@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { clearSession } from "@/lib/auth";
 import { useSession } from "@/lib/useSession";
 import NotificationBell from "@/components/NotificationBell";
+import GlideNav from "@/components/glide/GlideNav";
 
 const NAV = [
   { href: "/home", label: "Home" },
@@ -53,6 +53,10 @@ export default function Sidebar() {
     router.push("/login");
   }
 
+  const navItems = NAV.filter((item) => !item.adminOnly || session?.role === "admin");
+  const activeHref =
+    navItems.find((item) => (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)))?.href ?? null;
+
   return (
     <aside className="w-56 shrink-0 border-r border-line bg-panel px-5 py-6 flex flex-col gap-8">
       <div className="flex items-start justify-between">
@@ -63,22 +67,7 @@ export default function Sidebar() {
         {session && <NotificationBell />}
       </div>
 
-      <nav className="flex flex-col gap-1">
-        {NAV.filter((item) => !item.adminOnly || session?.role === "admin").map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`text-[13.5px] px-2.5 py-1.5 rounded-[3px] transition-colors ${
-                active ? "bg-teal-deep text-white" : "text-ink-soft hover:text-ink hover:bg-paper"
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
+      <GlideNav items={navItems} activeHref={activeHref} />
 
       <div className="mt-auto flex flex-col gap-3">
         {session && (
