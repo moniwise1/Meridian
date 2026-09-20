@@ -34,11 +34,20 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // one is the whole point of being there. /privacy and /terms are the
   // legal pages - public by nature, linked from the marketing footer for
   // a visitor who has no account at all.
+  // /interest is the "Inquire now" page an ad points at. It is the most
+  // important public route there is after "/" and it was missing here:
+  // every visitor arriving from an ad has no session by definition, so
+  // this gate bounced them to a login screen for a product they had
+  // never heard of, and the enquiry form was never shown. Verified
+  // against production before the fix - the live ad URL redirected to
+  // /login. Anything added under app/ that a stranger is meant to reach
+  // has to be listed here too.
   const isPublicRoute =
     pathname === "/status" || pathname === "/auth/handoff" ||
     pathname === "/accept-invite" || pathname === "/mfa-recovery" ||
     pathname === "/reset-password" ||
-    pathname === "/privacy" || pathname === "/terms";
+    pathname === "/privacy" || pathname === "/terms" ||
+    pathname === "/interest";
   const skipGate = isPlatformRoute || isPublicRoute;
 
   // "/" is the one route this gate does NOT force-redirect when logged
