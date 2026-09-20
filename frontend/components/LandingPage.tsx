@@ -268,6 +268,43 @@ GROUP BY region;`}</code></pre>
   </figure>,
 ];
 
+/**
+ * The mint-and-gold rule that opens each section. It is the same motif
+ * that divides sections in every PDF, deck and workbook Meridian
+ * generates (app/agents/report_generator.py), so a downloaded report
+ * reads as coming from the same product as the page it was generated
+ * from, rather than from a different company.
+ */
+function AccentRule({ className = "" }: { className?: string }) {
+  return (
+    <div aria-hidden="true" className={`flex h-[3px] w-[190px] ${className}`}>
+      <span className="w-[58%] bg-mint" />
+      <span className="w-[16%] bg-gold" />
+      <span className="flex-1 bg-line/70" />
+    </div>
+  );
+}
+
+/**
+ * A section's eyebrow. `tone="dark"` switches it to mint for the one
+ * section set on the deep-green ground - mint is only legible as text
+ * against a dark background (6.4:1 there, 2.3:1 on white), so it is
+ * never used for type on paper.
+ */
+function SectionKicker({ children, tone = "light" }: {
+  children: React.ReactNode; tone?: "light" | "dark";
+}) {
+  return (
+    <div
+      className={`text-xs font-[family-name:var(--font-mono)] tracking-[0.18em] uppercase mb-3 ${
+        tone === "dark" ? "text-mint" : "text-teal-deep"
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function LandingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [billingInterval, setBillingInterval] = useState<BillingInterval>("monthly");
@@ -358,7 +395,7 @@ export default function LandingPage() {
                 <div className="text-xl md:text-3xl font-serif leading-snug tracking-tight text-ink mb-7">Why did South-East revenue fall last quarter?</div>
                 <div className="text-[13px] text-ink-soft mb-2">Meridian found</div>
                 <div className="grid items-center gap-8 lg:grid-cols-[1.1fr_1fr] lg:gap-x-16 border-t border-line pt-6">
-                  <div className="text-lg md:text-xl text-ink leading-relaxed max-w-xl">
+                  <div className="border-l-2 border-mint pl-5 text-lg md:text-xl text-ink leading-relaxed max-w-xl">
                     South-East revenue fell 14.2% quarter-over-quarter, concentrated in two accounts
                     that churned in week 6. The decline was not spread across the region.
                   </div>
@@ -374,7 +411,10 @@ export default function LandingPage() {
                       <div key={bar.label} className="flex-1 flex flex-col items-center gap-1.5">
                         <div className="w-full flex items-end h-40 border-b border-line">
                           <div
-                            className={`w-full rounded-t-[2px] ${bar.label === "SE" ? "bg-teal" : "bg-line"}`}
+                            // Gold marks the bar the answer is about. Red
+                            // is reserved for genuine warnings, and a
+                            // revenue fall is the finding, not a fault.
+                            className={`w-full rounded-t-[2px] ${bar.label === "SE" ? "bg-gold" : "bg-line"}`}
                             style={{ height: `${bar.pct}%` }}
                           />
                         </div>
@@ -400,9 +440,18 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="features" className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20 border-t border-line">
+      {/* Sections alternate between paper and panel, with one deep-green
+          band at Security. Before this the whole page sat on a single
+          paper ground separated only by hairlines, which is what made a
+          well-written page read as flat. */}
+      <section id="features" className="scroll-mt-24 border-t border-line bg-panel">
+        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 md:py-20">
         <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr] lg:gap-20 mb-8 md:mb-12">
-          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-3">Spend less time finding answers. More time using them.</h2>
+          <div>
+            <SectionKicker>The product</SectionKicker>
+            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">Spend less time finding answers. More time using them.</h2>
+            <AccentRule />
+          </div>
           <p className="text-base text-ink-soft leading-relaxed">
             A missed target. A sudden revenue dip. A board meeting coming up.
             You need to understand what is happening, not spend the day piecing together reports.
@@ -430,25 +479,39 @@ export default function LandingPage() {
             );
           })}
         </div>
-      </section>
-
-      <section className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20 border-t border-line">
-        <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-12">From your first question to the evidence</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-10">
-          {STEPS.map((s) => (
-            <div key={s.n} className="border-t border-line pt-6">
-              <div className="font-mono text-sm text-teal-deep mb-5">{s.n}</div>
-              <div className="text-xl font-medium text-ink mb-3">{s.title}</div>
-              <div className="text-base text-ink-soft leading-relaxed">{s.body}</div>
-            </div>
-          ))}
         </div>
       </section>
 
-      <section id="security" className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20 border-t border-line">
+      <section className="border-t border-line bg-paper">
+        <div className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20">
+          <SectionKicker>How it works</SectionKicker>
+          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">From your first question to the evidence</h2>
+          <AccentRule className="mb-12" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-10">
+            {STEPS.map((s) => (
+              <div key={s.n} className="border-t-2 border-mint/40 pt-6">
+                <div className="mb-5 flex h-9 w-9 items-center justify-center rounded-full bg-mint-soft font-mono text-sm font-medium text-teal-deep">
+                  {s.n}
+                </div>
+                <div className="text-xl font-medium text-ink mb-3">{s.title}</div>
+                <div className="text-base text-ink-soft leading-relaxed">{s.body}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* The one dark band on the page, and it is deliberately here: for a
+          B2B buyer the security review is the moment the decision is
+          actually made, so it gets the weight. Mint reaches its proper
+          contrast on this ground (6.4:1) where it could not on paper. */}
+      <section id="security" className="scroll-mt-24 bg-teal-deep text-white">
+        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-16 md:py-24">
         <div className="max-w-xl mb-10">
-          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-3">Move forward with control over your data</h2>
-          <p className="text-base text-ink-soft leading-relaxed">
+          <SectionKicker tone="dark">Security</SectionKicker>
+          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-white mb-5">Move forward with control over your data</h2>
+          <AccentRule className="mb-6" />
+          <p className="text-base text-white/75 leading-relaxed">
             Giving your team an analytics tool should not mean giving up control.
             Meridian combines verified read-only connections, scoped access, and an audit trail
             to support your security review.
@@ -463,18 +526,22 @@ export default function LandingPage() {
             "Review queries, connection changes, and exports in a tamper-evident audit log.",
             "Treat uploaded content and database results as data to analyze, rather than instructions for the AI to follow.",
           ].map((point) => (
-            <div key={point} className="flex items-start gap-3 border-t border-line py-5">
-              <span className="text-teal-deep shrink-0 mt-0.5">✓</span>
-              <span className="text-base text-ink-soft leading-relaxed">{point}</span>
+            <div key={point} className="flex items-start gap-3 border-t border-white/15 py-5">
+              <span className="text-mint shrink-0 mt-0.5" aria-hidden="true">✓</span>
+              <span className="text-base text-white/80 leading-relaxed">{point}</span>
             </div>
           ))}
         </div>
+        </div>
       </section>
 
-      <section id="pricing" className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20 border-t border-line">
+      <section id="pricing" className="scroll-mt-24 bg-paper">
+        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 md:py-20">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-12">
           <div className="max-w-xl">
-            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-3">Choose the plan that fits your team</h2>
+            <SectionKicker>Pricing</SectionKicker>
+            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">Choose the plan that fits your team</h2>
+            <AccentRule className="mb-6" />
             <p className="text-base text-ink-soft leading-relaxed">
               Get the full product on every plan. Choose the capacity your team needs for people,
               data sources, questions, and downloads, with clear monthly limits.
@@ -509,14 +576,22 @@ export default function LandingPage() {
             {plans.map((plan) => (
               <div
                 key={plan.key}
-                className={`relative bg-panel border p-7 md:p-8 flex flex-col ${
-                  plan.key === "pro" ? "border-teal-deep border-2 bg-paper" : "border-line"
+                className={`relative bg-panel border p-7 md:p-8 flex flex-col transition-shadow ${
+                  plan.key === "pro"
+                    ? "border-teal-deep border-2 shadow-[0_2px_24px_-8px_rgba(18,63,61,0.35)]"
+                    : "border-line hover:border-mint"
                 }`}
               >
                 {plan.key === "pro" && (
-                  <span className="absolute -top-3 left-7 text-xs px-3 py-1 bg-teal-deep text-white">
-                    Most popular
-                  </span>
+                  <>
+                    {/* The recommended plan is marked twice - a mint cap and
+                        a badge - so it still reads as the recommendation
+                        for anyone who cannot distinguish the border colour. */}
+                    <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-mint" />
+                    <span className="absolute -top-3 left-7 text-xs px-3 py-1 bg-teal-deep text-white">
+                      Most popular
+                    </span>
+                  </>
                 )}
                 <div className="text-xl font-medium text-ink mb-4">{plan.label}</div>
                 <PlanPrice plan={plan} interval={billingInterval} />
@@ -540,6 +615,7 @@ export default function LandingPage() {
             ))}
           </div>
         )}
+        </div>
       </section>
 
       {/* The enquiry form itself, not a link to it: someone who has read
@@ -548,9 +624,11 @@ export default function LandingPage() {
       <section id="inquire" className="scroll-mt-24 py-14 md:py-20 border-t border-line bg-panel">
         <div className="max-w-[1200px] mx-auto px-6 md:px-8 grid gap-10 lg:grid-cols-2 lg:items-start">
           <div className="max-w-xl">
-            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-4">
+            <SectionKicker>Talk to us</SectionKicker>
+            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">
               What question is holding up your next decision?
             </h2>
+            <AccentRule className="mb-6" />
             <p className="text-base text-ink-soft leading-relaxed mb-6">
               Leave your details and we&apos;ll show you what Meridian can do with your own data —
               a report you already have, or a database you already run. No payment to start the
@@ -568,24 +646,33 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <footer className="border-t border-line">
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 grid grid-cols-2 lg:grid-cols-5 gap-x-8 gap-y-10">
+      {/* Two bars, not three. It used to be a nav grid, then a bar
+          carrying the copyright AND a second copy of the Paystack line
+          from the brand column AND four dead social icons at 30%
+          opacity, then a third bar with the contact details. Three rules
+          stacked at the foot of a page read as a layout that got away
+          from someone. The contact details now sit in a Contact column
+          beside the other links, which is where a reader looks for them
+          rather than three rows further down. */}
+      <footer className="border-t border-line bg-panel">
+        <div aria-hidden="true" className="flex h-[3px] w-full">
+          <span className="w-[22%] bg-mint" />
+          <span className="w-[6%] bg-gold" />
+          <span className="flex-1 bg-line/60" />
+        </div>
+
+        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 grid grid-cols-2 lg:grid-cols-6 gap-x-8 gap-y-10">
           <div className="col-span-2 lg:col-span-2 pr-4">
-            <div className="font-serif text-3xl tracking-tight text-ink mb-4">Meridian</div>
-            <p className="text-sm text-ink-soft leading-relaxed max-w-[260px] mb-3">
+            <div className="flex items-center gap-2.5 mb-4">
+              <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center bg-ink text-xl font-bold text-paper">M</span>
+              <span className="font-serif text-2xl tracking-tight text-ink">Meridian</span>
+            </div>
+            <p className="text-sm text-ink-soft leading-relaxed max-w-[260px] mb-4">
               Business answers backed by your data. Ask in plain English,
               review the evidence, and make your next decision with more confidence.
             </p>
-            {/* The registration number and place of incorporation used to
-                sit here too. They now appear once, in the legal strip at
-                the foot of the footer, where a reader checking who is
-                behind the service expects to find them - stating them
-                twice in one footer reads as carelessness. */}
-            <p className="text-xs text-ink-soft/70 leading-relaxed max-w-[260px] mb-4">
-              A product of Meridian Techverse Limited.
-            </p>
-            <div className="flex items-center gap-2 text-xs text-ink-soft border border-line rounded-[4px] px-3 py-2 max-w-[260px]">
-              <LockIcon />
+            <div className="flex items-center gap-2 text-xs text-ink-soft border border-line bg-paper rounded-[4px] px-3 py-2 max-w-[260px]">
+              <span className="text-teal-deep"><LockIcon /></span>
               <span>
                 Payments secured by <strong className="text-ink font-medium">Paystack</strong>.
                 PCI DSS Level 1 certified
@@ -596,96 +683,75 @@ export default function LandingPage() {
           <div>
             <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Product</div>
             <nav className="flex flex-col gap-3 text-sm text-ink-soft">
-              <a href="#features" className="hover:text-ink transition-colors">Product</a>
-              <a href="#security" className="hover:text-ink transition-colors">Security</a>
-              <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
-              <a href="#inquire" className="hover:text-ink transition-colors">Inquire now</a>
+              <a href="#features" className="hover:text-teal transition-colors">Product</a>
+              <a href="#security" className="hover:text-teal transition-colors">Security</a>
+              <a href="#pricing" className="hover:text-teal transition-colors">Pricing</a>
+              <a href="#inquire" className="hover:text-teal transition-colors">Inquire now</a>
             </nav>
           </div>
 
           <div>
             <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Account</div>
             <nav className="flex flex-col gap-3 text-sm text-ink-soft">
-              <Link href="/login" className="hover:text-ink transition-colors">Sign in</Link>
-              <Link href="/login?mode=register" className="hover:text-ink transition-colors">Create account</Link>
+              <Link href="/login" className="hover:text-teal transition-colors">Sign in</Link>
+              <Link href="/login?mode=register" className="hover:text-teal transition-colors">Create account</Link>
             </nav>
           </div>
 
           <div>
-            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Legal &amp; support</div>
+            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Legal</div>
             <nav className="flex flex-col gap-3 text-sm text-ink-soft">
-              <Link href="/status" className="hover:text-ink transition-colors">System status</Link>
-              <Link href="/privacy" className="hover:text-ink transition-colors">Privacy Policy</Link>
-              <Link href="/terms" className="hover:text-ink transition-colors">Terms of Service</Link>
-              <a href="mailto:hello@getmeridiananalytics.com" className="hover:text-ink transition-colors">Contact us</a>
+              <Link href="/status" className="hover:text-teal transition-colors">System status</Link>
+              <Link href="/privacy" className="hover:text-teal transition-colors">Privacy Policy</Link>
+              <Link href="/terms" className="hover:text-teal transition-colors">Terms of Service</Link>
             </nav>
+          </div>
+
+          <div className="col-span-2 lg:col-span-1">
+            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Contact</div>
+            <div className="flex flex-col gap-3 text-sm text-ink-soft">
+              {COMPANY_ADDRESS && (
+                <span className="flex items-start gap-2 leading-snug">
+                  <span className="mt-0.5 text-teal-deep"><PinIcon /></span>
+                  {COMPANY_ADDRESS}
+                </span>
+              )}
+              <a href={`mailto:${COMPANY_EMAIL}`} className="flex items-start gap-2 leading-snug break-all hover:text-teal transition-colors">
+                <span className="mt-0.5 text-teal-deep"><MailIcon /></span>
+                {COMPANY_EMAIL}
+              </a>
+              <a href={`tel:${COMPANY_PHONE_E164}`} className="flex items-start gap-2 leading-snug hover:text-teal transition-colors">
+                <span className="mt-0.5 text-teal-deep"><PhoneIcon /></span>
+                {COMPANY_PHONE_DISPLAY}
+              </a>
+            </div>
           </div>
         </div>
 
         <div className="border-t border-line">
-          <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-6 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-            <div className="text-xs text-ink-soft">
-              © {new Date().getFullYear()} Meridian Techverse Limited. All rights reserved.
-            </div>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-ink-soft">
-              <span>Read-only by design</span>
-              <span className="text-line hidden sm:inline">•</span>
-              <span className="flex items-center gap-1.5">
-                <LockIcon small />
-                Secured checkout via Paystack
-              </span>
-            </div>
-            <div className="flex items-center gap-3.5 text-ink-soft">
-              {SOCIAL_LINKS.map(({ name, href, Icon }) =>
-                href ? (
-                  <a
-                    key={name} href={href} target="_blank" rel="noopener noreferrer" aria-label={name}
-                    className="hover:text-ink transition-colors"
-                  >
-                    <Icon />
-                  </a>
-                ) : (
-                  <span key={name} aria-hidden="true" className="opacity-30">
-                    <Icon />
-                  </span>
-                )
+          <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <p className="text-xs text-ink-soft">
+              © {new Date().getFullYear()}{" "}
+              <span className="text-ink">Meridian Techverse Limited</span>{" "}
+              <span className="font-[family-name:var(--font-mono)]">(RC 9849528)</span>. All rights reserved.
+            </p>
+            <div className="flex items-center gap-4">
+              <span className="text-xs text-ink-soft">Read-only by design</span>
+              {/* Only live links are rendered. Four permanently greyed-out
+                  icons read as a half-finished site, and each one appears
+                  here the moment it has somewhere to point. */}
+              {SOCIAL_LINKS.some((s) => s.href) && (
+                <div className="flex items-center gap-3.5 text-ink-soft">
+                  {SOCIAL_LINKS.filter((s) => s.href).map(({ name, href, Icon }) => (
+                    <a
+                      key={name} href={href} target="_blank" rel="noopener noreferrer" aria-label={name}
+                      className="hover:text-teal transition-colors"
+                    >
+                      <Icon />
+                    </a>
+                  ))}
+                </div>
               )}
-            </div>
-          </div>
-
-          {/* The registered entity and how to reach it. A row of its own
-              rather than being folded into the copyright line above: this
-              is what a prospective customer doing due diligence looks
-              for, and it should read as that rather than as small print
-              about copyright. */}
-          <div className="border-t border-line">
-            <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-4 flex flex-col gap-2.5">
-              <p className="text-[11.5px] leading-relaxed text-ink-soft">
-                <span className="text-ink">Meridian Techverse Limited</span>{" "}
-                <span className="font-[family-name:var(--font-mono)]">(RC 9849528)</span>
-              </p>
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11.5px] text-ink-soft">
-                {COMPANY_ADDRESS && (
-                  <span className="flex items-center gap-1.5">
-                    <PinIcon />
-                    {COMPANY_ADDRESS}
-                  </span>
-                )}
-                <a
-                  href={`mailto:${COMPANY_EMAIL}`}
-                  className="flex items-center gap-1.5 hover:text-ink transition-colors"
-                >
-                  <MailIcon />
-                  {COMPANY_EMAIL}
-                </a>
-                <a
-                  href={`tel:${COMPANY_PHONE_E164}`}
-                  className="flex items-center gap-1.5 hover:text-ink transition-colors"
-                >
-                  <PhoneIcon />
-                  {COMPANY_PHONE_DISPLAY}
-                </a>
-              </div>
             </div>
           </div>
         </div>
