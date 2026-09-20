@@ -203,13 +203,20 @@ def create_export(query_id: str, format: str = "csv", db: Session = Depends(get_
                    ctx: AuthContext = Depends(get_current_user)):
     _check_document_limit(db, ctx)
     record = _get_query_record(db, ctx.tenant_id, query_id)
-    rows = record.result_snapshot.get("preview_rows", [])
-    if not rows:
-        raise HTTPException(400, "No rows available to export for this analysis.")
+    snapshot = record.result_snapshot or {}
+    rows = snapshot.get("preview_rows", [])
     if format == "xlsx":
-        path = export_xlsx(rows, "export")
+        # The workbook is the analysis, not just its table: the executive
+        # answer, the charts, the data-quality rating and the assumptions
+        # are all worth having even when the question was answered from a
+        # document and returned no rows at all. Only CSV needs rows, and
+        # only CSV still refuses without them.
+        path = export_xlsx(snapshot, "export", question=record.question, query_id=record.id,
+                           sql=snapshot.get("sql", record.generated_sql or ""))
         kind = "export_xlsx"
     else:
+        if not rows:
+            raise HTTPException(400, "No rows available to export for this analysis.")
         path = export_csv(rows, "export")
         kind = "export_csv"
     artifact = _record_artifact(db, ctx, kind, f"Export — {record.question[:60]}", query_id, path)
