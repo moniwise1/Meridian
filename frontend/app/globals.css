@@ -12,6 +12,21 @@
   --amber: #a5691f;
   --amber-soft: #f2e3cf;
   --red: #9c3b2e;
+
+  /* Mint and gold are the accent pair from the Meridian report standard,
+     the same two colours that rule the section dividers in every
+     generated PDF, deck and workbook. Bringing them onto the site is what
+     makes a downloaded report look like it came from this product.
+
+     Both are ACCENT colours, not text colours: mint on white is about
+     2.3:1 and gold about 3.1:1, well under the 4.5:1 that body copy
+     needs. Use them for rules, fills, dots and icon accents, and for
+     text only on a dark ground (mint on teal-deep is 6.4:1) or at large
+     display sizes. Body text stays ink, ink-soft or teal-deep. */
+  --mint: #22b99a;
+  --mint-soft: #e9f2f0;
+  --gold: #c58a34;
+  --gold-soft: #f6ecda;
 }
 
 @theme inline {
@@ -26,6 +41,10 @@
   --color-amber: var(--amber);
   --color-amber-soft: var(--amber-soft);
   --color-red: var(--red);
+  --color-mint: var(--mint);
+  --color-mint-soft: var(--mint-soft);
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
   --font-sans: -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
   /* Pricing figures settling in when the monthly/annual toggle flips -
