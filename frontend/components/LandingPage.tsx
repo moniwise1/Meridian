@@ -96,6 +96,35 @@ function LockIcon({ small = false }: { small?: boolean }) {
   );
 }
 
+// Contact icons for the footer's details row. Same stroke-based,
+// currentColor treatment as every other icon here, sized to sit on the
+// footer's 11.5px type without crowding it.
+function PhoneIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0">
+      <path d="M6.5 4h3l1.5 3.8-2 1.4a11.5 11.5 0 0 0 5.8 5.8l1.4-2L20 14.5v3a2 2 0 0 1-2.2 2A15.5 15.5 0 0 1 4.5 6.2 2 2 0 0 1 6.5 4Z" />
+    </svg>
+  );
+}
+
+function MailIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0">
+      <rect x="3" y="5.5" width="18" height="13" rx="2" />
+      <path d="m3.8 7 7.1 5.3a2 2 0 0 0 2.2 0L20.2 7" />
+    </svg>
+  );
+}
+
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0">
+      <path d="M12 21s6.5-5.6 6.5-10.5a6.5 6.5 0 0 0-13 0C5.5 15.4 12 21 12 21Z" />
+      <circle cx="12" cy="10.3" r="2.4" />
+    </svg>
+  );
+}
+
 // Same hand-drawn line-icon treatment as the rest of this file's icons
 // (currentColor, stroke-based, no image asset) - simple line-art evoking
 // each platform's own mark rather than a pixel-accurate brand asset.
@@ -143,6 +172,26 @@ function FacebookIcon() {
 // Fill in each real profile URL as soon as the account exists - an empty
 // href renders the icon without a link (nothing to send anyone to yet)
 // rather than shipping a dead "#" link.
+// How to reach the company, shown in the footer's details row.
+//
+// Registered office. The country is spelled out because the footer no
+// longer says anywhere else what country the company is in, and a
+// locality on its own ("Ikeja, Lagos") means nothing to a reader outside
+// Nigeria - which is exactly the reader a findable company footer is
+// written for. The footer omits this line entirely if it is ever blanked,
+// rather than showing a placeholder address.
+const COMPANY_ADDRESS = "Ikeja, Lagos, Nigeria";
+
+const COMPANY_EMAIL = "hello@getmeridiananalytics.com";
+
+// The number as it is written for a reader, and the same number in the
+// form a phone can actually dial. They differ on purpose: a Nigerian
+// number drops its leading 0 behind the +234 country code, so the
+// displayed "(234) 09015954281" would not connect if it were handed
+// straight to tel:.
+const COMPANY_PHONE_DISPLAY = "(234) 09015954281";
+const COMPANY_PHONE_E164 = "+2349015954281";
+
 const SOCIAL_LINKS = [
   { name: "LinkedIn", href: "", Icon: LinkedInIcon },
   { name: "X (Twitter)", href: "", Icon: XIcon },
@@ -527,8 +576,13 @@ export default function LandingPage() {
               Business answers backed by your data. Ask in plain English,
               review the evidence, and make your next decision with more confidence.
             </p>
+            {/* The registration number and place of incorporation used to
+                sit here too. They now appear once, in the legal strip at
+                the foot of the footer, where a reader checking who is
+                behind the service expects to find them - stating them
+                twice in one footer reads as carelessness. */}
             <p className="text-xs text-ink-soft/70 leading-relaxed max-w-[260px] mb-4">
-              A product of Meridian Techverse Limited (RC 9849528), Nigeria.
+              A product of Meridian Techverse Limited.
             </p>
             <div className="flex items-center gap-2 text-xs text-ink-soft border border-line rounded-[4px] px-3 py-2 max-w-[260px]">
               <LockIcon />
@@ -596,6 +650,42 @@ export default function LandingPage() {
                   </span>
                 )
               )}
+            </div>
+          </div>
+
+          {/* The registered entity and how to reach it. A row of its own
+              rather than being folded into the copyright line above: this
+              is what a prospective customer doing due diligence looks
+              for, and it should read as that rather than as small print
+              about copyright. */}
+          <div className="border-t border-line">
+            <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-4 flex flex-col gap-2.5">
+              <p className="text-[11.5px] leading-relaxed text-ink-soft">
+                <span className="text-ink">Meridian Techverse Limited</span>{" "}
+                <span className="font-[family-name:var(--font-mono)]">(RC 9849528)</span>
+              </p>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11.5px] text-ink-soft">
+                {COMPANY_ADDRESS && (
+                  <span className="flex items-center gap-1.5">
+                    <PinIcon />
+                    {COMPANY_ADDRESS}
+                  </span>
+                )}
+                <a
+                  href={`mailto:${COMPANY_EMAIL}`}
+                  className="flex items-center gap-1.5 hover:text-ink transition-colors"
+                >
+                  <MailIcon />
+                  {COMPANY_EMAIL}
+                </a>
+                <a
+                  href={`tel:${COMPANY_PHONE_E164}`}
+                  className="flex items-center gap-1.5 hover:text-ink transition-colors"
+                >
+                  <PhoneIcon />
+                  {COMPANY_PHONE_DISPLAY}
+                </a>
+              </div>
             </div>
           </div>
         </div>
