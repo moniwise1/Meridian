@@ -527,8 +527,13 @@ export default function LandingPage() {
               Business answers backed by your data. Ask in plain English,
               review the evidence, and make your next decision with more confidence.
             </p>
+            {/* The registration number and place of incorporation used to
+                sit here too. They now appear once, in the legal strip at
+                the foot of the footer, where a reader checking who is
+                behind the service expects to find them - stating them
+                twice in one footer reads as carelessness. */}
             <p className="text-xs text-ink-soft/70 leading-relaxed max-w-[260px] mb-4">
-              A product of Meridian Techverse Limited (RC 9849528), Nigeria.
+              A product of Meridian Techverse Limited.
             </p>
             <div className="flex items-center gap-2 text-xs text-ink-soft border border-line rounded-[4px] px-3 py-2 max-w-[260px]">
               <LockIcon />
@@ -596,6 +601,24 @@ export default function LandingPage() {
                   </span>
                 )
               )}
+            </div>
+          </div>
+
+          {/* The registered entity, spelled exactly as it appears on the
+              CAC certificate and in the Terms and Privacy Policy. It is a
+              row of its own rather than being folded into the copyright
+              line above: a company registration is a statement of who is
+              legally behind the service, which is what a prospective
+              customer doing due diligence is looking for, and it should
+              read as that rather than as small print about copyright. */}
+          <div className="border-t border-line">
+            <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-4">
+              <p className="text-[11.5px] leading-relaxed text-ink-soft">
+                <span className="text-ink">Meridian Techverse Limited</span>{" "}
+                <span className="font-[family-name:var(--font-mono)]">(RC 9849528)</span>
+                <span className="mx-1.5 text-line">&middot;</span>
+                Incorporated in the Federal Republic of Nigeria
+              </p>
             </div>
           </div>
         </div>
