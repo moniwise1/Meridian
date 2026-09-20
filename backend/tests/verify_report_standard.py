@@ -285,4 +285,144 @@ assert fmt.percent_warnings(["Jan"], [42.5], "NGN m", "Sales") == []
 print("16. OK  only rate fields are checked, and a legitimate >100% rate is not flagged")
 
 
+# =========================================================================
+# The same standard, as a deck. Built from the same snapshot, so a
+# difference between the two formats is a defect in one of them.
+# =========================================================================
+
+from pptx import Presentation
+from pptx.util import Emu
+from app.agents.presentation_generator import generate_presentation_pptx
+
+_DECK_BASE = {k: v for k, v in _BASE.items() if k != "sql"}
+
+
+def deck_text(prs) -> str:
+    return "\n".join(shape.text_frame.text for slide in prs.slides
+                     for shape in slide.shapes if shape.has_text_frame)
+
+
+def runs(prs):
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        if run.text.strip():
+                            yield run
+
+
+_DECK_ANALYSIS = {
+    "metrics": [{"id": "total", "label": "Annual sales", "value": 709_000_000}],
+    "confidence": {"measurement": {"level": "high", "reason": "Totals reconcile."}},
+    "scope": {"metric_definition": "Operating spread, not net profit.", "assumptions": []},
+    "quality": {"limitations": []},
+    "findings": [{"kind": "recommendation", "text": "Repair the delivery percentage scale."}],
+    "evidence": [{"id": "e0", "source_id": "src-1", "filename": "pack.pdf",
+                  "method": "extracted_text", "source_version": "2026-09-12"}],
+}
+
+clean_deck = Presentation(generate_presentation_pptx(
+    insight=_CLEAN_INSIGHT, charts=_CLEAN_CHART, analysis=_DECK_ANALYSIS,
+    period="January-December", **_DECK_BASE))
+
+
+# --- 17. the deck is 16:9 widescreen --------------------------------------
+ratio = clean_deck.slide_width / clean_deck.slide_height
+assert abs(ratio - 16 / 9) < 0.01, f"deck is {ratio:.3f}, not 16:9"
+print(f"17. OK  the deck is 16:9 widescreen ({ratio:.3f}), not python-pptx's default 4:3")
+
+
+# --- 18. the title slide carries the question verbatim --------------------
+first = "\n".join(s.text_frame.text for s in clean_deck.slides[0].shapes if s.has_text_frame)
+assert '"Analyse this"' in first, first
+assert "AQ-56f549b8" in first and "ORIGINAL QUESTION" in first, first
+assert "DRAFT" not in first, "a clean deck must not be stamped draft"
+print("18. OK  the title slide states the question verbatim and is not stamped draft")
+
+
+# --- 19. a chart slide's title states the conclusion ----------------------
+deck_body = deck_text(clean_deck)
+assert "Revenue rose faster than operating spend" in deck_body, deck_body[:800]
+assert "Breakdown -" not in deck_body, \
+    "the chart's conclusion must be the slide title, not buried behind a generic prefix"
+print("19. OK  the chart's own conclusion is the slide title, not a generic heading")
+
+
+# --- 20. one native chart per chart, with its takeaway and source --------
+chart_shapes = [s for slide in clean_deck.slides for s in slide.shapes if s.has_chart]
+assert len(chart_shapes) == 1, f"expected 1 native chart, got {len(chart_shapes)}"
+assert "What this means" in deck_body, "the chart explanation never reached the deck"
+assert "Revenue climbed from NGN 42.5m" in deck_body, "the takeaway text is missing"
+assert "Source: Monthly Sales table" in deck_body and "Measured in NGN m" in deck_body
+print("20. OK  each chart is a native object carrying its unit, source and takeaway")
+
+
+# --- 21. the deck's type scale ------------------------------------------
+sizes = [r.font.size.pt for r in runs(clean_deck) if r.font.size]
+bullets = [r.font.size.pt for r in runs(clean_deck) if r.text.startswith("-  ") and r.font.size]
+assert any(28 <= s <= 32 for s in sizes), f"no slide title in the 28-32pt band: {sorted(set(sizes))}"
+assert bullets and min(bullets) >= 17, f"bullets below the 17pt floor: {bullets}"
+labels = chart_shapes[0].chart.plots[0].data_labels.font.size
+assert labels is not None and labels.pt >= 12, f"chart labels at {labels}"
+print(f"21. OK  titles 28-32pt, bullets at {min(bullets):.0f}pt, chart labels at {labels.pt:.0f}pt")
+
+
+# --- 22. no slide is crowded past the six-bullet ceiling -----------------
+for i, slide in enumerate(clean_deck.slides, start=1):
+    for shape in slide.shapes:
+        if not shape.has_text_frame:
+            continue
+        filled = [p for p in shape.text_frame.paragraphs if "".join(r.text for r in p.runs).strip()]
+        assert len(filled) <= 6, f"slide {i} has {len(filled)} lines in one block"
+print("22. OK  no slide carries more than six lines in a single block")
+
+
+# --- 23. nothing sits outside the slide ----------------------------------
+SW, SH = clean_deck.slide_width, clean_deck.slide_height
+for i, slide in enumerate(clean_deck.slides, start=1):
+    for shape in slide.shapes:
+        left, top = shape.left or 0, shape.top or 0
+        right, bottom = left + (shape.width or 0), top + (shape.height or 0)
+        assert left >= 0 and top >= 0 and right <= SW and bottom <= SH, \
+            f"slide {i}: a shape sits outside the slide"
+print("23. OK  every shape sits inside the slide bounds")
+
+
+# --- 24. a broken percentage gets its own slide, uncorrected -------------
+broken_deck = Presentation(generate_presentation_pptx(
+    insight=_CLEAN_INSIGHT, charts=_BROKEN_CHART, **_DECK_BASE))
+broken_body = deck_text(broken_deck)
+broken_first = "\n".join(s.text_frame.text for s in broken_deck.slides[0].shapes if s.has_text_frame)
+assert "DRAFT - DATA VALIDATION REQUIRED" in broken_first, broken_first
+assert "9,420.0" in broken_body, "the original value must survive into the deck"
+assert "94.2%" not in broken_body, "the value must NOT be silently repaired"
+assert "This measure cannot be used" in broken_body, broken_body[:900]
+print("24. OK  the deck flags an impossible percentage on its own slide, uncorrected")
+
+
+# --- 25. the closing data-quality slide is always produced ---------------
+assert "What can be trusted - and what cannot" in deck_body, "no data-quality slide"
+assert "What these figures do not cover" in deck_body, "no assumptions slide"
+thin = Presentation(generate_presentation_pptx(
+    insight={"what": "One figure was returned.", "confidence": "high"},
+    charts=None, by_group=None,
+    **{**_DECK_BASE, "data_quality": {}}))
+thin_body = deck_text(thin)
+assert "What can be trusted - and what cannot" in thin_body, \
+    "the data-quality slide must appear even when the snapshot is thin"
+assert "Where each figure came from" not in thin_body, \
+    "a sources slide must not appear without evidence"
+assert "priority order" not in thin_body, "actions must not be invented"
+print("25. OK  the data-quality slide always appears; sources and actions never invented")
+
+
+# --- 26. the two formats agree ------------------------------------------
+pdf_both = text_of(generate_report_pdf(insight=_CLEAN_INSIGHT, charts=_BROKEN_CHART, **_BASE))
+for shared in ("9,420.0", "DRAFT - DATA VALIDATION REQUIRED", "On-time delivery rate by month"):
+    assert shared in pdf_both and shared in broken_body, \
+        f"{shared!r} appears in one format but not the other"
+print("26. OK  the PDF and the deck tell the same story about the same snapshot")
+
+
 print("\nALL REPORT STANDARD CHECKS PASSED")
