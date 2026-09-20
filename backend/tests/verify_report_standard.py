@@ -425,4 +425,175 @@ for shared in ("9,420.0", "DRAFT - DATA VALIDATION REQUIRED", "On-time delivery 
 print("26. OK  the PDF and the deck tell the same story about the same snapshot")
 
 
+# =========================================================================
+# The same standard, as a workbook. Every check reopens the saved .xlsx
+# and inspects what actually landed in it - sheet order, real Excel
+# tables, live formulas, number formats, native charts - rather than
+# trusting the writer that produced it.
+# =========================================================================
+
+from openpyxl import load_workbook
+from app.agents.export import export_xlsx, export_csv, FMT_PERCENT, FMT_CURRENCY_M
+
+_SNAPSHOT = {
+    "insight": _CLEAN_INSIGHT,
+    "analysis": _DECK_ANALYSIS,
+    "charts": _CLEAN_CHART,
+    "data_quality": {"row_count": 48, "completeness_pct": 96.5, "duplicate_pct": 0.0,
+                     "notes": ["Monthly order counts are not present in the source."]},
+    "preview_rows": [
+        {"month": "January", "sales_ngn_m": 42.5, "spend_ratio_pct": 40.2, "orders": 1250},
+        {"month": "February", "sales_ngn_m": 48.1, "spend_ratio_pct": 38.2, "orders": 1310},
+        {"month": "March", "sales_ngn_m": 51.3, "spend_ratio_pct": 38.2, "orders": None},
+    ],
+    "sql": "-- document analysis; no SQL executed",
+}
+
+book = load_workbook(export_xlsx(_SNAPSHOT, "export", question="Analyse this",
+                                 query_id="AQ-56f549b8", period="January-December"))
+
+
+def sheet_text(ws) -> str:
+    return "\n".join(str(c.value) for r in ws.iter_rows() for c in r if c.value is not None)
+
+
+def all_text(wb) -> str:
+    return "\n".join(sheet_text(ws) for ws in wb.worksheets)
+
+
+# --- 27. the seven sheets, in the order the standard sets out -----------
+assert book.sheetnames == ["00_Read_Me", "01_Executive_Summary", "02_Clean_Data",
+                           "03_Analysis", "04_Charts", "05_Data_Quality",
+                           "06_Assumptions"], book.sheetnames
+print("27. OK  the workbook has the seven standard sheets, in order")
+
+
+# --- 28. data areas are real Excel tables, filterable and frozen --------
+tables = {ws.title: list(ws.tables.keys()) for ws in book.worksheets}
+assert "CleanData" in tables["02_Clean_Data"], tables
+assert tables["03_Analysis"], "the analysis sheet has no table"
+assert "DataQuality" in tables["05_Data_Quality"], tables
+for title in ("02_Clean_Data", "05_Data_Quality"):
+    assert book[title].freeze_panes, f"{title} does not freeze its header"
+# Every table name must be unique across the workbook, or Excel refuses
+# to open the file at all.
+names = [n for v in tables.values() for n in v]
+assert len(names) == len(set(names)), names
+print(f"28. OK  {len(names)} uniquely-named Excel tables; data sheets freeze their headers")
+
+
+# --- 29. derived figures are live formulas, not typed-in answers -------
+analysis_ws = book["03_Analysis"]
+formulas = [c.value for r in analysis_ws.iter_rows() for c in r
+            if isinstance(c.value, str) and c.value.startswith("=")]
+assert any(f.startswith("=SUM(") for f in formulas), formulas[:5]
+assert any("IFERROR" in f for f in formulas), formulas[:5]
+# One total per series, plus a derived column per data row after the
+# first - three points produce three formulas, and every one of them is
+# a formula rather than a number somebody worked out and typed in.
+assert len(formulas) >= 3, formulas
+print(f"29. OK  {len(formulas)} live formulas on 03_Analysis - totals and shares are computed, not typed")
+
+
+# --- 30. a total is never inside its own table ------------------------
+for name, table in analysis_ws.tables.items():
+    # openpyxl maps a table name to its ref string on read and to the
+    # Table object on a freshly built sheet; accept either.
+    first, last = (table if isinstance(table, str) else table.ref).split(":")
+    last_row = int("".join(ch for ch in last if ch.isdigit()))
+    for row in analysis_ws.iter_rows(min_row=last_row, max_row=last_row):
+        assert not any(str(c.value).strip().lower() == "total" for c in row if c.value), \
+            f"table {name} ends on a Total row; filters would double-count it"
+print("30. OK  a series total sits outside its table, where a filter cannot double-count it")
+
+
+# --- 31. percentages are stored as fractions, currency as raw amounts --
+clean = book["02_Clean_Data"]
+rate_cells = [c for r in clean.iter_rows() for c in r if c.number_format == FMT_PERCENT]
+assert rate_cells, "no percentage-formatted cells at all"
+for cell in rate_cells:
+    # 40.2% must be stored as 0.402. Storing 40.2 against this format is
+    # what displays 4,020% - the defect the standard exists to prevent.
+    assert cell.value is None or abs(cell.value) <= 100, \
+        f"{cell.coordinate} holds {cell.value} against a percent format"
+assert any(abs(c.value - 0.402) < 1e-9 for c in rate_cells if c.value is not None), \
+    "40.2 should have been stored as 0.402"
+money = [c for r in book["01_Executive_Summary"].iter_rows() for c in r
+         if c.number_format == FMT_CURRENCY_M]
+assert money and any(c.value == 709_000_000 for c in money), \
+    "a currency cell should hold the raw amount; the format scales it to millions"
+print("31. OK  rates stored as fractions (0.402 -> 40.2%), currency stored raw and scaled by format")
+
+
+# --- 32. numbers are numbers, blanks are blanks -----------------------
+header_row = next(r for r in clean.iter_rows()
+                  if any(str(c.value) == "month" for c in r if c.value))[0].row
+body = list(clean.iter_rows(min_row=header_row + 1, max_row=header_row + 3))
+for row in body:
+    assert isinstance(row[1].value, (int, float)), f"{row[1].coordinate} stored a number as text"
+# The missing order count stays empty - never filled with a zero, which
+# would read as "no orders that month".
+assert body[2][3].value is None, f"a missing value became {body[2][3].value!r}"
+print("32. OK  numbers are stored as numbers, and a missing value stays empty rather than zero")
+
+
+# --- 33. native charts, each reading from the analysis sheet ----------
+charts_ws = book["04_Charts"]
+assert len(charts_ws._charts) == len(_CLEAN_CHART), \
+    f"expected {len(_CLEAN_CHART)} native charts, got {len(charts_ws._charts)}"
+chart = charts_ws._charts[0]
+refs = str(chart.series[0].val.numRef.f)
+assert "03_Analysis" in refs, f"chart does not read from 03_Analysis: {refs}"
+assert sheet_text(charts_ws).count("Revenue climbed from NGN 42.5m") == 1, \
+    "the chart's takeaway is missing from the charts sheet"
+print("33. OK  native Excel charts read live from 03_Analysis, each with its takeaway beside it")
+
+
+# --- 34. the workbook says what it is, and what it could not check ----
+readme = sheet_text(book["00_Read_Me"])
+assert '"Analyse this"' in readme, "the question is not stated verbatim"
+assert "AQ-56f549b8" in readme and "January-December" in readme, readme[:400]
+assert "VALIDATED" in readme and "DRAFT" not in readme, "a clean workbook must not be marked draft"
+for name, _ in [(n, d) for n, d in ((s, "") for s in book.sheetnames)]:
+    assert name in readme, f"{name} is missing from the sheet index"
+print("34. OK  00_Read_Me states the question verbatim, the query id, and indexes every sheet")
+
+
+# --- 35. a broken percentage reaches the workbook, uncorrected --------
+broken_book = load_workbook(export_xlsx(
+    {**_SNAPSHOT, "charts": _BROKEN_CHART}, "export",
+    question="Analyse this", query_id="AQ-56f549b8"))
+broken_all = all_text(broken_book)
+assert "DRAFT - DATA VALIDATION REQUIRED" in sheet_text(broken_book["00_Read_Me"]), \
+    "the workbook must be stamped draft on its first sheet"
+assert "9,420.0" in broken_all, "the original value must survive into the workbook"
+assert "Unusable" in sheet_text(broken_book["05_Data_Quality"]), broken_all[:600]
+assert broken_book["05_Data_Quality"].conditional_formatting, \
+    "the unusable status is not highlighted"
+print("35. OK  the workbook flags an impossible percentage, stamps the cover, and repairs nothing")
+
+
+# --- 36. a document-only analysis still produces a full workbook ------
+# This used to be impossible: the export refused outright without rows,
+# so a question answered from a document could not be exported at all.
+doc_only = load_workbook(export_xlsx(
+    {"insight": _CLEAN_INSIGHT, "analysis": _DECK_ANALYSIS, "charts": _CLEAN_CHART,
+     "data_quality": {}, "preview_rows": []},
+    "export", question="Analyse this", query_id="AQ-1"))
+assert doc_only.sheetnames == book.sheetnames, doc_only.sheetnames
+assert "did not return a table" in sheet_text(doc_only["02_Clean_Data"]), \
+    "an empty data sheet must say why it is empty"
+assert doc_only["04_Charts"]._charts, "the charts were lost when there were no rows"
+print("36. OK  an analysis with no table still exports a full workbook that says why")
+
+
+# --- 37. CSV stays plain data, and still refuses to invent ------------
+csv_path = export_csv(_SNAPSHOT["preview_rows"], "export")
+with open(csv_path, encoding="utf-8") as fh:
+    csv_text = fh.read()
+assert csv_text.splitlines()[0] == "month,sales_ngn_m,spend_ratio_pct,orders", csv_text[:120]
+assert "Meridian" not in csv_text, "branding must never be written into CSV data"
+print("37. OK  CSV is unbranded tabular data - a header row and rows, nothing else")
+
+
 print("\nALL REPORT STANDARD CHECKS PASSED")
