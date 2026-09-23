@@ -138,8 +138,14 @@ export default function PrivacyPolicyPage() {
                 <li><strong className="text-ink font-medium">Resend</strong> — delivers transactional emails (welcome, invites, security notifications).</li>
                 <li><strong className="text-ink font-medium">Railway</strong> — hosts the application and its database.</li>
                 <li><strong className="text-ink font-medium">Umami</strong> — provides internal, privacy-focused analytics on our own website (page visits, approximate location by country, and specific actions like signing up or subscribing). Cookie-free, and used only by Meridian to understand and improve the site — never sold, shared, or used for advertising.</li>
+                <li><strong className="text-ink font-medium">Meta (Facebook)</strong> — measures our advertising. Its pixel runs on our home page and our enquiry page only, and reports that the page was viewed and whether an enquiry was submitted. It is never loaded inside the signed-in product, and it never receives your business data or the contents of an enquiry. See &quot;Cookies and similar technologies&quot; below.</li>
               </ul>
-              <p>None of these providers is permitted to use your data for its own purposes beyond providing its service to us.</p>
+              <p>
+                Apart from Meta, none of these providers is permitted to use your data for its own
+                purposes beyond providing its service to us. Meta uses the advertising data it collects
+                for its own purposes as well, under its own terms, which is why we limit it to the two
+                marketing pages named above.
+              </p>
             </Section>
 
             <Section id="payment-security" title="Payment security">
@@ -155,10 +161,18 @@ export default function PrivacyPolicyPage() {
             <Section id="cookies" title="Cookies and similar technologies">
               <p>
                 Meridian uses only the minimum browser storage required to keep you signed in during a
-                session and to remember interface preferences (such as a collapsed panel). We do not
-                use third-party advertising or cross-site tracking cookies. Our internal website
-                analytics (Umami, see &quot;Third parties we rely on&quot; above) works without cookies
-                entirely.
+                session and to remember interface preferences (such as a collapsed panel). Our internal
+                website analytics (Umami, see &quot;Third parties we rely on&quot; above) works without
+                cookies entirely.
+              </p>
+              <p>
+                On two public marketing pages only &mdash; our home page and our enquiry page &mdash; we
+                also run the Meta (Facebook) advertising pixel, which does set cookies and does report to
+                Meta. It tells Meta that one of those pages was viewed, and whether an enquiry form was
+                submitted, so that we can tell which advertisements bring genuine enquiries. It never
+                receives the contents of the form, and it is not loaded anywhere inside the signed-in
+                product, so it never sees your business data or what you analyse. You can limit this
+                through your Facebook ad preferences, or by blocking the pixel in your browser.
               </p>
             </Section>
 

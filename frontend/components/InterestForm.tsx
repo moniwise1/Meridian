@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { registerInterest } from "@/lib/api";
 import { track } from "@/lib/analytics";
+import { trackLead } from "@/components/MetaPixel";
 
 // The enquiry form itself, used in two places: the "Inquire now" section of
 // the landing page, and the standalone /interest page an ad points at.
@@ -53,6 +54,11 @@ export default function InterestForm({
         company_website: honeypot,
       });
       track("interest_registered", { source });
+      // Reports the conversion to Meta so a campaign can be optimised
+      // against enquiries rather than clicks. Only the fact of a
+      // submission is sent - no name, email, phone or message. Does
+      // nothing if the pixel was never loaded on this page.
+      trackLead();
       setDone(true);
     } catch (err) {
       setError((err as Error).message);
