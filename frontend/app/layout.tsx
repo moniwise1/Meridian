@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import Sidebar from "@/components/Sidebar";
 import AuthGate from "@/components/AuthGate";
+import MetaPixel from "@/components/MetaPixel";
 import MfaWarningBanner from "@/components/MfaWarningBanner";
 import SubscriptionExpiryBanner from "@/components/SubscriptionExpiryBanner";
 import "./globals.css";
@@ -34,6 +35,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           data-exclude-search="true"
           strategy="afterInteractive"
         />
+        {/* Meta advertising pixel. Unlike Umami above, this one is NOT
+            site-wide: it loads only on the public marketing pages listed
+            in the component, because it reports full URLs to Meta and
+            several of this app's routes carry one-time tokens in their
+            query string. See components/MetaPixel.tsx. */}
+        <MetaPixel />
         <AuthGate>
           <div className="flex flex-col min-h-screen">
             <MfaWarningBanner />
