@@ -28,6 +28,7 @@ from app.db.models import Lead, LeadComment
 from app.security.ip_throttle import client_ip, check_lead_form_rate_limit
 from app.security.rate_limit import RateLimitExceeded
 from app.leads import sheets
+from app.agents import notifications
 from app.audit import logger as audit
 
 router = APIRouter(prefix="/leads", tags=["leads"])
@@ -120,7 +121,19 @@ def register_interest(body: LeadIn, request: Request, background_tasks: Backgrou
     audit.log(db, "platform", "lead_registered", detail={
         "lead_id": lead_id, "source": body.source or "", "repeat": bool(existing),
     })
-    # After the commit, never before: the lead is safe in our own database
-    # whatever the sheet does next.
+    # Both of these run AFTER the commit, never before: the lead is safe
+    # in our own database whatever the sheet or the mail server does next.
     background_tasks.add_task(sheets.sync_pending)
+    # Read back the row we just wrote so the email describes what was
+    # actually stored, including the newer details a repeat submission
+    # overwrote, rather than what arrived in this request. The fields are
+    # copied out here, while this request's session is still open: the
+    # background task runs after it closes, and handing it the ORM row
+    # instead would make every attribute a lazy load against a dead
+    # session.
+    stored = db.query(Lead).filter_by(id=lead_id).first()
+    if stored:
+        background_tasks.add_task(notifications.send_new_lead_email,
+                                  notifications.lead_email_fields(stored),
+                                  repeat=bool(existing))
     return {"received": True}

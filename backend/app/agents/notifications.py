@@ -180,3 +180,84 @@ def notify_owners(recipients: list[str], subject: str, message: str) -> None:
     own activity."""
     for recipient in recipients:
         _send_best_effort(recipient, subject, message)
+
+
+def lead_email_fields(lead) -> dict:
+    """Copies the handful of fields the enquiry email needs out of a Lead
+    row, while its database session is still open.
+
+    send_new_lead_email runs as a background task, after the request's
+    session has been closed. Handing it the ORM object instead of this
+    plain dict means every attribute it reads is a lazy load against a
+    dead session, which raises DetachedInstanceError - the lead is saved,
+    but the email that was the whole point never goes out.
+    """
+    return {
+        "full_name": lead.full_name,
+        "business_name": lead.business_name,
+        "phone": lead.phone,
+        "email": lead.email,
+        "message": lead.message,
+        "source": lead.source,
+        "campaign": lead.campaign,
+        "consented": lead.consented_at is not None,
+    }
+
+
+def send_new_lead_email(lead: dict, *, repeat: bool = False) -> None:
+    """Emails the enquiries inbox when someone fills in the "Inquire now"
+    form, on the website or from an ad. Takes the dict from
+    lead_email_fields, never a Lead row.
+
+    Sent for every real enquiry and for a same-day follow-up from someone
+    already in the list, because a person who writes in twice is the one
+    most worth calling back. Honeypot submissions never reach here - they
+    are dropped in routes_leads.py before a Lead is created.
+
+    Nothing here may raise. Capturing the lead is the job that matters;
+    telling someone about it is not allowed to endanger it, so the whole
+    body is guarded rather than just the send. A lead sitting unnoticed
+    in the console is a bad day. A lead lost because a mail server was
+    misconfigured is a lost customer.
+
+    Nothing about the enquirer is sent anywhere except this one address,
+    which is the Company's own inbox.
+    """
+    try:
+        to = (settings.leads_notification_email or "").strip()
+        if not to:
+            return
+
+        business = (lead.get("business_name") or "").strip()
+        name = lead.get("full_name") or "Someone"
+        who = f"{name} ({business})" if business else name
+        subject = f"Enquiry follow-up: {who}" if repeat else f"New enquiry: {who}"
+
+        origin = settings.frontend_origins[0] if settings.frontend_origins else ""
+        came_from = " / ".join(
+            p for p in ((lead.get("source") or "").strip(), (lead.get("campaign") or "").strip()) if p
+        )
+
+        lines = [
+            "Someone wrote in again through the Inquire now form."
+            if repeat else
+            "A new enquiry came in through the Inquire now form.",
+            "",
+            f"Name: {name}",
+        ]
+        if business:
+            lines.append(f"Business: {business}")
+        lines += [f"Phone: {lead.get('phone') or ''}", f"Email: {lead.get('email') or ''}"]
+        if came_from:
+            lines.append(f"Came from: {came_from}")
+        if not lead.get("consented"):
+            lines.append("Note: they did not tick the box agreeing to be contacted.")
+        if (lead.get("message") or "").strip():
+            lines += ["", "What they said:", lead["message"].strip()]
+        if origin:
+            lines += ["", f"Open it in the console: {origin}/platform/leads"]
+        lines += ["", "Meridian"]
+
+        _send_best_effort(to, subject, "\n".join(lines))
+    except Exception as e:
+        logger.warning("lead notification email failed: %s: %s", type(e).__name__, e)

@@ -268,5 +268,79 @@ assert len(rows) == before + 1, "a closed lead should not be silently reopened b
 assert rows[0].status == "closed" and rows[-1].status == "open"
 print("15. OK  someone who was closed off and writes in again arrives as a new, open lead")
 
+# --- 16. a new enquiry emails the enquiries inbox --------------------------
+# The whole point of the feature: Joel finds out someone wrote in without
+# having to remember to open the console.
+from app.agents import notifications
+from app.config import settings
+
+sent = []
+notifications._send_best_effort = lambda to, subject, body: sent.append((to, subject, body))
+settings.leads_notification_email = "hello@getmeridiananalytics.test"
+
+sent.clear()
+r = submit("16.16.16.16", full_name="Chidi Nwosu", email="chidi@example.com",
+           business_name="Nwosu Foods", phone="08055512345",
+           message="We need weekly sales answers.", source="facebook",
+           campaign="lagos-q4", consent=True)
+assert r.status_code == 200, r.text
+assert len(sent) == 1, f"expected exactly one email, got {len(sent)}"
+to, subject, body = sent[0]
+assert to == "hello@getmeridiananalytics.test", to
+assert subject == "New enquiry: Chidi Nwosu (Nwosu Foods)", subject
+for expected in ("Chidi Nwosu", "Nwosu Foods", "08055512345", "chidi@example.com",
+                 "facebook / lagos-q4", "We need weekly sales answers.", "/platform/leads"):
+    assert expected in body, (expected, body)
+print("1" + "6. OK  a new enquiry emails the inbox with the name, number, campaign and a link")
+
+
+# --- 17. a bot submission emails nobody ------------------------------------
+sent.clear()
+r = submit("17.17.17.17", email="bot17@example.com", company_website="http://spam.example")
+assert r.status_code == 200, r.text
+assert sent == [], f"a honeypot submission sent mail: {sent}"
+print("17. OK  a honeypot submission emails nobody")
+
+
+# --- 18. a same-day follow-up is flagged as a follow-up --------------------
+sent.clear()
+r = submit("18.18.18.18", full_name="Chidi Nwosu", email="chidi@example.com",
+           phone="08055512345", message="Following up on this.")
+assert r.status_code == 200, r.text
+assert len(sent) == 1, sent
+assert sent[0][1].startswith("Enquiry follow-up:"), sent[0][1]
+assert "wrote in again" in sent[0][2], sent[0][2]
+print("18. OK  someone writing in twice the same day is emailed as a follow-up, not a new lead")
+
+
+# --- 19. a broken mail server never costs a lead ---------------------------
+# This is the one that matters. Email is best-effort; lead capture is not.
+def explode(*_args, **_kwargs):
+    raise RuntimeError("SMTP authentication failed")
+
+notifications._send_best_effort = explode
+before = db.query(Lead).count()
+r = submit("19.19.19.19", full_name="Amina Bello", email="amina@example.com",
+           phone="08066612345")
+assert r.status_code == 200, r.text
+db.expire_all()
+assert db.query(Lead).count() == before + 1, "a failing mail server lost the lead"
+assert db.query(Lead).filter_by(email="amina@example.com").one().full_name == "Amina Bello"
+print("19. OK  a mail server that refuses to send never stops a lead being captured")
+
+
+# --- 20. the emails can be switched off entirely ---------------------------
+sent.clear()
+notifications._send_best_effort = lambda to, subject, body: sent.append((to, subject, body))
+settings.leads_notification_email = ""
+r = submit("20.20.20.20", full_name="Tunde Ade", email="tunde@example.com", phone="08077712345")
+assert r.status_code == 200, r.text
+assert sent == [], f"emails were sent with no recipient configured: {sent}"
+db.expire_all()
+assert db.query(Lead).filter_by(email="tunde@example.com").count() == 1
+settings.leads_notification_email = "hello@getmeridiananalytics.test"
+print("20. OK  clearing the address switches the emails off without affecting capture")
+
+
 db.close()
 print("\nALL LEADS CRM CHECKS PASSED")
