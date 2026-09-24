@@ -273,6 +273,13 @@ class Settings(BaseSettings):
     smtp_from_address: str = ""
     smtp_use_tls: bool = True  # STARTTLS - true for every mainstream provider's port 587
 
+    # Where "someone just enquired" emails go (app/agents/notifications.py's
+    # send_new_lead_email). A single shared inbox rather than the platform
+    # owner list, because whoever answers enquiries is not necessarily an
+    # owner, and an inbox survives a change of staff. Set to an empty
+    # string to switch the emails off without removing the code.
+    leads_notification_email: str = "hello@getmeridiananalytics.com"
+
     # Externally-anchored audit checkpoints (app/audit/anchor.py). The
     # hash chain in app/audit/logger.py is tamper-EVIDENT, not tamper-
     # PROOF, precisely because the hashes live in the same DB they protect
