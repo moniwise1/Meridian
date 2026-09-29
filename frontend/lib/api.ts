@@ -690,11 +690,16 @@ export async function subscribe(
   plan: string,
   callbackUrl: string,
   interval: "monthly" | "annual" = "monthly",
+  // "card" starts a subscription that renews itself. "transfer" buys one
+  // period by bank transfer and does not renew - Paystack cannot take a
+  // recurring payment that way. Defaults to card, so any caller written
+  // before this existed behaves exactly as it did.
+  method: "card" | "transfer" = "card",
 ): Promise<{ authorization_url: string; reference: string }> {
   const res = await fetch(`${API_BASE}/billing/subscribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ plan, callback_url: callbackUrl, interval }),
+    body: JSON.stringify({ plan, callback_url: callbackUrl, interval, method }),
   });
   await handleAuthFailure(res);
   const body = await res.json();

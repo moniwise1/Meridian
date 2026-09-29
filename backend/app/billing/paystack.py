@@ -88,6 +88,35 @@ def initialize_subscription_transaction(email: str, plan_code: str, amount: int,
     })
 
 
+def initialize_transfer_transaction(email: str, amount: int, callback_url: str,
+                                     metadata: dict | None = None,
+                                     client: httpx.Client | None = None) -> dict:
+    """Starts a hosted-checkout transaction paid by bank transfer.
+
+    Deliberately carries NO `plan`, and that is the whole point rather than
+    an omission. Paystack's "Pay with Transfer" cannot make recurring
+    payments, and its Subscriptions API accepts card and direct debit only,
+    so attaching a plan here would create a subscription that can never
+    take a second payment. This buys exactly one period, and the customer
+    is reminded to pay again before it ends
+    (app/api/routes_notifications.py's run_expiry_reminders).
+
+    `channels` is pinned to bank_transfer so Paystack shows the temporary
+    account number and countdown immediately, rather than opening on the
+    card form that the customer chose this route to avoid.
+
+    Returns {authorization_url, access_code, reference}; redirect the
+    browser to authorization_url.
+    """
+    return _request("POST", "/transaction/initialize", client=client, json={
+        "email": email,
+        "amount": amount,
+        "callback_url": callback_url,
+        "channels": ["bank_transfer"],
+        "metadata": metadata or {},
+    })
+
+
 def verify_transaction(reference: str, client: httpx.Client | None = None) -> dict:
     """Confirms a transaction actually succeeded. Never trust the client's
     redirect back to callback_url by itself - always re-verify server-side

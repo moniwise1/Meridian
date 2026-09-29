@@ -64,14 +64,14 @@ export default function BillingPage() {
 
   useEffect(refresh, []);
 
-  async function handleSubscribe(planKey: string) {
-    setBusy(planKey);
+  async function handleSubscribe(planKey: string, method: "card" | "transfer" = "card") {
+    setBusy(`${planKey}:${method}`);
     setError("");
     setNotice("");
     try {
-      track("subscribe_clicked", { plan: planKey, interval: billingInterval });
+      track("subscribe_clicked", { plan: planKey, interval: billingInterval, method });
       const callbackUrl = `${window.location.origin}/billing/callback`;
-      const result = await subscribe(planKey, callbackUrl, billingInterval);
+      const result = await subscribe(planKey, callbackUrl, billingInterval, method);
       // Off to Paystack's hosted checkout (an external origin) - a full
       // navigation, not a client-side route change.
       window.location.assign(result.authorization_url);
@@ -284,7 +284,7 @@ export default function BillingPage() {
                       </ul>
 
                       <button
-                        onClick={() => handleSubscribe(plan.key)}
+                        onClick={() => handleSubscribe(plan.key, "card")}
                         disabled={busy !== null || !available}
                         title={
                           !available
@@ -299,7 +299,7 @@ export default function BillingPage() {
                             : "border border-line text-ink hover:border-teal hover:text-teal"
                         }`}
                       >
-                        {busy === plan.key
+                        {busy === `${plan.key}:card`
                           ? "Redirecting to checkout…"
                           : !available
                             ? billingInterval === "annual" ? "Annual not yet available" : "Not yet available"
@@ -307,6 +307,28 @@ export default function BillingPage() {
                               ? `Subscribe yearly · ${formatNaira(plan.annual_amount)}`
                               : `Subscribe to ${plan.label}`}
                       </button>
+
+                      {/* Paying by transfer needs no plan code, so it is
+                          offered even for a tier whose Paystack plan is not
+                          configured. It is a second choice rather than a
+                          toggle because the two are genuinely different
+                          products: one renews itself, the other does not,
+                          and a customer has to be told which they are
+                          buying before they pay. */}
+                      <button
+                        onClick={() => handleSubscribe(plan.key, "transfer")}
+                        disabled={busy !== null}
+                        className="mt-2 text-[12.5px] px-4 py-1.5 rounded-[3px] border border-line text-ink-soft hover:border-teal hover:text-teal transition-colors disabled:opacity-40"
+                      >
+                        {busy === `${plan.key}:transfer`
+                          ? "Opening transfer details…"
+                          : "Pay by bank transfer"}
+                      </button>
+                      <p className="mt-1.5 text-[11.5px] text-ink-soft leading-relaxed">
+                        Transfer pays for{" "}
+                        {billingInterval === "annual" ? "one year" : "one month"} and does not renew
+                        on its own. We&apos;ll email you before it runs out.
+                      </p>
                     </div>
                     );
                   })}
