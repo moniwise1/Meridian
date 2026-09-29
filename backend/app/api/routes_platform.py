@@ -37,7 +37,7 @@ import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
 from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
-from app.billing.plans import PLANS, get_plan, price_label
+from app.billing.plans import PLANS, get_plan, price_label, period_days
 from app.billing import paystack
 from app.billing.paystack import PaystackError
 from app.invites import create_invite, get_invite_by_token, list_invites, revoke_invite, mark_accepted
@@ -499,6 +499,10 @@ class TenantUpdate(BaseModel):
     # tier's 1-seat cap (seat_limit_for(None) == 1) despite being marked
     # active - the opposite of what a comp override is for.
     plan: str | None = None
+    # "monthly" or "annual". Decides how long a hand-set "active" lasts,
+    # so recording a customer's annual bank transfer gives them the year
+    # they paid for instead of a month.
+    billing_interval: str | None = None
 
 
 @router.patch("/tenants/{tenant_id}", response_model=TenantOut)
@@ -509,6 +513,8 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
         raise HTTPException(404, "Tenant not found.")
     if body.plan is not None and body.plan not in PLANS and body.plan != "":
         raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}, or '' to clear it.")
+    if body.billing_interval is not None and body.billing_interval not in ("monthly", "annual"):
+        raise HTTPException(400, "Billing interval must be 'monthly' or 'annual'.")
 
     changes = {}
     if body.name is not None:
@@ -539,23 +545,35 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
         changes["subscription_status"] = {"from": t.subscription_status, "to": body.subscription_status}
         t.subscription_status = body.subscription_status
         if body.subscription_status == "active":
-            # A staff-set "active" is a comp/support override, not a real
-            # Paystack charge (see this endpoint's own docstring/the
-            # tenants page copy) - it still needs paid_at/expires_at set
-            # so the tenant shows up correctly as "on Pro" with real dates
-            # rather than active-but-dateless. paid_at only backfills if
-            # unset, same anchoring rule _activate() uses for a real
-            # payment; expires_at always gets a fresh 30-day window.
+            # A staff-set "active" covers two real cases: comping someone,
+            # and recording a payment that arrived outside the gateway -
+            # a bank transfer against an invoice, which is how the first
+            # customers are likely to pay. Either way it needs paid_at and
+            # expires_at set so the tenant reads as "on Pro" with real
+            # dates rather than active-but-dateless. paid_at only
+            # backfills if unset, the same anchoring rule _activate() uses
+            # for a gateway payment, so a renewal never reopens the refund
+            # window.
+            #
+            # The period follows the billing interval rather than always
+            # being 30 days. Someone who has just paid for a year and been
+            # given a month would lose access eleven months early, and the
+            # first they would know of it is being locked out.
             if not t.paid_at:
                 t.paid_at = datetime.utcnow()
-            t.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+            if body.billing_interval:
+                t.billing_interval = body.billing_interval
+            t.subscription_expires_at = (
+                datetime.utcnow() + timedelta(days=period_days(t.billing_interval))
+            )
             t.plan = body.plan if body.plan else (t.plan or "premium")
         else:
             # Anything else ("none"/"pending"/"cancelled"/"refunded") is
             # not currently-paying by definition (Tenant.tier), so there's
-            # no live expiry or plan to show.
+            # no live expiry, plan or interval to show.
             t.subscription_expires_at = None
             t.plan = None
+            t.billing_interval = None
     elif body.plan is not None:
         # Changing just the plan on an already-active tenant (e.g.
         # comping them up from Basic to Premium) without touching status.

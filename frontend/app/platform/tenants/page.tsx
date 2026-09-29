@@ -62,6 +62,19 @@ export default function PlatformTenantsPage() {
     }
   }
 
+  // Sent together with the status so the backend applies the right period
+  // in one go: setting "active" is what decides the expiry date, and a
+  // separate follow-up call would leave the tenant on a month until it
+  // landed.
+  async function handleActivate(tenantId: string, interval: string) {
+    try {
+      await updateTenant(tenantId, { subscription_status: "active", billing_interval: interval });
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function handleSubdomainSave(tenantId: string) {
     setSubdomainError("");
     try {
@@ -244,6 +257,23 @@ export default function PlatformTenantsPage() {
                       {s}
                     </option>
                   ))}
+                </select>
+                {/* Recording a payment that came in outside the gateway -
+                    a bank transfer against an invoice. The interval is
+                    chosen here rather than assumed, because activating
+                    an annual customer for 30 days locks them out eleven
+                    months early and nobody finds out until they call. */}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) handleActivate(t.id, e.target.value);
+                  }}
+                  title="Record a payment received by bank transfer and activate for the full period paid."
+                  className="text-[12px] border border-line rounded-[3px] px-2 py-1 bg-panel text-ink-soft"
+                >
+                  <option value="">Mark paid…</option>
+                  <option value="monthly">Paid — 1 month</option>
+                  <option value="annual">Paid — 1 year</option>
                 </select>
                 {isOwner && t.subscription_status === "active" && (
                   <button
