@@ -86,11 +86,30 @@ if not KEY:
         sys.exit("No key given and no terminal to ask on. Set PAYSTACK_SECRET_KEY in the\n"
                  "environment when running this without a terminal. Nothing was changed.")
     print("Paystack keeps TEST and LIVE separate, so this needs the key for the mode")
-    print("you are setting up. Nothing is printed back, and the key is not saved.\n")
-    try:
-        KEY = _clean_key(getpass.getpass("Paystack secret key (sk_test_... or sk_live_...): "))
-    except (EOFError, KeyboardInterrupt):
-        sys.exit("\nCancelled. Nothing was changed.")
+    print("you are setting up. Nothing is printed back, and the key is not saved.")
+    print("Nothing appears as you type or paste - that is the point, not a hang.\n")
+    # Re-asks rather than exiting on a bad entry. Exiting here once put a
+    # LIVE secret key into a terminal in plain text: the prompt closed,
+    # the next paste went to the shell instead, and PowerShell echoed the
+    # whole key and tried to run it as a command. A prompt that stays open
+    # means a mistimed paste lands somewhere harmless.
+    for attempt in range(3):
+        try:
+            KEY = _clean_key(getpass.getpass("Paystack secret key (sk_test_... or sk_live_...): "))
+        except (EOFError, KeyboardInterrupt):
+            sys.exit("\nCancelled. Nothing was changed.")
+        if KEY.startswith(("sk_test_", "sk_live_")):
+            break
+        if not KEY:
+            print("   Nothing was entered. Paste the key and press Enter.")
+        elif KEY.startswith("pk_"):
+            print("   That is the PUBLIC key. You need the SECRET one, from the same page.")
+        else:
+            print("   That does not begin sk_test_ or sk_live_. Copy the whole key.")
+        if attempt == 2:
+            sys.exit("\nNo valid key after three tries. Nothing was changed. If your key is\n"
+                     "now visible anywhere on screen, roll it in Paystack before re-running.")
+        KEY = ""
 if not KEY:
     sys.exit("No key given. Nothing was changed.")
 if not KEY.startswith(("sk_test_", "sk_live_")):
