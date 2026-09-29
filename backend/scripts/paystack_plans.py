@@ -6,14 +6,18 @@ Paystack keeps TEST and LIVE data completely separate, so this is run once
 per mode: once with the sk_test_ key while you build and test, and again
 with the sk_live_ key the day you go live (see docs/BILLING_GO_LIVE.md).
 
-    # test mode - runs freely (bash / Git Bash)
-    PAYSTACK_SECRET_KEY=sk_test_xxx python scripts/paystack_plans.py
+Run it with no arguments and it asks for the key without showing it, which
+keeps a live secret key out of your shell history and out of any
+screenshot of the terminal:
 
-    # the same in Windows PowerShell - set the variable first, then run
-    $env:PAYSTACK_SECRET_KEY = "sk_test_xxx"; python scripts/paystack_plans.py
+    # test mode
+    python scripts/paystack_plans.py
 
     # live mode - creates REAL plans, so it needs an explicit --yes
-    PAYSTACK_SECRET_KEY=sk_live_xxx python scripts/paystack_plans.py --yes
+    python scripts/paystack_plans.py --yes
+
+PAYSTACK_SECRET_KEY is still read from the environment when it is set, for
+CI or an automated run.
 
 Idempotent: a plan whose name already exists is reused, never duplicated.
 
@@ -34,6 +38,7 @@ Paystack agree.
 stdlib only (urllib) - no dependency on the app or on httpx, so it runs
 anywhere Python does.
 """
+import getpass
 import json
 import os
 import sys
@@ -60,9 +65,37 @@ def annual_amount(monthly_kobo: int, discount_percent: int) -> int:
 
 REPRICE = "--reprice" in sys.argv
 
-KEY = os.environ.get("PAYSTACK_SECRET_KEY", "").strip()
+def _clean_key(raw: str) -> str:
+    """Strips what a paste picks up: surrounding whitespace, the quotes a
+    shell or a docs page adds, and any stray newline. A key with a quote
+    still attached fails with a bare 401, which reads as "wrong key"
+    rather than "you pasted a quote"."""
+    return raw.strip().strip('"').strip("'").strip()
+
+
+KEY = _clean_key(os.environ.get("PAYSTACK_SECRET_KEY", ""))
 if not KEY:
-    sys.exit("Set PAYSTACK_SECRET_KEY in the environment first (sk_test_... or sk_live_...).")
+    # Asked for rather than required as an environment variable, because
+    # setting one puts a live secret key into shell history, into the
+    # terminal scrollback, and into any screenshot of it. getpass does not
+    # echo what is typed and nothing here ever prints the key back.
+    if not sys.stdin.isatty():
+        # getpass reads the console directly on Windows, so with no
+        # terminal attached it blocks forever rather than failing. A CI
+        # run or a piped invocation needs to stop here and say why.
+        sys.exit("No key given and no terminal to ask on. Set PAYSTACK_SECRET_KEY in the\n"
+                 "environment when running this without a terminal. Nothing was changed.")
+    print("Paystack keeps TEST and LIVE separate, so this needs the key for the mode")
+    print("you are setting up. Nothing is printed back, and the key is not saved.\n")
+    try:
+        KEY = _clean_key(getpass.getpass("Paystack secret key (sk_test_... or sk_live_...): "))
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nCancelled. Nothing was changed.")
+if not KEY:
+    sys.exit("No key given. Nothing was changed.")
+if not KEY.startswith(("sk_test_", "sk_live_")):
+    sys.exit("That does not look like a Paystack SECRET key - it should begin sk_test_ or\n"
+             "sk_live_. The pk_ keys are public keys and cannot create plans.")
 
 if KEY.startswith("sk_test_"):
     MODE, PUB_PREFIX, SETTINGS_TAB = "TEST", "pk_test_", "Test"
@@ -72,7 +105,7 @@ elif KEY.startswith("sk_live_"):
         sys.exit(
             "This is a LIVE key - it will create real plans on your live Paystack\n"
             "account. Re-run with --yes once you're sure:\n"
-            "    PAYSTACK_SECRET_KEY=sk_live_xxx python scripts/paystack_plans.py --yes"
+            "    python scripts/paystack_plans.py --yes"
         )
 else:
     sys.exit(f"Unrecognised key prefix ({KEY[:8]}...). Expected sk_test_ or sk_live_.")
@@ -94,7 +127,21 @@ def api(method: str, path: str, body: dict | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as e:
-        sys.exit(f"Paystack {method} {path} -> HTTP {e.code}: {e.read().decode('utf-8', 'replace')}")
+        detail = e.read().decode("utf-8", "replace")
+        if e.code == 401:
+            # By far the most common failure, and the raw message does not
+            # say which of the several likely causes it was.
+            sys.exit(
+                "\nPaystack rejected the key (HTTP 401).\n\n"
+                "  - Check it is the SECRET key from Settings > API Keys & Webhooks,\n"
+                "    not the public one.\n"
+                "  - Check you copied the whole key, with nothing trimmed off either end.\n"
+                "  - Check you are using the key for the right mode: a Test key cannot\n"
+                "    create Live plans, and a Live key cannot create Test ones.\n"
+                "  - If you reset your keys recently, the old one stops working at once.\n\n"
+                "Nothing was changed."
+            )
+        sys.exit(f"Paystack {method} {path} -> HTTP {e.code}: {detail}")
 
 
 def amount_for(env_var: str, default: int) -> int:
