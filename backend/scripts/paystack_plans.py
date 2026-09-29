@@ -16,6 +16,13 @@ screenshot of the terminal:
     # live mode - creates REAL plans, so it needs an explicit --yes
     python scripts/paystack_plans.py --yes
 
+If pasting into that hidden prompt will not work - Ctrl+V does nothing in
+the legacy Windows console, and with no echo there is no way to tell a
+failed paste from a working one - put the key in a file instead and point
+the script at it. The file is deleted as soon as it has been read:
+
+    python scripts/paystack_plans.py --yes --key-file key.txt
+
 PAYSTACK_SECRET_KEY is still read from the environment when it is set, for
 CI or an automated run.
 
@@ -65,6 +72,47 @@ def annual_amount(monthly_kobo: int, discount_percent: int) -> int:
 
 REPRICE = "--reprice" in sys.argv
 
+
+def _key_file_arg() -> str:
+    """--key-file PATH, or an empty string when not given."""
+    if "--key-file" not in sys.argv:
+        return ""
+    i = sys.argv.index("--key-file")
+    if i + 1 >= len(sys.argv):
+        sys.exit("--key-file needs a filename after it, e.g. --key-file key.txt")
+    return sys.argv[i + 1]
+
+
+def _read_key_file(path: str) -> str:
+    """Reads the key out of a file, then deletes the file.
+
+    This exists because pasting into a hidden prompt is unreliable in the
+    Windows console: Ctrl+V does nothing in the legacy host, and with no
+    echo there is no way to tell a failed paste from a working one. A
+    file can be filled in Notepad, where pasting simply works.
+
+    The file is deleted straight after reading, and overwritten first, so
+    a live secret key is not left sitting on disk to be forgotten about.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read()
+    except OSError as e:
+        sys.exit(f"Could not read {path}: {e}")
+
+    try:
+        size = os.path.getsize(path)
+        with open(path, "r+b") as fh:
+            fh.write(b"\0" * size)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.remove(path)
+        print(f"   Read the key from {path} and deleted the file.\n")
+    except OSError as e:
+        print(f"   !! Read the key from {path} but could NOT delete it: {e}\n"
+              f"      Delete it yourself now - it holds a live secret key.\n")
+    return _clean_key(raw)
+
 def _clean_key(raw: str) -> str:
     """Strips what a paste picks up: surrounding whitespace, the quotes a
     shell or a docs page adds, and any stray newline. A key with a quote
@@ -73,8 +121,12 @@ def _clean_key(raw: str) -> str:
     return raw.strip().strip('"').strip("'").strip()
 
 
-KEY = _clean_key(os.environ.get("PAYSTACK_SECRET_KEY", ""))
-if not KEY:
+KEY_FILE = _key_file_arg()
+if KEY_FILE:
+    KEY = _read_key_file(KEY_FILE)
+else:
+    KEY = _clean_key(os.environ.get("PAYSTACK_SECRET_KEY", ""))
+if not KEY and not KEY_FILE:
     # Asked for rather than required as an environment variable, because
     # setting one puts a live secret key into shell history, into the
     # terminal scrollback, and into any screenshot of it. getpass does not
