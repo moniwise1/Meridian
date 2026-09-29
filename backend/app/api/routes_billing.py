@@ -16,6 +16,7 @@ as every other consequential action in this app (app/audit/logger.py) -
 money moving deserves at least the same trail as a query running.
 """
 from datetime import datetime, timedelta
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 import httpx
 from pydantic import BaseModel
@@ -209,6 +210,12 @@ class SubscribeRequest(BaseModel):
     # getting exactly what it got before. Literal, so anything else is a
     # 422 rather than silently treated as monthly.
     interval: BillingInterval = "monthly"
+    # "card" starts a real Paystack subscription that renews itself.
+    # "transfer" buys one period by bank transfer and does not renew,
+    # because Paystack's Pay with Transfer cannot make recurring payments
+    # and its Subscriptions API takes card and direct debit only. Defaults
+    # to card so nothing written before this existed changes behaviour.
+    method: Literal["card", "transfer"] = "card"
 
 
 @router.post("/subscribe")
@@ -227,20 +234,32 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
     plan = get_plan(body.plan)
     if not plan:
         raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}.")
-    plan_code = plan_code_for(plan, body.interval)
-    if not plan_code:
-        which = "annual " if body.interval == "annual" else ""
-        raise HTTPException(500, f"The {plan.label} {which}plan is not configured yet (missing its Paystack plan code).")
 
+    amount = amount_for(plan, body.interval)
+    metadata = {"tenant_id": tenant.id, "interval": body.interval, "method": body.method}
     try:
-        result = paystack.initialize_subscription_transaction(
-            email=user.email, plan_code=plan_code,
-            amount=amount_for(plan, body.interval), callback_url=body.callback_url,
-            metadata={"tenant_id": tenant.id, "interval": body.interval},
-        )
+        if body.method == "transfer":
+            # No plan code is looked up, because no subscription is being
+            # created: Paystack cannot take a recurring payment by bank
+            # transfer. This buys one period and the expiry reminder does
+            # the chasing (see paystack.initialize_transfer_transaction).
+            result = paystack.initialize_transfer_transaction(
+                email=user.email, amount=amount, callback_url=body.callback_url,
+                metadata=metadata,
+            )
+        else:
+            plan_code = plan_code_for(plan, body.interval)
+            if not plan_code:
+                which = "annual " if body.interval == "annual" else ""
+                raise HTTPException(500, f"The {plan.label} {which}plan is not configured yet "
+                                         f"(missing its Paystack plan code).")
+            result = paystack.initialize_subscription_transaction(
+                email=user.email, plan_code=plan_code, amount=amount,
+                callback_url=body.callback_url, metadata=metadata,
+            )
     except PaystackError as e:
         audit.log(db, ctx.tenant_id, "subscription_initialize_failed", ctx.user_id,
-                   status="error", detail={"reason": str(e), "plan": body.plan})
+                   status="error", detail={"reason": str(e), "plan": body.plan, "method": body.method})
         raise HTTPException(502, f"Could not start checkout: {e}")
 
     tenant.subscription_status = "pending"
@@ -253,6 +272,15 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
     tenant.plan = body.plan
     tenant.billing_interval = body.interval
     tenant.last_transaction_reference = result["reference"]
+    # A transfer creates no Paystack subscription, so nothing will ever
+    # send a subscription.create event to fill these in. Clearing them
+    # matters: a tenant who paid by card, lapsed, and has now paid by
+    # transfer would otherwise keep a dead subscription code, and
+    # /cancel would try to cancel a subscription that is not paying for
+    # the period they are actually in.
+    if body.method == "transfer":
+        tenant.paystack_subscription_code = None
+        tenant.paystack_email_token = None
     db.commit()
     audit.log(db, ctx.tenant_id, "subscription_checkout_started", ctx.user_id,
                detail={"reference": result["reference"], "plan": body.plan, "interval": body.interval})
