@@ -61,11 +61,20 @@ export type AuthResponse = {
   email?: string | null;
 };
 
-export async function register(companyName: string, email: string, password: string): Promise<AuthResponse> {
+export async function register(
+  companyName: string,
+  email: string,
+  password: string,
+  // Consent to product and marketing email. Defaults to false: an
+  // unticked box is the only honest starting state for consent.
+  marketingOptIn = false,
+): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company_name: companyName, email, password }),
+    body: JSON.stringify({
+      company_name: companyName, email, password, marketing_opt_in: marketingOptIn,
+    }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not create your account.");

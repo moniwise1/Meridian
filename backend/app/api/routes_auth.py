@@ -48,6 +48,11 @@ class RegisterRequest(BaseModel):
     company_name: str
     email: EmailStr
     password: str = Field(min_length=8)
+    # Consent to product and marketing email. Defaults to False so that a
+    # client which does not send it enrols nobody: consent has to be given,
+    # never assumed from silence. Transactional email - receipts, password
+    # resets, renewal notices - is unaffected either way.
+    marketing_opt_in: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -211,6 +216,10 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     user = User(
         tenant_id=tenant.id, email=email, role="admin",
         password_hash=hash_password(body.password),
+        marketing_opt_in=body.marketing_opt_in,
+        # Dated only when consent was actually given, so the record can
+        # show when and not merely that.
+        marketing_opt_in_at=datetime.utcnow() if body.marketing_opt_in else None,
     )
     db.add(user)
     db.commit()
@@ -533,6 +542,9 @@ class MeOut(BaseModel):
     # display_name_next_change_at tells the frontend when it reopens.
     display_name_change_available: bool
     display_name_next_change_at: datetime | None = None
+    # Whether this account has agreed to product and marketing email.
+    # Transactional email is not covered by it and carries on regardless.
+    marketing_opt_in: bool
 
 
 def _me_out(ctx: AuthContext, user: User) -> MeOut:
@@ -542,6 +554,9 @@ def _me_out(ctx: AuthContext, user: User) -> MeOut:
         email=user.email, display_name=user.display_name,
         email_change_available=user.email_changed_at is None,
         display_name_change_available=available, display_name_next_change_at=next_at,
+        # bool() because every account created before this column existed
+        # reads back NULL, and "never asked" must behave as "no".
+        marketing_opt_in=bool(user.marketing_opt_in),
     )
 
 
@@ -550,6 +565,40 @@ def me(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_current_use
     user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
     if not user:
         raise HTTPException(404, "User not found.")
+    return _me_out(ctx, user)
+
+
+class MarketingOptInUpdate(BaseModel):
+    marketing_opt_in: bool
+
+
+@router.patch("/me/marketing-opt-in", response_model=MeOut)
+def update_own_marketing_opt_in(body: MarketingOptInUpdate, db: Session = Depends(get_db),
+                                 ctx: AuthContext = Depends(get_current_user)):
+    """Turns product and marketing email on or off for the signed-in user.
+
+    Withdrawing consent has to be as easy as giving it, so this is a
+    self-service toggle rather than a support request. It never touches
+    transactional email: receipts, password resets, renewal notices and
+    security alerts are part of running the account, not marketing, and
+    are not something an account holder can switch off while the account
+    exists.
+
+    The change is audited, so the history of when consent was given and
+    withdrawn survives even though the row only holds the current state.
+    """
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    if not user:
+        raise HTTPException(404, "User not found.")
+    was = bool(user.marketing_opt_in)
+    user.marketing_opt_in = body.marketing_opt_in
+    # Re-dated on every fresh opt-in, so the record always shows when the
+    # consent being relied on was actually given.
+    user.marketing_opt_in_at = datetime.utcnow() if body.marketing_opt_in else None
+    db.commit()
+    db.refresh(user)
+    audit.log(db, ctx.tenant_id, "marketing_opt_in_changed", ctx.user_id,
+               detail={"from": was, "to": bool(user.marketing_opt_in)})
     return _me_out(ctx, user)
 
 

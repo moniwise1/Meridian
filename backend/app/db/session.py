@@ -55,6 +55,8 @@ _ADDED_COLUMNS = [
     ("tenants", "billing_interval", "VARCHAR"),
     ("uploaded_documents", "content_sha256", "VARCHAR"),
     ("users", "created_at", "TIMESTAMP"),
+    ("users", "marketing_opt_in", "BOOLEAN"),
+    ("users", "marketing_opt_in_at", "TIMESTAMP"),
     ("tenants", "subscription_expires_at", "TIMESTAMP"),
     ("data_source_connections", "extra_config", {"postgresql": "JSON", "mysql": "JSON", "default": "TEXT"}),
     ("tenants", "plan", "VARCHAR"),
