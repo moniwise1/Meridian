@@ -196,7 +196,10 @@ export async function listTenants(): Promise<PlatformTenant[]> {
 
 export async function updateTenant(
   tenantId: string,
-  updates: { name?: string; subdomain?: string; subscription_status?: string; plan?: string },
+  updates: {
+    name?: string; subdomain?: string; subscription_status?: string; plan?: string;
+    billing_interval?: string;
+  },
 ): Promise<PlatformTenant> {
   const res = await fetch(`${API_BASE}/platform/tenants/${tenantId}`, {
     method: "PATCH",
