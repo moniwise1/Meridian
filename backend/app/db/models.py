@@ -145,6 +145,27 @@ class User(Base):
     # means the change is allowed again.
     display_name_changed_at = Column(DateTime, nullable=True)
     password_hash = Column(String, nullable=False)
+    # Consent to receive product and marketing email, as distinct from the
+    # transactional email every account gets regardless: receipts, password
+    # resets, renewal notices, security alerts. Signing up is consent to
+    # the second, never to the first.
+    #
+    # Defaults to False and is only ever set by someone actively ticking a
+    # box. A pre-ticked box is not consent under the Nigeria Data
+    # Protection Act, and a default of True would quietly turn every
+    # existing account into a marketing list nobody agreed to join.
+    #
+    # marketing_opt_in_at records WHEN consent was given, because consent
+    # you cannot date is consent you cannot evidence. It is cleared on
+    # opt-out; the audit trail keeps the history of both.
+    #
+    # Nullable because the additive migration adds the column with a plain
+    # ADD COLUMN, which carries no default, so every account that existed
+    # before this reads back NULL. That is the correct answer for them -
+    # they were never asked - and NULL must therefore be treated exactly
+    # like False everywhere. Never `if user.marketing_opt_in is not None`.
+    marketing_opt_in = Column(Boolean, nullable=True, default=False)
+    marketing_opt_in_at = Column(DateTime, nullable=True)
     role = Column(String, nullable=False, default="analyst")  # admin/analyst/manager/executive/viewer
     # Row-level scope, e.g. {"region": ["South-East"]}. Empty dict = unrestricted (e.g. CEO/admin).
     row_scope = Column(JSON, default=dict)

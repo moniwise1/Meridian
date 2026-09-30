@@ -61,11 +61,20 @@ export type AuthResponse = {
   email?: string | null;
 };
 
-export async function register(companyName: string, email: string, password: string): Promise<AuthResponse> {
+export async function register(
+  companyName: string,
+  email: string,
+  password: string,
+  // Consent to product and marketing email. Defaults to false: an
+  // unticked box is the only honest starting state for consent.
+  marketingOptIn = false,
+): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company_name: companyName, email, password }),
+    body: JSON.stringify({
+      company_name: companyName, email, password, marketing_opt_in: marketingOptIn,
+    }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.detail ?? "Could not create your account.");
@@ -315,6 +324,10 @@ export type Me = {
   // cooldown (a cooldown, not a lifetime limit like email).
   display_name_change_available: boolean;
   display_name_next_change_at: string | null;
+  // Consent to product and marketing email. Transactional email -
+  // receipts, password resets, renewal and security notices - is not
+  // covered by this and carries on either way.
+  marketing_opt_in: boolean;
 };
 
 export async function getMe(): Promise<Me> {
@@ -322,6 +335,18 @@ export async function getMe(): Promise<Me> {
   await handleAuthFailure(res);
   if (!res.ok) throw new Error("Could not load your account.");
   return res.json();
+}
+
+export async function updateMarketingOptIn(optIn: boolean): Promise<Me> {
+  const res = await fetch(`${API_BASE}/auth/me/marketing-opt-in`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ marketing_opt_in: optIn }),
+  });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not update your email preference.");
+  return body;
 }
 
 export async function updateDisplayName(displayName: string): Promise<Me> {

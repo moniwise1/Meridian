@@ -46,6 +46,9 @@ function LoginPageInner() {
   );
   const [step, setStep] = useState<Step>("credentials");
   const [companyName, setCompanyName] = useState("");
+  // Starts unticked and stays unticked unless the person ticks it. A
+  // pre-ticked consent box is not consent.
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -128,7 +131,7 @@ function LoginPageInner() {
     setSubmitting(true);
     try {
       if (effectiveMode === "register") {
-        const auth = await register(companyName, email, password);
+        const auth = await register(companyName, email, password, marketingOptIn);
         track("signup_completed");
         saveSession({
           token: auth.access_token, tenantId: auth.tenant_id, userId: auth.user_id,
@@ -355,6 +358,24 @@ function LoginPageInner() {
           )}
           <Field label="Email" value={email} onChange={setEmail} placeholder="you@company.com" type="email" />
           <Field label="Password" value={password} onChange={setPassword} placeholder="••••••••" type="password" />
+
+          {effectiveMode === "register" && (
+            // Unticked by default, and separate from the terms text below,
+            // so agreeing to the terms is never mistaken for agreeing to
+            // marketing. Ticking it is the only thing that enrols anyone.
+            <label className="mt-1 flex items-start gap-2 text-[12.5px] text-ink-soft leading-relaxed cursor-pointer">
+              <input
+                type="checkbox"
+                checked={marketingOptIn}
+                onChange={(e) => setMarketingOptIn(e.target.checked)}
+                className="mt-0.5 accent-teal-deep"
+              />
+              <span>
+                Send me occasional product updates and offers. You can turn this off at any
+                time in your account settings.
+              </span>
+            </label>
+          )}
 
           {error && <div className="text-[12.5px] text-red">{error}</div>}
 

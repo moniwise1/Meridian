@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getMe, updateDisplayName, changeOwnEmail, changeOwnPassword, type Me } from "@/lib/api";
+import {
+  getMe, updateDisplayName, changeOwnEmail, changeOwnPassword, updateMarketingOptIn, type Me,
+} from "@/lib/api";
 
 function Field({
   label, value, onChange, placeholder, type = "text", disabled = false,
@@ -42,6 +44,10 @@ export default function AccountPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [loadError, setLoadError] = useState("");
 
+  // Email preferences
+  const [marketingSaving, setMarketingSaving] = useState(false);
+  const [marketingError, setMarketingError] = useState("");
+
   // Display name
   const [displayName, setDisplayName] = useState("");
   const [nameSaving, setNameSaving] = useState(false);
@@ -73,6 +79,22 @@ export default function AccountPage() {
   }
 
   useEffect(load, []);
+
+  // Saves on the click rather than behind a "Save" button: withdrawing
+  // consent should take exactly one action. The checkbox reads from `me`,
+  // so if the request fails the tick reverts to what the server actually
+  // holds instead of showing a preference that was never saved.
+  async function handleMarketingChange(optIn: boolean) {
+    setMarketingSaving(true);
+    setMarketingError("");
+    try {
+      setMe(await updateMarketingOptIn(optIn));
+    } catch (err) {
+      setMarketingError((err as Error).message);
+    } finally {
+      setMarketingSaving(false);
+    }
+  }
 
   async function handleSaveName(e: React.FormEvent) {
     e.preventDefault();
@@ -197,6 +219,29 @@ export default function AccountPage() {
             )}
             {emailError && <div className="mt-2 text-[12.5px] text-red">{emailError}</div>}
             {emailSaved && !emailError && <div className="mt-2 text-[12.5px] text-teal">Email updated.</div>}
+          </Card>
+
+          <Card
+            title="Email preferences"
+            description="Product updates and offers. Separate from account email."
+          >
+            <label className="flex items-start gap-2.5 text-[13px] text-ink leading-relaxed cursor-pointer">
+              <input
+                type="checkbox"
+                checked={me.marketing_opt_in}
+                disabled={marketingSaving}
+                onChange={(e) => handleMarketingChange(e.target.checked)}
+                className="mt-0.5 accent-teal-deep disabled:opacity-40"
+              />
+              <span>Send me occasional product updates and offers</span>
+            </label>
+            <p className="mt-2 text-[12px] text-ink-soft leading-relaxed">
+              Turning this off stops marketing email only. You&apos;ll still get receipts,
+              renewal notices, password resets and security alerts, which are part of running
+              the account.
+            </p>
+            {marketingSaving && <div className="mt-2 text-[12.5px] text-ink-soft">Saving…</div>}
+            {marketingError && <div className="mt-2 text-[12.5px] text-red">{marketingError}</div>}
           </Card>
 
           <Card title="Password" description="Requires your current password.">
