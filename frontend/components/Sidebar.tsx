@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { clearSession } from "@/lib/auth";
 import { useSession } from "@/lib/useSession";
+import { useAccountType } from "@/lib/useAccountType";
 import NotificationBell from "@/components/NotificationBell";
 import GlideNav from "@/components/glide/GlideNav";
 
@@ -14,7 +15,10 @@ const NAV = [
   { href: "/library", label: "Library" },
   { href: "/documents", label: "Documents" },
   { href: "/connections", label: "Data sources" },
-  { href: "/team", label: "Team", adminOnly: true },
+  // Individuals have no team to manage - every individual plan is one
+  // seat and the backend refuses an invite from one outright, so the page
+  // would be a dead end rather than an upsell.
+  { href: "/team", label: "Team", adminOnly: true, businessOnly: true },
   { href: "/billing", label: "Billing" },
   { href: "/account", label: "Account" },
   { href: "/security", label: "Security" },
@@ -26,6 +30,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const session = useSession();
+  const accountType = useAccountType();
 
   // /platform/* has its own nav (app/platform/layout.tsx); /status is the
   // public status page (no session at all) - this sidebar is tenant-scoped
@@ -54,7 +59,14 @@ export default function Sidebar() {
     router.push("/login");
   }
 
-  const navItems = NAV.filter((item) => !item.adminOnly || session?.role === "admin");
+  // accountType is null until /auth/me answers (and stays null if it
+  // never does), which deliberately reads as "show it": hiding a page
+  // from a business on a network blip is worse than one extra nav item.
+  const navItems = NAV.filter(
+    (item) =>
+      (!item.adminOnly || session?.role === "admin") &&
+      (!item.businessOnly || accountType !== "individual"),
+  );
   const activeHref =
     navItems.find((item) => (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)))?.href ?? null;
 

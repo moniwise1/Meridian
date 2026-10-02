@@ -30,7 +30,8 @@ from app.billing.paystack import PaystackError
 from app.billing.plans import (
     PLANS, get_plan, query_limit_for, document_limit_for, plan_key_for_paystack_code,
     interval_for_paystack_code, plan_code_for, amount_for, price_label, period_days,
-    refund_window_days, BillingInterval,
+    refund_window_days, BillingInterval, ACCOUNT_TYPES, plans_for_account_type,
+    account_type_for_plan, normalize_account_type,
 )
 from app.billing.usage import count_queries_this_month, count_documents_this_month
 from app.audit import logger as audit
@@ -68,7 +69,7 @@ class PlanOut(BaseModel):
 
 
 @router.get("/plans", response_model=list[PlanOut])
-def list_plans():
+def list_plans(account_type: str | None = None):
     """Single source of truth for pricing-card content - see
     app/billing/plans.py. Deliberately public, no auth (unlike every other
     /billing/* route) - it now backs the public marketing landing page's
@@ -76,7 +77,15 @@ def list_plans():
     plan/label/amount/seat_limit/connection_limit/query_limit/
     document_limit/features/tagline/configured is tenant-specific or
     sensitive; it's the same content a real SaaS pricing page always shows
-    a logged-out visitor."""
+    a logged-out visitor.
+
+    account_type narrows it to one catalogue ("business" or "individual").
+    Omitted, it returns every plan, which is what the landing page wants:
+    it shows both and lets the visitor pick. The Billing page inside the
+    app passes the tenant's own type, so nobody is ever offered a plan
+    their account cannot actually use."""
+    wanted = (plans_for_account_type(account_type)
+              if account_type in ACCOUNT_TYPES else list(PLANS.values()))
     return [
         PlanOut(
             key=p.key, label=p.label, amount=p.amount, seat_limit=p.seat_limit,
@@ -89,7 +98,7 @@ def list_plans():
             refund_window_days=refund_window_days("monthly"),
             annual_refund_window_days=refund_window_days("annual"),
         )
-        for p in PLANS.values()
+        for p in wanted
     ]
 
 
@@ -231,9 +240,18 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
     # before starting another one (see _recheck_pending_checkout).
     _recheck_pending_checkout(db, tenant, ctx.user_id)
 
+    account_type = normalize_account_type(tenant.account_type)
+    offered = plans_for_account_type(account_type)
     plan = get_plan(body.plan)
-    if not plan:
-        raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}.")
+    if not plan or plan not in offered:
+        # Deliberately the same message for "no such plan" and "a real plan
+        # from the other catalogue": from this tenant's point of view both
+        # are plans it cannot buy, and listing only its own keys is more
+        # useful than naming ones it will never be allowed to pick. An
+        # individual account has no seats to fill, so it must not end up on
+        # a team plan - nor a business on a plan capped at one person.
+        raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: "
+                                 f"{', '.join(p.key for p in offered)}.")
 
     amount = amount_for(plan, body.interval)
     metadata = {"tenant_id": tenant.id, "interval": body.interval, "method": body.method}

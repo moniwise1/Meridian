@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { listPlans, type Plan } from "@/lib/api";
+import { listPlans, type Plan, type AccountType } from "@/lib/api";
 import BillingIntervalToggle, { PlanPrice, type BillingInterval } from "@/components/BillingIntervalToggle";
 import InterestForm from "@/components/InterestForm";
 import { track } from "@/lib/analytics";
@@ -308,10 +308,18 @@ function SectionKicker({ children, tone = "light" }: {
 export default function LandingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [billingInterval, setBillingInterval] = useState<BillingInterval>("monthly");
+  // Which catalogue the pricing section is showing. Businesses first:
+  // they are the main audience, and the team plans are what the rest of
+  // this page describes.
+  const [audience, setAudience] = useState<AccountType>("business");
 
   useEffect(() => {
-    listPlans().catch(() => []).then((p) => p && setPlans(p));
-  }, []);
+    // Asked for by name rather than fetching all six and splitting them
+    // here - which plans belong to which kind of account is the backend's
+    // rule (app/billing/plans.py), and a copy of it in the browser is a
+    // copy that can drift. Re-runs when the visitor switches sides.
+    listPlans(audience).catch(() => []).then((p) => p && setPlans(p));
+  }, [audience]);
 
   return (
     <div className="min-h-screen font-sans bg-paper text-ink [&_a]:focus-visible:outline-2 [&_a]:focus-visible:outline-offset-4 [&_a]:focus-visible:outline-teal">
@@ -540,11 +548,24 @@ export default function LandingPage() {
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-12">
           <div className="max-w-xl">
             <SectionKicker>Pricing</SectionKicker>
-            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">Choose the plan that fits your team</h2>
+            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">
+              {audience === "individual"
+                ? "Choose the plan that fits your work"
+                : "Choose the plan that fits your team"}
+            </h2>
             <AccentRule className="mb-6" />
             <p className="text-base text-ink-soft leading-relaxed">
-              Get the full product on every plan. Choose the capacity your team needs for people,
-              data sources, questions, and downloads, with clear monthly limits.
+              {audience === "individual" ? (
+                <>
+                  Get the full product on every plan. Choose the capacity you need for data
+                  sources, questions, and downloads, with clear monthly limits.
+                </>
+              ) : (
+                <>
+                  Get the full product on every plan. Choose the capacity your team needs for people,
+                  data sources, questions, and downloads, with clear monthly limits.
+                </>
+              )}
             </p>
             {plans.length > 0 && (
               // Straight from the backend policy (/billing/plans), so this can't
@@ -556,33 +577,61 @@ export default function LandingPage() {
               </p>
             )}
           </div>
-          {plans.length > 0 && (
-            <BillingIntervalToggle
-              value={billingInterval}
-              onChange={(next) => {
-                setBillingInterval(next);
-                track("pricing_interval_toggled", { interval: next });
-              }}
-              discountPercent={plans[0].annual_discount_percent}
-              className="self-start md:self-auto shrink-0"
-            />
-          )}
+          <div className="flex flex-col gap-3 self-start md:self-auto shrink-0 md:items-end">
+            <div
+              role="radiogroup"
+              aria-label="Who the plan is for"
+              className="inline-flex border border-line bg-panel p-0.5"
+            >
+              {(["business", "individual"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="radio"
+                  aria-checked={audience === option}
+                  onClick={() => {
+                    setAudience(option);
+                    track("pricing_audience_toggled", { audience: option });
+                  }}
+                  className={`text-sm px-4 py-2 transition-colors ${
+                    audience === option
+                      ? "bg-teal-deep text-white"
+                      : "text-ink-soft hover:text-ink"
+                  }`}
+                >
+                  {option === "business" ? "For teams" : "For individuals"}
+                </button>
+              ))}
+            </div>
+            {plans.length > 0 && (
+              <BillingIntervalToggle
+                value={billingInterval}
+                onChange={(next) => {
+                  setBillingInterval(next);
+                  track("pricing_interval_toggled", { interval: next });
+                }}
+                discountPercent={plans[0].annual_discount_percent}
+              />
+            )}
+          </div>
         </div>
 
         {plans.length === 0 ? (
           <div className="text-[13px] text-ink-soft">Loading pricing…</div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {plans.map((plan) => (
+            {plans.map((plan, index) => {
+              const recommended = index === Math.floor((plans.length - 1) / 2);
+              return (
               <div
                 key={plan.key}
                 className={`relative bg-panel border p-7 md:p-8 flex flex-col transition-shadow ${
-                  plan.key === "pro"
+                  recommended
                     ? "border-teal-deep border-2 shadow-[0_2px_24px_-8px_rgba(18,63,61,0.35)]"
                     : "border-line hover:border-mint"
                 }`}
               >
-                {plan.key === "pro" && (
+                {recommended && (
                   <>
                     {/* The recommended plan is marked twice - a mint cap and
                         a badge - so it still reads as the recommendation
@@ -607,12 +656,13 @@ export default function LandingPage() {
                 <Link
                   href="/login?mode=register"
                   onClick={() => track("cta_get_started", { location: "pricing", plan: plan.key, interval: billingInterval })}
-                  className={`text-center text-sm px-5 py-3 ${plan.key === "pro" ? GLASS_BUTTON_PRIMARY : GLASS_BUTTON_SECONDARY}`}
+                  className={`text-center text-sm px-5 py-3 ${recommended ? GLASS_BUTTON_PRIMARY : GLASS_BUTTON_SECONDARY}`}
                 >
                   Get started
                 </Link>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
         </div>

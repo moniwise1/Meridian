@@ -53,6 +53,7 @@ _ADDED_COLUMNS = [
     ("platform_staff", "emergency_contact_phone", "VARCHAR"),
     ("platform_staff", "profile_updated_at", "TIMESTAMP"),
     ("tenants", "billing_interval", "VARCHAR"),
+    ("tenants", "account_type", "VARCHAR"),
     ("uploaded_documents", "content_sha256", "VARCHAR"),
     ("users", "created_at", "TIMESTAMP"),
     ("users", "marketing_opt_in", "BOOLEAN"),
@@ -96,17 +97,30 @@ def _run_light_migrations() -> None:
 
 
 def _backfill_tenant_subdomains() -> None:
-    """Every tenant created before this feature existed has subdomain=NULL
-    - since a subdomain is now a real login boundary (see
+    """Every BUSINESS tenant created before this feature existed has
+    subdomain=NULL - since a subdomain is now a real login boundary (see
     routes_auth.py's login()), a tenant stuck without one would have no
     way to use it at all. Runs on every boot; a no-op once every tenant
-    has one."""
+    that should have one does.
+
+    Individual accounts are skipped, not backfilled: they are deliberately
+    created without a subdomain (see routes_auth.register) because one
+    person has no colleagues to keep out, and the namespace shouldn't be
+    burned a slug at a time by solo accounts. Without this filter the very
+    next boot after an individual signed up would quietly hand them one
+    anyway, undoing the decision."""
     from app.db.models import Tenant
     from app.tenant_slug import generate_unique_subdomain
 
     db = SessionLocal()
     try:
-        missing = db.query(Tenant).filter(Tenant.subdomain.is_(None)).all()
+        missing = db.query(Tenant).filter(
+            Tenant.subdomain.is_(None),
+            # NULL account_type is a tenant that predates account types,
+            # i.e. a business - `!= "individual"` alone would not match it,
+            # since in SQL NULL != 'individual' is NULL, not true.
+            (Tenant.account_type.is_(None)) | (Tenant.account_type != "individual"),
+        ).all()
         for tenant in missing:
             tenant.subdomain = generate_unique_subdomain(db, tenant.name)
             # generate_unique_subdomain's collision check queries the DB -

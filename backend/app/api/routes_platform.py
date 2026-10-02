@@ -37,7 +37,10 @@ import httpx
 from app.audit import logger as audit
 from app.audit.logger import verify_chain
 from app.audit.anchor import publish_checkpoint, fetch_latest_checkpoint, verify_checkpoint, AnchorNotConfigured
-from app.billing.plans import PLANS, get_plan, price_label, period_days
+from app.billing.plans import (
+    PLANS, get_plan, price_label, period_days, normalize_account_type,
+    plan_keys_for_account_type, account_type_for_plan,
+)
 from app.billing import paystack
 from app.billing.paystack import PaystackError
 from app.invites import create_invite, get_invite_by_token, list_invites, revoke_invite, mark_accepted
@@ -426,6 +429,10 @@ class TenantOut(BaseModel):
     id: str
     name: str
     subdomain: str | None
+    # "business" or "individual". Worth showing on the platform Tenants
+    # page because it explains at a glance why a tenant has no subdomain
+    # and only ever one user, instead of that looking like a broken row.
+    account_type: str
     subscription_status: str
     tier: str
     plan: str | None
@@ -452,6 +459,7 @@ def _tenant_out(db: Session, t: Tenant) -> TenantOut:
     plan_obj = get_plan(t.plan) if t.plan else None
     return TenantOut(
         id=t.id, name=t.name, subdomain=t.subdomain,
+        account_type=normalize_account_type(t.account_type),
         subscription_status=t.subscription_status, tier=t.tier, plan=t.plan,
         created_at=t.created_at.isoformat(),
         subscribed_at=t.paid_at.isoformat() if t.paid_at else None,
@@ -511,8 +519,21 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
     t = db.query(Tenant).filter_by(id=tenant_id).first()
     if not t:
         raise HTTPException(404, "Tenant not found.")
-    if body.plan is not None and body.plan not in PLANS and body.plan != "":
-        raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(PLANS)}, or '' to clear it.")
+    # A plan has to belong to this tenant's own catalogue. Comping an
+    # individual onto a business plan would hand them seats the app will
+    # never let them fill (routes_auth.invite_teammate refuses outright),
+    # and a business onto an individual plan would cap it at one person
+    # with no way back short of another staff edit.
+    allowed_plans = plan_keys_for_account_type(t.account_type)
+    if body.plan is not None and body.plan != "" and body.plan not in allowed_plans:
+        if body.plan in PLANS:
+            raise HTTPException(
+                400,
+                f"'{body.plan}' is a {account_type_for_plan(body.plan)} plan and this is a "
+                f"{normalize_account_type(t.account_type)} account. Choose one of: "
+                f"{', '.join(allowed_plans)}, or '' to clear it.",
+            )
+        raise HTTPException(400, f"Unknown plan '{body.plan}'. Choose one of: {', '.join(allowed_plans)}, or '' to clear it.")
     if body.billing_interval is not None and body.billing_interval not in ("monthly", "annual"):
         raise HTTPException(400, "Billing interval must be 'monthly' or 'annual'.")
 
@@ -566,7 +587,11 @@ def update_tenant(tenant_id: str, body: TenantUpdate, db: Session = Depends(get_
             t.subscription_expires_at = (
                 datetime.utcnow() + timedelta(days=period_days(t.billing_interval))
             )
-            t.plan = body.plan if body.plan else (t.plan or "premium")
+            # Default comp is the top plan of the tenant's OWN catalogue -
+            # "premium" for a business, "individual_premium" for an
+            # individual. A bare "premium" here would give an individual a
+            # 25-seat team plan it cannot use.
+            t.plan = body.plan if body.plan else (t.plan or allowed_plans[-1])
         else:
             # Anything else ("none"/"pending"/"cancelled"/"refunded") is
             # not currently-paying by definition (Tenant.tier), so there's

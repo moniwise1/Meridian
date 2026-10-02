@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   login, register, verifyMfaLogin, setupMfaLogin, confirmMfaLogin, requestMfaRecovery,
   startMfaSetup, confirmMfaSetup, getTenantBySubdomain, createHandoff, type AuthResponse, type TenantBySubdomain,
+  type AccountType,
 } from "@/lib/api";
 import { saveSession, loadSession } from "@/lib/auth";
 import { getTenantSubdomain } from "@/lib/subdomain";
@@ -45,6 +46,16 @@ function LoginPageInner() {
     searchParams.get("mode") === "register" ? "register" : "login",
   );
   const [step, setStep] = useState<Step>("credentials");
+  // Business or individual, chosen once at signup and permanent after
+  // that (changing it would mean handing out or taking away a workspace
+  // address and a whole plan catalogue - a support job, not a toggle).
+  // Defaults to business: that is the product's main audience, and it is
+  // also what every account created before this existed is.
+  const [accountType, setAccountType] = useState<AccountType>("business");
+  const isIndividual = accountType === "individual";
+  // One field, two meanings: the company's name for a business, the
+  // person's own name for an individual. Same column on the backend,
+  // because in both cases it is simply what the account is called.
   const [companyName, setCompanyName] = useState("");
   // Starts unticked and stays unticked unless the person ticks it. A
   // pre-ticked consent box is not consent.
@@ -131,7 +142,7 @@ function LoginPageInner() {
     setSubmitting(true);
     try {
       if (effectiveMode === "register") {
-        const auth = await register(companyName, email, password, marketingOptIn);
+        const auth = await register(companyName, email, password, marketingOptIn, accountType);
         track("signup_completed");
         saveSession({
           token: auth.access_token, tenantId: auth.tenant_id, userId: auth.user_id,
@@ -354,7 +365,34 @@ function LoginPageInner() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           {effectiveMode === "register" && (
-            <Field label="Company name" value={companyName} onChange={setCompanyName} placeholder="Acme Inc." />
+            <>
+              <div>
+                <label className="block text-[11px] uppercase tracking-wider text-ink-soft mb-1.5">
+                  Account type
+                </label>
+                <GlideSegmented
+                  ariaLabel="Business or individual account"
+                  options={[
+                    { value: "business", label: "Business" },
+                    { value: "individual", label: "Individual" },
+                  ]}
+                  value={accountType}
+                  onChange={setAccountType}
+                  fullWidth
+                />
+                <p className="text-[11.5px] text-ink-soft mt-1.5 leading-relaxed">
+                  {isIndividual
+                    ? "Just you — no teammates, and a lower monthly price. Everything else works the same."
+                    : "A shared workspace at your own web address, with teammates you invite."}
+                </p>
+              </div>
+              <Field
+                label={isIndividual ? "Your name" : "Company name"}
+                value={companyName}
+                onChange={setCompanyName}
+                placeholder={isIndividual ? "Ada Obi" : "Acme Inc."}
+              />
+            </>
           )}
           <Field label="Email" value={email} onChange={setEmail} placeholder="you@company.com" type="email" />
           <Field label="Password" value={password} onChange={setPassword} placeholder="••••••••" type="password" />
@@ -391,8 +429,11 @@ function LoginPageInner() {
 
       {effectiveMode === "register" && (
         <p className="text-[11.5px] text-ink-soft text-center mt-4 leading-relaxed">
-          Creating an account makes you the admin for a new company workspace. You&apos;ll set up
-          two-factor authentication right after. By creating an account, you agree to our{" "}
+          {isIndividual
+            ? "Your account is just for you — you can't add teammates to it. "
+            : "Creating an account makes you the admin for a new company workspace. "}
+          You&apos;ll set up two-factor authentication right after. By creating an account,
+          you agree to our{" "}
           <a href="/terms" target="_blank" rel="noreferrer" className="text-teal hover:text-teal-deep transition-colors">
             Terms of Service
           </a>{" "}

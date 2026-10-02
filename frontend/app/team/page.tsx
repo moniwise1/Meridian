@@ -8,6 +8,7 @@ import {
   type TeamUser, type TeamInvite, type BillingStatus, type Plan,
 } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
+import { useAccountType } from "@/lib/useAccountType";
 
 const ROLE_OPTIONS = ["analyst", "manager", "executive", "viewer", "admin"];
 
@@ -40,6 +41,8 @@ export default function TeamPage() {
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const isAdmin = loadSession()?.role === "admin";
+  const accountType = useAccountType();
+  const isIndividual = accountType === "individual";
 
   function refresh() {
     listUsers()
@@ -98,6 +101,29 @@ export default function TeamPage() {
     return (
       <div className="max-w-3xl mx-auto px-8 py-12">
         <div className="text-[13.5px] text-ink-soft">Only admins can manage teammates.</div>
+      </div>
+    );
+  }
+
+  // The sidebar already hides this page for an individual, but a
+  // bookmark, a back button or a pasted link still lands here - and the
+  // page below would show an invite form the backend refuses outright
+  // (routes_auth.invite_teammate, 403). Says plainly why instead, and
+  // deliberately doesn't offer an upgrade: no individual plan has a
+  // second seat, so "upgrade for more" would be false.
+  if (isIndividual) {
+    return (
+      <div className="max-w-3xl mx-auto px-8 py-12">
+        <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Team</h1>
+        <p className="text-[13.5px] text-ink-soft leading-relaxed">
+          This is an individual account, so it&apos;s just you — there are no teammates to manage.
+          Working with other people needs a business account, which gets a shared workspace at its
+          own web address. Email{" "}
+          <a href="mailto:hello@getmeridiananalytics.com" className="text-teal hover:text-teal-deep transition-colors">
+            hello@getmeridiananalytics.com
+          </a>{" "}
+          and we&apos;ll move you across.
+        </p>
       </div>
     );
   }
