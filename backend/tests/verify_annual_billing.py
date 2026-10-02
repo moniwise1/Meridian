@@ -80,11 +80,21 @@ def _signed_webhook(payload):
 
 
 # --- 1. the annual price is exactly 12 months less 5% ----------------------
-expected = {"basic": 8_550_000, "pro": 28_500_000, "premium": 85_500_000}
+expected = {
+    "basic": 8_550_000, "pro": 28_500_000, "premium": 85_500_000,
+    # The individual catalogue (see tests/verify_individual_accounts.py) is
+    # priced by the same rule, so it belongs in the same check - every plan
+    # in PLANS is covered here deliberately, so adding one without deciding
+    # its annual price fails loudly instead of shipping silently.
+    "individual_basic": 3_990_000, "individual_pro": 8_550_000,
+    "individual_premium": 17_100_000,
+}
+assert set(expected) == set(PLANS), \
+    f"a plan was added or removed without an annual price here: {set(PLANS) ^ set(expected)}"
 for key, plan in PLANS.items():
     assert plan.annual_amount == expected[key], (key, plan.annual_amount)
     assert plan.annual_amount == int(plan.amount * 12 * 0.95), key
-print("1. OK  annual = 12 x monthly less 5%: NGN 85,500 / 285,000 / 855,000")
+print("1. OK  annual = 12 x monthly less 5%, on every plan in both catalogues")
 
 
 # --- 2. /billing/plans exposes both prices and what's checkout-ready -------

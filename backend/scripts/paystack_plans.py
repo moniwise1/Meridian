@@ -37,10 +37,10 @@ subscribed keeps the price they signed up at, and only NEW subscriptions
 pay the new amount - silently raising a paying customer's renewal price is
 not something a script should ever do on its own.
 
-Plan prices come from PAYSTACK_PLAN_AMOUNT_BASIC / _PRO / _PREMIUM if set
-(kobo, matching app/config.py), else the same defaults the app uses. Set
-those env vars on the backend too if you change a price, so the app and
-Paystack agree.
+Plan prices come from PAYSTACK_PLAN_AMOUNT_BASIC / _PRO / _PREMIUM and
+their _INDIVIDUAL_* counterparts if set (kobo, matching app/config.py),
+else the same defaults the app uses. Set those env vars on the backend too
+if you change a price, so the app and Paystack agree.
 
 stdlib only (urllib) - no dependency on the app or on httpx, so it runs
 anywhere Python does.
@@ -55,10 +55,21 @@ import urllib.request
 BASE = "https://api.paystack.co"
 
 # (env var, plan key, Paystack plan name, default MONTHLY amount in kobo)
+# Two catalogues, because a tenant is either a business or an individual
+# and is only ever sold its own (see app/billing/plans.py). The names stay
+# distinct in Paystack's own plan list - that list is what a staffer reads
+# when reconciling a payment, and two plans both called "Meridian Basic"
+# at different prices would be unreadable there.
 PLAN_SPEC = [
     ("PAYSTACK_PLAN_AMOUNT_BASIC", "basic", "Meridian Basic", 750_000),      # NGN 7,500
     ("PAYSTACK_PLAN_AMOUNT_PRO", "pro", "Meridian Pro", 2_500_000),          # NGN 25,000
     ("PAYSTACK_PLAN_AMOUNT_PREMIUM", "premium", "Meridian Premium", 7_500_000),  # NGN 75,000
+    ("PAYSTACK_PLAN_AMOUNT_INDIVIDUAL_BASIC", "individual_basic",
+     "Meridian Individual Basic", 350_000),                                 # NGN 3,500
+    ("PAYSTACK_PLAN_AMOUNT_INDIVIDUAL_PRO", "individual_pro",
+     "Meridian Individual Pro", 750_000),                                   # NGN 7,500
+    ("PAYSTACK_PLAN_AMOUNT_INDIVIDUAL_PREMIUM", "individual_premium",
+     "Meridian Individual Premium", 1_500_000),                             # NGN 15,000
 ]
 
 
@@ -246,7 +257,7 @@ for env_var, key, name, default_amount in PLAN_SPEC:
     wanted.append((key, name, "monthly", monthly, "mo"))
     wanted.append((f"{key}_annual", f"{name} (Annual)", "annually", annual_amount(monthly, discount), "yr"))
 
-print(f"3. ensuring the six Meridian plans exist (annual = 12 months less {discount}%):")
+print(f"3. ensuring the {len(wanted)} Meridian plans exist (annual = 12 months less {discount}%):")
 
 # Decide everything BEFORE writing anything, so a run that is going to
 # refuse (a price mismatch without --reprice) leaves the account exactly as
@@ -294,8 +305,13 @@ for action, key, name, interval, amount, per, match in plan_actions:
         print(f"     {key:15} -> {created['plan_code']}  (created, NGN {amount // 100:,}/{per})")
 
 if not created_any:
-    print("\n   Plan codes are unchanged. If Railway already has these six codes set,\n"
+    print(f"\n   Plan codes are unchanged. If Railway already has these {len(resolved)} codes set,\n"
           "   there is nothing to change there - you're done.")
+
+code_vars = "\n".join(
+    f"   PAYSTACK_PLAN_CODE_{key.upper()}={resolved[key]}"
+    for key, _, _, _, _ in wanted
+)
 
 # The secret key is deliberately NOT echoed back. This output gets
 # screenshotted and pasted into chats and tickets; a full sk_live_ key in
@@ -305,18 +321,13 @@ print(f"""
 
    PAYSTACK_SECRET_KEY=<the {MODE.lower()} secret key you just used - not printed here>
    PAYSTACK_PUBLIC_KEY={PUB_PREFIX}...   (Paystack > Settings > API Keys & Webhooks)
-   PAYSTACK_PLAN_CODE_BASIC={resolved['basic']}
-   PAYSTACK_PLAN_CODE_PRO={resolved['pro']}
-   PAYSTACK_PLAN_CODE_PREMIUM={resolved['premium']}
-   PAYSTACK_PLAN_CODE_BASIC_ANNUAL={resolved['basic_annual']}
-   PAYSTACK_PLAN_CODE_PRO_ANNUAL={resolved['pro_annual']}
-   PAYSTACK_PLAN_CODE_PREMIUM_ANNUAL={resolved['premium_annual']}
+{code_vars}
 
 5. In Paystack > Settings > API Keys & Webhooks, on the *{SETTINGS_TAB}* side,
    set the Webhook URL to:
 
    https://<your-backend-domain>/billing/webhook
 
-   (GET https://<your-backend-domain>/billing/plans should then show all
-   three plans with "configured": true and "annual_configured": true.)
+   (GET https://<your-backend-domain>/billing/plans should then show
+   every plan with "configured": true and "annual_configured": true.)
 """)

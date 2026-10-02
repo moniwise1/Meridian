@@ -156,7 +156,105 @@ def _build_plans() -> dict[str, Plan]:
                 "Unlimited report/presentation downloads a month",
             ],
         ),
+
+        # Individual plans. Separate keys rather than the same three keys
+        # read differently per account type, because every limit in this
+        # app is looked up by plan key alone (seat_limit_for and friends
+        # below, and their call sites across routes_*). Giving individuals
+        # their own keys means a tenant's plan string remains the single
+        # answer to "what is this account allowed to do", instead of an
+        # answer that is only correct once you also know the account type.
+        #
+        # One seat throughout, and that is the point of the tier rather
+        # than a restriction bolted on: an individual is not paying for
+        # seats, so they pay less and get volume instead. Everything that
+        # protects data - MFA, row- and column-level scoping, the audit
+        # trail - is identical to the business plans. The cheapest tier
+        # must not be the insecure one.
+        "individual_basic": Plan(
+            key="individual_basic", label="Individual Basic",
+            amount=settings.paystack_plan_amount_individual_basic,
+            paystack_plan_code=settings.paystack_plan_code_individual_basic,
+            annual_amount=annual_amount_for(settings.paystack_plan_amount_individual_basic),
+            paystack_annual_plan_code=settings.paystack_plan_code_individual_basic_annual,
+            seat_limit=1, connection_limit=2,
+            query_limit=35, document_limit=35,
+            tagline="For one person who needs answers from their own data.",
+            features=[
+                "Ask & Risk Scan across your connected data",
+                "Document intelligence (PDF, Word, PowerPoint, Excel)",
+                "Two-factor authentication",
+                "Full hash-chained audit trail",
+                "Up to 2 connected data sources",
+                "Up to 35 questions a month",
+                "Up to 35 report/presentation downloads a month",
+            ],
+        ),
+        "individual_pro": Plan(
+            key="individual_pro", label="Individual Pro",
+            amount=settings.paystack_plan_amount_individual_pro,
+            paystack_plan_code=settings.paystack_plan_code_individual_pro,
+            annual_amount=annual_amount_for(settings.paystack_plan_amount_individual_pro),
+            paystack_annual_plan_code=settings.paystack_plan_code_individual_pro_annual,
+            seat_limit=1, connection_limit=5,
+            query_limit=75, document_limit=75,
+            tagline="For an analyst working across more sources, more often.",
+            features=[
+                "Everything in Individual Basic",
+                "Up to 5 connected data sources",
+                "Up to 75 questions a month",
+                "Up to 75 report/presentation downloads a month",
+            ],
+        ),
+        "individual_premium": Plan(
+            key="individual_premium", label="Individual Premium",
+            amount=settings.paystack_plan_amount_individual_premium,
+            paystack_plan_code=settings.paystack_plan_code_individual_premium,
+            annual_amount=annual_amount_for(settings.paystack_plan_amount_individual_premium),
+            paystack_annual_plan_code=settings.paystack_plan_code_individual_premium_annual,
+            seat_limit=1, connection_limit=10,
+            query_limit=150, document_limit=150,
+            tagline="For heavy, daily use by one person.",
+            features=[
+                "Everything in Individual Pro",
+                "Up to 10 connected data sources",
+                "Up to 150 questions a month",
+                "Up to 150 report/presentation downloads a month",
+            ],
+        ),
     }
+
+
+# Which plans belong to which kind of account. A tenant is one or the
+# other, and is only ever offered its own catalogue: an individual cannot
+# buy seats they are not allowed to fill, and a business should not be
+# sold a plan capped at one person.
+ACCOUNT_TYPES = ("business", "individual")
+BUSINESS_PLAN_KEYS = ("basic", "pro", "premium")
+INDIVIDUAL_PLAN_KEYS = ("individual_basic", "individual_pro", "individual_premium")
+
+
+def normalize_account_type(value: str | None) -> str:
+    """NULL/unknown -> business. Every tenant that existed before account
+    types did is a business: they were all created with a subdomain and a
+    team, which is exactly what a business account is."""
+    return value if value in ACCOUNT_TYPES else "business"
+
+
+def plan_keys_for_account_type(account_type: str | None) -> tuple[str, ...]:
+    return (INDIVIDUAL_PLAN_KEYS
+            if normalize_account_type(account_type) == "individual"
+            else BUSINESS_PLAN_KEYS)
+
+
+def plans_for_account_type(account_type: str | None) -> list["Plan"]:
+    return [PLANS[k] for k in plan_keys_for_account_type(account_type) if k in PLANS]
+
+
+def account_type_for_plan(plan_key: str | None) -> str:
+    """Which kind of account a plan belongs to. Used to stop a tenant
+    being put on the other catalogue's plan by hand or by a stale code."""
+    return "individual" if (plan_key or "") in INDIVIDUAL_PLAN_KEYS else "business"
 
 
 # Built once at import time from settings, matching how the rest of this

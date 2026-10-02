@@ -48,6 +48,12 @@ export async function getPublicStatus(): Promise<PublicStatus> {
 
 // ---------- Auth ----------
 
+// A tenant is one or the other for its whole life. A business has a
+// workspace address of its own, a team, and the team plans; an individual
+// is one person, with no subdomain, no teammates, and its own cheaper
+// catalogue. Mirrors ACCOUNT_TYPES in backend/app/billing/plans.py.
+export type AccountType = "business" | "individual";
+
 export type AuthResponse = {
   access_token: string;
   token_type: string;
@@ -62,18 +68,25 @@ export type AuthResponse = {
 };
 
 export async function register(
+  // The company's name for a business, the person's own name for an
+  // individual - one field either way, because it is the same column and
+  // the same thing: what this account is called.
   companyName: string,
   email: string,
   password: string,
   // Consent to product and marketing email. Defaults to false: an
   // unticked box is the only honest starting state for consent.
   marketingOptIn = false,
+  // Defaults to business so nothing written before individual accounts
+  // existed changes behaviour.
+  accountType: AccountType = "business",
 ): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       company_name: companyName, email, password, marketing_opt_in: marketingOptIn,
+      account_type: accountType,
     }),
   });
   const body = await res.json();
@@ -328,6 +341,11 @@ export type Me = {
   // receipts, password resets, renewal and security notices - is not
   // covered by this and carries on either way.
   marketing_opt_in: boolean;
+  // Which kind of account this is. Decides whether the Team page and the
+  // workspace-address UI are shown at all, and which plans Billing
+  // offers. Never null: the backend reads a pre-individual-accounts NULL
+  // as "business".
+  account_type: AccountType;
 };
 
 export async function getMe(): Promise<Me> {
@@ -695,15 +713,21 @@ export type Plan = {
   annual_refund_window_days: number;
 };
 
-export async function listPlans(): Promise<Plan[]> {
+export async function listPlans(accountType?: AccountType): Promise<Plan[]> {
   // Deliberately unauthenticated-safe: this backs both the (authenticated)
   // Billing page AND the public marketing landing page's pricing section,
   // and the backend route itself requires no auth at all now (see
   // routes_billing.py's list_plans docstring). authHeaders() would throw
   // for a logged-out visitor, so send it only when a session actually
   // exists rather than requiring one.
+  //
+  // accountType narrows it to one catalogue. The Billing page passes the
+  // tenant's own type so nobody is shown a plan their account cannot buy
+  // (/billing/subscribe refuses one from the other catalogue outright);
+  // the landing page passes whichever side the visitor has selected.
   const session = loadSession();
-  const res = await fetch(`${API_BASE}/billing/plans`, {
+  const query = accountType ? `?account_type=${encodeURIComponent(accountType)}` : "";
+  const res = await fetch(`${API_BASE}/billing/plans${query}`, {
     headers: session ? { Authorization: `Bearer ${session.token}` } : {},
   });
   const body = await res.json();

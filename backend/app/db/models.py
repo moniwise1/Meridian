@@ -32,6 +32,17 @@ class Tenant(Base):
     # (PATCH /platform/tenants/{id}) - no tenant-admin self-service yet.
     subdomain = Column(String, nullable=True, unique=True)
 
+    # "business" or "individual". Decides which plan catalogue this account
+    # is offered (app/billing/plans.py), whether it gets a subdomain, and
+    # whether it can have a team at all.
+    #
+    # Nullable, and NULL means business: the additive migration adds the
+    # column with no default, and every account that predates this was
+    # created with a subdomain and the ability to invite a team, which is
+    # exactly what a business account is. Always read it through
+    # plans.normalize_account_type rather than comparing the raw value.
+    account_type = Column(String, nullable=True)
+
     # Billing (app/billing/paystack.py) - paid-from-onset model, not a
     # delayed-billing free trial. "none" until the first successful charge.
     subscription_status = Column(String, nullable=False, default="none")

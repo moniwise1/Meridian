@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getBillingStatus, listPlans, subscribe, cancelSubscription, type BillingStatus, type Plan } from "@/lib/api";
+import {
+  getBillingStatus, listPlans, subscribe, cancelSubscription, getMe,
+  type BillingStatus, type Plan,
+} from "@/lib/api";
 import BillingIntervalToggle, { PlanPrice, type BillingInterval } from "@/components/BillingIntervalToggle";
 import { loadSession } from "@/lib/auth";
 import { track } from "@/lib/analytics";
@@ -55,7 +58,14 @@ export default function BillingPage() {
     getBillingStatus()
       .then(setStatus)
       .catch((e) => setError(e.message));
-    listPlans()
+    // The plan cards have to match the account: an individual cannot fill
+    // the seats on a team plan, and /billing/subscribe refuses a plan from
+    // the other catalogue outright - so showing one here would only be an
+    // offer that fails at the last step. Hence the account type is read
+    // first and the catalogue asked for by name, rather than listing
+    // everything and filtering in the browser.
+    getMe()
+      .then((me) => listPlans(me.account_type))
       .then(setPlans)
       .catch(() => {
         /* Status panel still works without plan cards - just no pricing shown */

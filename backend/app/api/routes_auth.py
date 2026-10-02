@@ -8,6 +8,7 @@ of that inbox and choosing their own password, rather than an admin
 picking a temporary password for them.
 """
 from datetime import datetime, timedelta
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
@@ -27,7 +28,7 @@ from app.security.login_cooldown import (
     LoginCooldownActive,
 )
 from app.security.ip_throttle import client_ip, check_register_rate_limit, RateLimitExceeded
-from app.billing.plans import seat_limit_for, get_plan
+from app.billing.plans import seat_limit_for, get_plan, normalize_account_type
 from app.tenant_slug import generate_unique_subdomain
 from app.audit import logger as audit
 from app.invites import create_invite, get_invite_by_token, list_invites, count_pending, revoke_invite, mark_accepted
@@ -53,6 +54,11 @@ class RegisterRequest(BaseModel):
     # never assumed from silence. Transactional email - receipts, password
     # resets, renewal notices - is unaffected either way.
     marketing_opt_in: bool = False
+    # "business" or "individual". Defaults to business, so a client written
+    # before individual accounts existed creates exactly what it did
+    # before: a tenant with a subdomain and room for a team. For an
+    # individual, company_name is simply the person's own name.
+    account_type: Literal["business", "individual"] = "business"
 
 
 class LoginRequest(BaseModel):
@@ -198,17 +204,29 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     # delete_tenant and the platform Tenants page). A stray leading/trailing
     # space from the signup form would otherwise make that confirmation
     # box impossible to satisfy - the delete button just stays disabled.
+    account_type = normalize_account_type(body.account_type)
     company_name = body.company_name.strip()
     if not company_name:
-        raise HTTPException(400, "Company name can't be blank.")
+        # Same field, different thing being named: an individual is signing
+        # up as themselves, so telling them their "company name" is blank
+        # when the form asked for their name reads as a different error
+        # than the one they actually hit.
+        raise HTTPException(400, "Your name can't be blank." if account_type == "individual"
+                                 else "Company name can't be blank.")
 
-    tenant = Tenant(name=company_name)
+    tenant = Tenant(name=company_name, account_type=account_type)
     # Assigned once, here, and never silently regenerated - this is a real
     # login boundary from this point on (see login() below), so a
     # mid-life change would need a deliberate platform-staff edit
     # (PATCH /platform/tenants/{id}), not happen as a side effect of
     # something else.
-    tenant.subdomain = generate_unique_subdomain(db, company_name)
+    #
+    # Individuals get none. A subdomain exists so a company's people can
+    # sign in at their own address and nobody else can; one person has no
+    # "nobody else", and handing out a slug per solo account would burn
+    # the good names and make the whole namespace noise.
+    if account_type == "business":
+        tenant.subdomain = generate_unique_subdomain(db, company_name)
     db.add(tenant)
     db.commit()
     db.refresh(tenant)
@@ -382,6 +400,18 @@ def invite_teammate(body: TeamInviteRequest, db: Session = Depends(get_db),
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     if not tenant:
         raise HTTPException(404, "Tenant not found.")
+    # An individual account is one person by definition - every individual
+    # plan is seat_limit=1, so the cap below would stop this anyway, but
+    # with a message telling them to upgrade for more seats. No individual
+    # plan has more, so that advice would be false. 403 rather than the
+    # 402 used for a plan cap: paying more does not unlock this, only a
+    # different kind of account does.
+    if normalize_account_type(tenant.account_type) == "individual":
+        raise HTTPException(
+            403,
+            "Individual accounts are for one person and can't have teammates. "
+            "Register a business account if you need to work with a team.",
+        )
     seat_limit = seat_limit_for(tenant.plan if tenant.tier == "pro" else None)
     if seat_limit is not None:
         existing_count = db.query(User).filter_by(tenant_id=ctx.tenant_id).count()
@@ -545,9 +575,14 @@ class MeOut(BaseModel):
     # Whether this account has agreed to product and marketing email.
     # Transactional email is not covered by it and carries on regardless.
     marketing_opt_in: bool
+    # "business" or "individual" - never NULL here even though the column
+    # is nullable, because normalize_account_type() reads a pre-existing
+    # NULL as business. The frontend branches on it: an individual has no
+    # team to manage, no subdomain of its own, and its own plan catalogue.
+    account_type: str
 
 
-def _me_out(ctx: AuthContext, user: User) -> MeOut:
+def _me_out(ctx: AuthContext, user: User, tenant: Tenant | None) -> MeOut:
     available, next_at = _display_name_change_status(user)
     return MeOut(
         user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
@@ -557,6 +592,7 @@ def _me_out(ctx: AuthContext, user: User) -> MeOut:
         # bool() because every account created before this column existed
         # reads back NULL, and "never asked" must behave as "no".
         marketing_opt_in=bool(user.marketing_opt_in),
+        account_type=normalize_account_type(tenant.account_type if tenant else None),
     )
 
 
@@ -565,7 +601,7 @@ def me(db: Session = Depends(get_db), ctx: AuthContext = Depends(get_current_use
     user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
     if not user:
         raise HTTPException(404, "User not found.")
-    return _me_out(ctx, user)
+    return _me_out(ctx, user, db.query(Tenant).filter_by(id=ctx.tenant_id).first())
 
 
 class MarketingOptInUpdate(BaseModel):
@@ -599,7 +635,7 @@ def update_own_marketing_opt_in(body: MarketingOptInUpdate, db: Session = Depend
     db.refresh(user)
     audit.log(db, ctx.tenant_id, "marketing_opt_in_changed", ctx.user_id,
                detail={"from": was, "to": bool(user.marketing_opt_in)})
-    return _me_out(ctx, user)
+    return _me_out(ctx, user, db.query(Tenant).filter_by(id=ctx.tenant_id).first())
 
 
 class DisplayNameUpdate(BaseModel):
@@ -626,7 +662,7 @@ def update_own_display_name(body: DisplayNameUpdate, db: Session = Depends(get_d
     user.display_name_changed_at = datetime.utcnow()
     db.commit()
     audit.log(db, ctx.tenant_id, "display_name_updated", ctx.user_id)
-    return _me_out(ctx, user)
+    return _me_out(ctx, user, db.query(Tenant).filter_by(id=ctx.tenant_id).first())
 
 
 class EmailChangeRequest(BaseModel):
@@ -679,7 +715,7 @@ def change_own_email(body: EmailChangeRequest, db: Session = Depends(get_db),
         f"A teammate's email changed on {ctx.tenant_id}",
         f"{old_email} changed their sign-in email to {new_email}.",
     )
-    return _me_out(ctx, user)
+    return _me_out(ctx, user, db.query(Tenant).filter_by(id=ctx.tenant_id).first())
 
 
 class PasswordChangeRequest(BaseModel):

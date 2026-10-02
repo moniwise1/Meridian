@@ -239,6 +239,22 @@ class Settings(BaseSettings):
     paystack_plan_code_pro_annual: str = ""
     paystack_plan_code_premium_annual: str = ""
 
+    # Individual plans: the same product bought by one person rather than a
+    # team. Priced lower because a solo buyer is not paying for seats, and
+    # sized by volume instead - see app/billing/plans.py. They are separate
+    # Paystack plans, not the business ones at a different price, for the
+    # same reason the annual plans are separate: a Paystack plan bills at
+    # exactly one amount on exactly one interval.
+    paystack_plan_amount_individual_basic: int = 350_000      # NGN 3,500
+    paystack_plan_amount_individual_pro: int = 750_000        # NGN 7,500
+    paystack_plan_amount_individual_premium: int = 1_500_000  # NGN 15,000
+    paystack_plan_code_individual_basic: str = ""
+    paystack_plan_code_individual_pro: str = ""
+    paystack_plan_code_individual_premium: str = ""
+    paystack_plan_code_individual_basic_annual: str = ""
+    paystack_plan_code_individual_pro_annual: str = ""
+    paystack_plan_code_individual_premium_annual: str = ""
+
     # "Your subscription renews in N days" reminder (in-app notification +
     # email). How many days before subscription_expires_at the reminder
     # goes out.
