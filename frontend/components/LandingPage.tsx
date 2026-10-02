@@ -22,7 +22,7 @@ const FEATURES = [
   },
   {
     title: "Explore your data without changing it",
-    body: "Your production records stay untouched. Meridian verifies that each database connection is read-only before saving it, so your team can investigate questions without writing to the source.",
+    body: "Your production records stay untouched. Meridian verifies that each database connection is read-only before saving it, so you can investigate questions without writing to the source.",
   },
   {
     title: "Give your team answers within their access",
@@ -353,11 +353,11 @@ export default function LandingPage() {
         <div className="flex flex-col gap-12 md:gap-16">
           <div className="mx-auto w-full max-w-[1100px] text-center">
             <div className="text-xs font-[family-name:var(--font-mono)] text-teal-deep tracking-[0.18em] uppercase mb-7">
-              AI analytics for business teams
+              AI analytics engine for individuals and enterprise
             </div>
             <h1 className="mx-auto max-w-[1000px] font-serif text-[clamp(2.25rem,4.8vw,4.25rem)] font-normal tracking-[-0.035em] text-ink leading-[1.1] mb-6 text-balance">
-              <span className="block">Less time chasing reports.</span>{" "}
-              <span className="block text-teal">More confidence in every decision.</span>
+              <span className="block">Less time being confused.</span>{" "}
+              <span className="block text-teal">More time getting answers and making decisions.</span>
             </h1>
             <p className="text-base text-ink-soft leading-7 mb-7 max-w-[650px] mx-auto">
               Find out what changed, why it matters, and where to look next. Ask Meridian a question
@@ -520,7 +520,7 @@ export default function LandingPage() {
           <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-white mb-5">Move forward with control over your data</h2>
           <AccentRule className="mb-6" />
           <p className="text-base text-white/75 leading-relaxed">
-            Giving your team an analytics tool should not mean giving up control.
+            Putting an analytics tool in front of your data should not mean giving up control.
             Meridian combines verified read-only connections, scoped access, and an audit trail
             to support your security review.
           </p>
