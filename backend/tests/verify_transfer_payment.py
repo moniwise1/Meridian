@@ -37,6 +37,8 @@ os.environ["PAYSTACK_SECRET_KEY"] = "sk_test_fake"
 os.environ["PAYSTACK_PLAN_CODE_BASIC"] = "PLN_basic_monthly"
 os.environ["PAYSTACK_PLAN_CODE_BASIC_ANNUAL"] = "PLN_basic_annual"
 
+from billing_fixtures import webhook_fixture
+from uuid import uuid4
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.session import SessionLocal, init_db
@@ -58,7 +60,7 @@ def fake_request(method, path, client=None, **kwargs):
     body = kwargs.get("json") or {}
     sent.append({"path": path, **body})
     return {"authorization_url": "https://checkout.paystack.test/x",
-            "access_code": "ac_test", "reference": f"ref-{len(sent)}"}
+            "access_code": "ac_test", "reference": f"ref-{uuid4().hex}"}
 
 
 paystack._request = fake_request
@@ -86,7 +88,7 @@ def subscribe(headers, plan="basic", interval="monthly", method=None):
 def deliver_webhook(tenant_id: str, reference: str, interval: str, method: str):
     """A real signed charge.success, exactly as Paystack would send it for
     a transfer: no `plan` object anywhere in the payload."""
-    body = json.dumps({
+    body = json.dumps(webhook_fixture({
         "event": "charge.success",
         "data": {
             "reference": reference,
@@ -94,7 +96,7 @@ def deliver_webhook(tenant_id: str, reference: str, interval: str, method: str):
             "customer": {"customer_code": f"CUS_{tenant_id[:6]}"},
             "metadata": {"tenant_id": tenant_id, "interval": interval, "method": method},
         },
-    }).encode()
+    }, db)).encode()
     sig = hmac.new(settings.paystack_secret_key.encode(), body, hashlib.sha512).hexdigest()
     return client.post("/billing/webhook", content=body,
                        headers={"x-paystack-signature": sig, "Content-Type": "application/json"})

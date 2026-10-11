@@ -26,6 +26,7 @@ os.environ["PAYSTACK_PLAN_CODE_PREMIUM"] = "PLN_premium"
 os.environ["PAYSTACK_PLAN_CODE_PRO_ANNUAL"] = "PLN_pro_yr"
 
 import httpx
+from billing_fixtures import payment_fixture
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.session import SessionLocal, init_db
@@ -62,7 +63,7 @@ def _fake_verify(reference, client=None):
     answer = paystack_says[reference]
     if isinstance(answer, Exception):
         raise answer
-    return answer
+    return payment_fixture(answer, db) if answer.get("status") == "success" else answer
 
 
 paystack.verify_transaction = _fake_verify

@@ -63,6 +63,7 @@ class Tenant(Base):
     billing_interval = Column(String, nullable=True)
     # The transaction a within-window cancel would refund.
     last_transaction_reference = Column(String, nullable=True)
+    payment_mode = Column(String, nullable=True)  # verified live/test; NULL means legacy/unknown
     # Anchors the refund window - set on first successful charge, never
     # touched again (a renewal isn't a new "paid_at").
     paid_at = Column(DateTime, nullable=True)
@@ -602,3 +603,16 @@ class AskScanJob(Base):
     attempts = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BillingPayment(Base):
+    """Checkout snapshot and persistent duplicate-payment guard."""
+    __tablename__ = "billing_payments"
+    reference = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
+    mode = Column(String, nullable=False)
+    plan = Column(String, nullable=False)
+    interval = Column(String, nullable=False)
+    amount = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False)
+    applied_at = Column(DateTime, nullable=True)

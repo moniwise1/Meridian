@@ -14,6 +14,7 @@ def cfg(**over):
     base = dict(
         environment="development", app_secret_key="AAA", jwt_secret_key="", platform_jwt_secret="",
         kms_provider="local", aws_kms_key_id="",
+        billing_mode="auto", billing_currency="NGN", paystack_secret_key="", paystack_public_key="",
         metadata_db_url="sqlite:///./metadata.db", frontend_origin="http://localhost:3000",
     )
     base.update(over)

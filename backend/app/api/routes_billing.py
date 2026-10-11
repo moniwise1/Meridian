@@ -15,15 +15,18 @@ Every state transition here goes through the same hash-chained audit log
 as every other consequential action in this app (app/audit/logger.py) -
 money moving deserves at least the same trail as a query running.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 import httpx
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import update
 
 from app.db.session import get_db
-from app.db.models import Tenant, User
+from app.db.models import Tenant, User, BillingPayment
+from app.billing.mode import billing_mode
 from app.security.auth import get_current_user, require_role, AuthContext
 from app.billing import paystack
 from app.billing.paystack import PaystackError
@@ -42,6 +45,14 @@ from app.agents.notifications import (
 from app.user_notifications import create_notification
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+
+@router.get("/config")
+def billing_config():
+    # Deliberately no secret values, prefixes, plan codes or customer details.
+    return {"mode": billing_mode(settings), "currency": settings.billing_currency,
+            "configured": bool(settings.paystack_secret_key)}
+
 
 
 class PlanOut(BaseModel):
@@ -122,14 +133,20 @@ class BillingStatus(BaseModel):
 
 
 def _status_for(db: Session, tenant: Tenant) -> BillingStatus:
+    effective_status = tenant.subscription_status
+    if effective_status == "active":
+        if tenant.payment_mode and tenant.payment_mode != billing_mode(settings):
+            effective_status = "payment_required"
+        elif tenant.subscription_expires_at and tenant.subscription_expires_at <= datetime.utcnow():
+            effective_status = "expired"
     refund_eligible_until = None
-    if tenant.paid_at and tenant.subscription_status == "active":
+    if tenant.paid_at and effective_status == "active":
         refund_eligible_until = (
             tenant.paid_at + timedelta(days=refund_window_days(tenant.billing_interval))
         ).isoformat()
     plan_key = tenant.plan if tenant.tier == "pro" else None
     return BillingStatus(
-        subscription_status=tenant.subscription_status,
+        subscription_status=effective_status,
         tier=tenant.tier,
         plan=tenant.plan,
         paid_at=tenant.paid_at.isoformat() if tenant.paid_at else None,
@@ -234,7 +251,9 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
     user = db.query(User).filter_by(id=ctx.user_id).first()
     if not tenant or not user:
         raise HTTPException(404, "Tenant or user not found.")
-    if tenant.subscription_status == "active":
+    unexpired = tenant.subscription_expires_at is None or tenant.subscription_expires_at > datetime.utcnow()
+    wrong_mode = tenant.payment_mode is not None and tenant.payment_mode != billing_mode(settings)
+    if tenant.subscription_status == "active" and unexpired and not wrong_mode:
         raise HTTPException(400, "This organization already has an active subscription.")
     # A checkout left open or abandoned earlier: find out what became of it
     # before starting another one (see _recheck_pending_checkout).
@@ -275,11 +294,15 @@ def subscribe(body: SubscribeRequest, db: Session = Depends(get_db),
                 email=user.email, plan_code=plan_code, amount=amount,
                 callback_url=body.callback_url, metadata=metadata,
             )
-    except PaystackError as e:
+    except (PaystackError, httpx.HTTPError) as e:
         audit.log(db, ctx.tenant_id, "subscription_initialize_failed", ctx.user_id,
                    status="error", detail={"reason": str(e), "plan": body.plan, "method": body.method})
         raise HTTPException(502, f"Could not start checkout: {e}")
 
+    db.add(BillingPayment(
+        reference=result["reference"], tenant_id=tenant.id, mode=billing_mode(settings),
+        plan=plan.key, interval=body.interval, amount=amount, currency=settings.billing_currency,
+    ))
     tenant.subscription_status = "pending"
     # Set now, before checkout even completes - same reasoning as
     # last_transaction_reference below: known regardless of which of the
@@ -310,7 +333,87 @@ def _activate(db: Session, tenant: Tenant, transaction_data: dict, source: str,
     """Idempotent: calling this twice for the same successful transaction
     just re-confirms the same state, never double-activates or
     double-logs misleadingly."""
+    reference = transaction_data.get("reference")
+    mode = billing_mode(settings)
+    if not reference or transaction_data.get("status") != "success":
+        raise HTTPException(400, "Payment is not a successful transaction.")
+    if transaction_data.get("domain") != mode:
+        raise HTTPException(400, "Payment environment does not match this deployment.")
+    receipt = db.get(BillingPayment, reference)
+    if receipt and (receipt.tenant_id != tenant.id or receipt.mode != mode):
+        raise HTTPException(403, "Payment does not belong to this account and environment.")
+    if receipt and receipt.applied_at:
+        return  # Including after cancellation: an old payment cannot reactivate access.
+
+    raw_plan = transaction_data.get("plan")
+    code = raw_plan.get("plan_code") if isinstance(raw_plan, dict) else raw_plan
+    if receipt:
+        if code and code != plan_code_for(get_plan(receipt.plan), receipt.interval):
+            raise HTTPException(400, "Payment plan does not match the checkout.")
+        plan_key, interval, expected_amount, currency = (
+            receipt.plan, receipt.interval, receipt.amount, receipt.currency)
+    else:
+        # Legacy checkout or recurring charge. Never use a new pending plan
+        # to interpret an old payment from a different subscription.
+        plan_key = plan_key_for_paystack_code(code) if code else tenant.plan
+        interval = interval_for_paystack_code(code) if code else tenant.billing_interval or "monthly"
+        plan = get_plan(plan_key)
+        if not plan or not interval:
+            raise HTTPException(400, "Payment plan is not recognized.")
+        if not code and reference != tenant.last_transaction_reference:
+            raise HTTPException(400, "Payment reference is not a known checkout.")
+        prior = db.query(BillingPayment).filter_by(
+            tenant_id=tenant.id, mode=mode, plan=plan_key, interval=interval
+        ).filter(BillingPayment.applied_at.isnot(None)).order_by(BillingPayment.applied_at.desc()).first()
+        expected_amount = prior.amount if prior else amount_for(plan, interval)
+        currency = prior.currency if prior else settings.billing_currency
+    if (type(transaction_data.get("amount")) is not int
+            or transaction_data["amount"] != expected_amount
+            or transaction_data.get("currency") != currency):
+        raise HTTPException(400, "Payment amount or currency does not match the subscription.")
+    paid_timestamp = transaction_data.get("paid_at") or transaction_data.get("paidAt")
+    try:
+        paid_time = datetime.fromisoformat(paid_timestamp.replace("Z", "+00:00"))
+        if paid_time.tzinfo is None:
+            paid_time = paid_time.replace(tzinfo=timezone.utc)
+        paid_time = paid_time.astimezone(timezone.utc).replace(tzinfo=None)
+    except (AttributeError, ValueError, TypeError):
+        raise HTTPException(400, "Payment has no valid payment timestamp.")
+    if paid_time > datetime.utcnow() + timedelta(minutes=5):
+        raise HTTPException(400, "Payment timestamp is in the future.")
+    if not receipt:
+        receipt = BillingPayment(reference=reference, tenant_id=tenant.id, mode=mode,
+                                 plan=plan_key, interval=interval, amount=expected_amount,
+                                 currency=currency)
+        db.add(receipt)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            existing = db.get(BillingPayment, reference)
+            if existing and existing.tenant_id == tenant.id and existing.applied_at:
+                return
+            raise HTTPException(409, "Payment is being processed. Please retry.")
+    # Atomic claim: webhook and browser verification can arrive concurrently.
+    claimed = db.execute(update(BillingPayment).where(
+        BillingPayment.reference == reference, BillingPayment.applied_at.is_(None)
+    ).values(applied_at=datetime.utcnow())).rowcount
+    if not claimed:
+        db.rollback()
+        return
+    # Serialize distinct payments too, so an old webhook cannot overwrite
+    # a newer renewal that committed while this request was validating.
+    db.refresh(tenant, with_for_update=True)
+    # An out-of-order old charge is recorded, but must not replace a newer period.
+    new_expiry = paid_time + timedelta(days=period_days(interval))
+    if (tenant.payment_mode == mode and tenant.subscription_expires_at
+            and new_expiry < tenant.subscription_expires_at):
+        db.commit()
+        return
     already_active = tenant.subscription_status == "active"
+    tenant.plan = plan_key
+    tenant.billing_interval = interval
+    tenant.payment_mode = mode
     tenant.subscription_status = "active"
     tenant.last_transaction_reference = transaction_data.get("reference", tenant.last_transaction_reference)
     customer = transaction_data.get("customer") or {}
@@ -336,18 +439,10 @@ def _activate(db: Session, tenant: Tenant, transaction_data: dict, source: str,
         if resolved_interval:
             tenant.billing_interval = resolved_interval
     if not tenant.paid_at:
-        tenant.paid_at = datetime.utcnow()
-    # Unlike paid_at (anchors the refund window - set once, ever), this
-    # advances on EVERY successful charge including renewals, so it always
-    # reflects the current period's actual end rather than the first one.
-    # One period from now: 30 days monthly, 365 annual (plans.period_days).
-    # Approximated rather than read off Paystack since there's no live
-    # Paystack account here to confirm a renewal date against - see
-    # app/billing/paystack.py's module docstring for the same honest caveat
-    # about not being verified against a real account. A production
-    # deployment with real recurring billing should instead read the actual
-    # next-charge date off the subscription.create / invoice events.
-    tenant.subscription_expires_at = datetime.utcnow() + timedelta(days=period_days(tenant.billing_interval))
+        tenant.paid_at = paid_time
+    # Expiry is anchored to Paystack's payment date, not webhook arrival.
+    # Calendar-accurate recurring renewal dates remain a separate follow-up.
+    tenant.subscription_expires_at = new_expiry
     # A fresh activation re-arms the expiry reminder (a previous period's
     # "already reminded" marker must not suppress the reminder for this
     # new one) - see app/api/routes_notifications.py's run_expiry_reminders.
@@ -411,7 +506,7 @@ def verify(reference: str, db: Session = Depends(get_db), ctx: AuthContext = Dep
 
     try:
         data = paystack.verify_transaction(reference)
-    except PaystackError as e:
+    except (PaystackError, httpx.HTTPError) as e:
         raise HTTPException(502, f"Could not verify payment: {e}")
     if data.get("status") != "success":
         audit.log(db, ctx.tenant_id, "subscription_verify_not_successful", ctx.user_id,
@@ -534,7 +629,7 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
     if tenant.paystack_subscription_code and tenant.paystack_email_token:
         try:
             paystack.disable_subscription(tenant.paystack_subscription_code, tenant.paystack_email_token)
-        except PaystackError as e:
+        except (PaystackError, httpx.HTTPError) as e:
             audit.log(db, ctx.tenant_id, "subscription_cancel_failed", ctx.user_id,
                        status="error", detail={"reason": str(e)})
             raise HTTPException(502, f"Could not cancel the subscription with Paystack: {e}")
@@ -552,7 +647,7 @@ def cancel(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_rol
         try:
             paystack.refund_transaction(tenant.last_transaction_reference)
             refunded = True
-        except PaystackError as e:
+        except (PaystackError, httpx.HTTPError) as e:
             # Subscription is already disabled at this point - don't leave
             # the tenant in limbo over a refund failure, but make sure
             # this is loud in the audit trail so a human follows up.
