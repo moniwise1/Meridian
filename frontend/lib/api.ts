@@ -967,8 +967,10 @@ export async function askStream(
     skip_clarification?: boolean;
   },
   onEvent: (evt: StepEvent | ResultEvent | ClarificationRequestEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/ask/stream`, {
+    signal,
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(input),
@@ -986,19 +988,30 @@ export async function askStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
-      const line = part.trim();
-      if (line.startsWith("data:")) {
-        const jsonStr = line.slice(5).trim();
-        if (jsonStr) onEvent(JSON.parse(jsonStr));
-      }
+  let terminal = false;
+  function dispatch(part: string) {
+    const line = part.trim();
+    if (!line.startsWith("data:")) return;
+    const jsonStr = line.slice(5).trim();
+    if (!jsonStr) return;
+    const event = JSON.parse(jsonStr) as StepEvent | ResultEvent | ClarificationRequestEvent;
+    terminal ||= event.type === "result" || event.type === "clarification" || (event.type === "step" && event.status === "error");
+    onEvent(event);
+  }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) dispatch(part);
     }
+    buffer += decoder.decode();
+    if (buffer.trim()) dispatch(buffer);
+    if (!terminal) throw new Error("The connection ended before an answer arrived. Please retry your question.");
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -1308,4 +1321,21 @@ export async function verifyAuditChain(): Promise<AuditVerification> {
   await handleAuthFailure(res);
   if (!res.ok) throw new Error("Could not verify the audit log.");
   return res.json();
+}
+
+// Business-only executive analytics; server checks account type and source access.
+export async function getOverviewColumns(documentId: string, sheet: number): Promise<{ columns: string[]; row_count: number }> {
+  const res = await fetch(`${API_BASE}/business/sources/${encodeURIComponent(documentId)}?sheet=${sheet}`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not read this source.");
+  return body;
+}
+
+export async function getOverview(input: import("@/lib/overview").OverviewInput): Promise<import("@/lib/overview").Overview> {
+  const res = await fetch(`${API_BASE}/business/overview`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(input) });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Check the source, dates and column mappings.");
+  return body;
 }

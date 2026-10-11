@@ -39,6 +39,8 @@ class _FakeConnector:
 
 class _FakeTable:
     name = "sales"
+    from app.connectors.base import ColumnInfo
+    columns = [ColumnInfo("region", "TEXT"), ColumnInfo("revenue", "NUMERIC")]
 
 
 def _install_stubs():

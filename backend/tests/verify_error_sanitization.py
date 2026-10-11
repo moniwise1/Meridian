@@ -79,6 +79,8 @@ class _FakeConn:
         return QueryResult(dataframe=pd.DataFrame({"region": ["SE"], "revenue": [1]}), duration_ms=1, truncated=False)
 class _FakeTbl:
     name = "sales"
+    from app.connectors.base import ColumnInfo
+    columns = [ColumnInfo("region", "TEXT"), ColumnInfo("revenue", "NUMERIC")]
 
 planner.build_connector = lambda cr: _FakeConn()
 planner.discover_schema = lambda *a, **k: [_FakeTbl()]

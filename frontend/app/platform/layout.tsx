@@ -14,6 +14,7 @@ import GlideNav from "@/components/glide/GlideNav";
 const NAV = [
   { href: "/platform", label: "Dashboard" },
   { href: "/platform/analytics", label: "Analytics" },
+  { href: "/platform/ask", label: "Ask Meridian", ownerOnly: true },
   { href: "/platform/tenants", label: "Tenants" },
   { href: "/platform/leads", label: "Leads", restricted: true },
   { href: "/platform/tickets", label: "Tickets", restricted: true },
@@ -72,16 +73,21 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
     )?.href ?? null;
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="w-56 shrink-0 border-r border-line bg-panel px-5 py-6 flex flex-col gap-8">
+    <div className="flex flex-col md:flex-row min-h-screen">
+      <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-line bg-panel px-5 py-4 md:py-6 flex flex-col gap-4 md:gap-8">
         <div>
           <div className="text-[15px] font-semibold tracking-tight text-ink">Meridian</div>
           <div className="text-[11px] text-ink-soft mt-0.5">Internal admin</div>
         </div>
 
-        <GlideNav items={navItems} activeHref={activeHref} />
+        <details className="md:hidden">
+          <summary className="cursor-pointer text-sm text-teal">Browse owner workspace</summary>
+          <div className="mt-3"><GlideNav items={navItems} activeHref={activeHref} /></div>
+          <button onClick={handleLogout} className="text-sm text-teal mt-3">Sign out</button>
+        </details>
+        <div className="hidden md:block"><GlideNav items={navItems} activeHref={activeHref} /></div>
 
-        <div className="mt-auto flex flex-col gap-3">
+        <div className="mt-auto hidden md:flex flex-col gap-3">
           <div className="text-[12px] border-t border-line pt-3">
             <div className="text-ink truncate">{session.email}</div>
             <div className="text-ink-soft mt-0.5 flex items-center justify-between">

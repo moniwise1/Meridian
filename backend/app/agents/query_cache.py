@@ -63,6 +63,7 @@ _redis = get_redis_client()
 def _cache_key(tenant_id: str, connection_id: str, table_allowlist: list[str] | None,
                column_policy: dict | None, row_scope: dict | None, question: str) -> str:
     payload = {
+        "policy_version": 2,
         "tenant_id": tenant_id,
         "connection_id": connection_id,
         "table_allowlist": sorted(table_allowlist or []),

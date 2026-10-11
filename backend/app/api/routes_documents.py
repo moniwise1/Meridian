@@ -182,6 +182,10 @@ def get_document(document_id: str, db: Session = Depends(get_db),
     doc = db.query(UploadedDocument).filter_by(id=document_id, tenant_id=ctx.tenant_id).first()
     if not doc:
         raise HTTPException(404, "Document not found.")
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    _require_capability(user)
+    if user.row_scope:
+        raise HTTPException(403, "Raw document text is unavailable for row-restricted accounts.")
     return {
         "id": doc.id, "filename": doc.filename, "kind": doc.kind,
         "char_count": doc.char_count, "truncated": doc.extraction_truncated,

@@ -11,7 +11,7 @@ import logging
 from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -36,9 +36,9 @@ class AskRequest(BaseModel):
     # database-backed question - see app/agents/planner.py's document-only
     # branch. ask_stream below rejects a request with neither set.
     connection_id: str | None = None
-    question: str
+    question: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
-    document_ids: list[str] = []
+    document_ids: list[str] = Field(default_factory=list, max_length=10)
     # True on a resend after the user answered (or chose to skip) a
     # clarification_question from a prior request - see planner.py's
     # ClarificationEvent docstring for why this is stateless (the frontend
