@@ -15,6 +15,7 @@ os.environ["PAYSTACK_PLAN_CODE_BASIC"] = "PLN_basic"
 os.environ["PAYSTACK_PLAN_CODE_PRO"] = "PLN_pro"
 os.environ["PAYSTACK_PLAN_CODE_PREMIUM"] = "PLN_premium"
 
+from billing_fixtures import payment_fixture, webhook_fixture
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.session import SessionLocal, init_db
@@ -50,7 +51,7 @@ _TXNS = {
                       "customer": {"customer_code": "CUS_a"}, "plan": {"plan_code": "PLN_basic"},
                       "metadata": {"tenant_id": attacker.id}},
 }
-paystack.verify_transaction = lambda reference, client=None: dict(_TXNS[reference])
+paystack.verify_transaction = lambda reference, client=None: payment_fixture(_TXNS[reference], db)
 
 # --- A. attacker replays the VICTIM's reference -> must be rejected ---
 r = client.get("/billing/verify?reference=ref-victim", headers=aH)
@@ -79,9 +80,9 @@ print("3. OK  tenant with no started checkout -> 403")
 
 # --- D. the webhook path still works and is unaffected ---
 attacker2, _, _ = mk_tenant_user("Webhook Co", "a@webhookco.com", ref="ref-wh", plan="basic")
-body = json.dumps({"event": "charge.success", "data": {
+body = json.dumps(webhook_fixture({"event": "charge.success", "data": {
     "reference": "ref-wh", "customer": {"customer_code": "CUS_wh"},
-    "plan": {"plan_code": "PLN_pro"}, "metadata": {"tenant_id": attacker2.id}}}).encode()
+    "plan": {"plan_code": "PLN_pro"}, "metadata": {"tenant_id": attacker2.id}}}, db)).encode()
 sig = hmac.new(b"sk_test_fake_secret", body, hashlib.sha512).hexdigest()
 r = client.post("/billing/webhook", content=body,
                 headers={"x-paystack-signature": sig, "content-type": "application/json"})

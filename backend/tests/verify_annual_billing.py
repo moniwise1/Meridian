@@ -28,6 +28,7 @@ os.environ["PAYSTACK_PLAN_CODE_BASIC_ANNUAL"] = "PLN_basic_yr"
 os.environ["PAYSTACK_PLAN_CODE_PRO_ANNUAL"] = "PLN_pro_yr"
 # Premium's annual plan deliberately left UNCONFIGURED - check 6.
 
+from billing_fixtures import webhook_fixture
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.session import SessionLocal, init_db
@@ -73,7 +74,7 @@ paystack.disable_subscription = lambda code, token, client=None: {"status": True
 
 
 def _signed_webhook(payload):
-    body = json.dumps(payload).encode()
+    body = json.dumps(webhook_fixture(payload, db)).encode()
     sig = hmac.new(b"sk_test_fake_secret", body, hashlib.sha512).hexdigest()
     return client.post("/billing/webhook", content=body,
                        headers={"x-paystack-signature": sig, "content-type": "application/json"})
@@ -148,14 +149,14 @@ client.post("/billing/subscribe", headers=H2,
             json={"plan": "basic", "interval": "monthly", "callback_url": "https://x/billing"})
 db.expire_all()
 assert db.get(Tenant, tenant2.id).billing_interval == "monthly"
-_signed_webhook({"event": "charge.success", "data": {
+r = _signed_webhook({"event": "charge.success", "data": {
     "reference": "ref-2", "customer": {"customer_code": "CUS_switched"},
     "plan": {"plan_code": "PLN_basic_yr"}, "metadata": {"tenant_id": tenant2.id}}})
 db.expire_all()
 t2 = db.get(Tenant, tenant2.id)
-assert t2.billing_interval == "annual", t2.billing_interval
-assert (t2.subscription_expires_at - datetime.utcnow()) > timedelta(days=300)
-print("5. OK  what Paystack verified was paid for overrides the interval /subscribe recorded")
+assert r.status_code == 400, r.text
+assert t2.billing_interval == "monthly" and t2.subscription_status == "pending"
+print("5. OK  a mismatched paid plan is refused without activating the checkout")
 
 
 # --- 6. an annual plan that isn't configured is refused, never charged -----

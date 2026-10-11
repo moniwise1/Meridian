@@ -13,6 +13,8 @@ const STATUS_LABEL: Record<string, string> = {
   none: "No subscription",
   pending: "Payment pending",
   active: "Active",
+  expired: "Expired",
+  payment_required: "Payment required",
   cancelled: "Cancelled",
   refunded: "Cancelled — refunded",
 };
@@ -21,6 +23,8 @@ const STATUS_COLOR: Record<string, string> = {
   none: "bg-line text-ink-soft",
   pending: "bg-amber-soft text-amber",
   active: "bg-teal-deep text-white",
+  expired: "bg-amber-soft text-amber",
+  payment_required: "bg-amber-soft text-amber",
   cancelled: "bg-line text-ink-soft",
   refunded: "bg-line text-ink-soft",
 };
@@ -130,6 +134,8 @@ export default function BillingPage() {
     (status.subscription_status === "none" ||
       status.subscription_status === "cancelled" ||
       status.subscription_status === "refunded" ||
+      status.subscription_status === "expired" ||
+      status.subscription_status === "payment_required" ||
       checkoutUnfinished);
 
   return (

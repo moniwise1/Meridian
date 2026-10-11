@@ -8,6 +8,7 @@ body. Every authenticated route now derives who's asking from a verified
 token, per BUILD SPEC section 7 ("never trust tenant IDs supplied directly
 by the client").
 """
+from datetime import datetime
 import hashlib
 import hmac
 import os
@@ -261,4 +262,9 @@ def require_active_subscription(
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     if not tenant or tenant.subscription_status != "active":
         raise HTTPException(402, "Your organization's subscription is not active. Visit Billing to subscribe.")
+    from app.billing.mode import billing_mode
+    if tenant.payment_mode and tenant.payment_mode != billing_mode(settings):
+        raise HTTPException(402, "Please subscribe using this deployment's payment environment.")
+    if tenant.subscription_expires_at and tenant.subscription_expires_at <= datetime.utcnow():
+        raise HTTPException(402, "Your subscription has expired. Visit Billing to renew.")
     return ctx

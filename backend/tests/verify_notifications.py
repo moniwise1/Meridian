@@ -17,6 +17,7 @@ os.environ["PAYSTACK_PLAN_CODE_PRO"] = "PLN_pro"
 os.environ["SUBSCRIPTION_REMINDER_SECRET"] = "reminder-secret-xyz"
 os.environ["SUBSCRIPTION_EXPIRY_REMINDER_DAYS"] = "7"
 
+from billing_fixtures import webhook_fixture
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.session import SessionLocal, init_db
@@ -37,7 +38,7 @@ def mk_tenant_user(name, email, role="admin"):
 
 
 def signed_webhook(payload: dict):
-    body = json.dumps(payload).encode()
+    body = json.dumps(webhook_fixture(payload, db)).encode()
     sig = hmac.new(b"sk_test_fake_secret", body, hashlib.sha512).hexdigest()
     return client.post("/billing/webhook", content=body,
                        headers={"x-paystack-signature": sig, "content-type": "application/json"})

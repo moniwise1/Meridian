@@ -42,6 +42,10 @@ class PaystackError(Exception):
 
 
 def _headers() -> dict:
+    from app.billing.mode import validate_billing_config
+    errors = validate_billing_config(settings)
+    if errors:
+        raise PaystackError("Invalid billing configuration: " + "; ".join(errors))
     if not settings.paystack_secret_key:
         raise PaystackError("PAYSTACK_SECRET_KEY is not configured.")
     return {
@@ -58,9 +62,16 @@ def _request(method: str, path: str, client: httpx.Client | None = None, **kwarg
     client = client or httpx.Client(timeout=15)
     try:
         resp = client.request(method, f"{BASE_URL}{path}", headers=_headers(), **kwargs)
-        body = resp.json()
-        if not body.get("status"):
+        try:
+            body = resp.json()
+        except ValueError:
+            raise PaystackError("Paystack returned an invalid response.")
+        if not isinstance(body, dict):
+            raise PaystackError("Paystack returned an invalid response.")
+        if resp.is_error or not body.get("status"):
             raise PaystackError(body.get("message", "Paystack request failed."), body)
+        if not isinstance(body.get("data"), dict):
+            raise PaystackError("Paystack returned incomplete payment details.")
         return body["data"]
     finally:
         if owns_client:
@@ -82,6 +93,7 @@ def initialize_subscription_transaction(email: str, plan_code: str, amount: int,
     return _request("POST", "/transaction/initialize", client=client, json={
         "email": email,
         "amount": amount,
+        "currency": settings.billing_currency,
         "plan": plan_code,
         "callback_url": callback_url,
         "metadata": metadata or {},
@@ -111,6 +123,7 @@ def initialize_transfer_transaction(email: str, amount: int, callback_url: str,
     return _request("POST", "/transaction/initialize", client=client, json={
         "email": email,
         "amount": amount,
+        "currency": settings.billing_currency,
         "callback_url": callback_url,
         "channels": ["bank_transfer"],
         "metadata": metadata or {},

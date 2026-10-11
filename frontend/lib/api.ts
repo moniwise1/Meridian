@@ -666,7 +666,7 @@ export async function deleteUser(userId: string): Promise<void> {
 // ---------- Billing ----------
 
 export type BillingStatus = {
-  subscription_status: "none" | "pending" | "active" | "cancelled" | "refunded";
+  subscription_status: "none" | "pending" | "active" | "cancelled" | "refunded" | "expired" | "payment_required";
   tier: "free" | "pro";
   // Which of the 3 plans below - null when not on a paid plan.
   plan: "basic" | "pro" | "premium" | null;
