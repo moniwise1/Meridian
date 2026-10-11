@@ -14,7 +14,7 @@ os.environ["DOCUMENTS_DIR"] = os.path.join(_tmp, "documents")
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.session import SessionLocal, init_db
-from app.db.models import Tenant, User, QueryRecord, GeneratedArtifact
+from app.db.models import Tenant, User, QueryRecord, GeneratedArtifact, DataSourceConnection
 from app.security.auth import (
     hash_password, create_access_token,
     create_artifact_download_token, ARTIFACT_DOWNLOAD_TTL_SECONDS,
@@ -47,6 +47,7 @@ qr = QueryRecord(
         "anomalies": [], "investigation": [], "forecast": [], "documents_used": [], "preview_rows": [],
     },
 )
+db.add(DataSourceConnection(id="conn-x", tenant_id=t.id, name="Warehouse", kind="postgres", host="example.invalid", port=5432, database="data", username="readonly", encrypted_password="unused", table_allowlist=[], column_policy={}))
 db.add(qr); db.commit()
 
 # --- full happy path: generate -> download via the returned url ---

@@ -33,3 +33,4 @@ snowflake-sqlalchemy==1.11.0
 sqlalchemy==2.0.35
 sqlparse==0.6.0
 uvicorn[standard]==0.30.6
+sqlglot==26.33.0

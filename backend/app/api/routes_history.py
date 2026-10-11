@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.db.models import QueryRecord, GeneratedArtifact, PinnedAnalysis
 from app.security.auth import get_current_user, AuthContext
 from app.api.routes_artifacts import artifact_download_url
+from app.security.analysis_access import check_analysis_access
 
 router = APIRouter(prefix="/history", tags=["history"])
 
@@ -28,7 +29,7 @@ def list_analyses(limit: int = 50, pinned_only: bool = False, db: Session = Depe
         p.query_id for p in
         db.query(PinnedAnalysis).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id).all()
     }
-    q = db.query(QueryRecord).filter_by(tenant_id=ctx.tenant_id)
+    q = db.query(QueryRecord).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     if pinned_only:
         if not pinned_ids:
             return []
@@ -54,7 +55,7 @@ def pin_analysis(query_id: str, db: Session = Depends(get_db),
     """Idempotent: pinning an already-pinned analysis is a no-op, not a
     duplicate-row error - the frontend toggles this on a single click
     without needing to track prior state itself."""
-    if not db.query(QueryRecord).filter_by(id=query_id, tenant_id=ctx.tenant_id).first():
+    if not db.query(QueryRecord).filter_by(id=query_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id).first():
         raise HTTPException(404, "Analysis not found.")
     existing = (
         db.query(PinnedAnalysis)
@@ -87,9 +88,10 @@ def get_analysis(query_id: str, db: Session = Depends(get_db),
     """Reconstructs the same shape /ask/stream's final event produces, so the
     frontend can reopen a past analysis in the same ResultView component
     used for a freshly-run one."""
-    r = db.query(QueryRecord).filter_by(id=query_id, tenant_id=ctx.tenant_id).first()
+    r = db.query(QueryRecord).filter_by(id=query_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id).first()
     if not r:
         raise HTTPException(404, "Analysis not found.")
+    check_analysis_access(db, r, ctx.user_id)
     snap = r.result_snapshot or {}
     pinned = bool(
         db.query(PinnedAnalysis)
@@ -127,7 +129,7 @@ def get_analysis(query_id: str, db: Session = Depends(get_db),
 @router.get("/artifacts")
 def list_artifacts(kind: str | None = None, limit: int = 50, db: Session = Depends(get_db),
                     ctx: AuthContext = Depends(get_current_user)):
-    q = db.query(GeneratedArtifact).filter_by(tenant_id=ctx.tenant_id)
+    q = db.query(GeneratedArtifact).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id)
     if kind:
         q = q.filter_by(kind=kind)
     rows = q.order_by(GeneratedArtifact.created_at.desc()).limit(min(max(limit, 1), 500)).all()
@@ -144,5 +146,14 @@ def list_artifacts(kind: str | None = None, limit: int = 50, db: Session = Depen
             "url": artifact_download_url(a),
             "created_at": a.created_at.isoformat(),
         }
-        for a in rows
+        for a in rows if _artifact_visible(db, a, ctx.user_id)
     ]
+
+
+def _artifact_visible(db, artifact, user_id):
+    record = db.query(QueryRecord).filter_by(id=artifact.source_query_id, tenant_id=artifact.tenant_id).first()
+    try:
+        check_analysis_access(db, record, user_id)
+        return True
+    except HTTPException:
+        return False

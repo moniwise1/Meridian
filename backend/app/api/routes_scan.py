@@ -101,7 +101,7 @@ def scan_stream(body: ScanRequest, db: Session = Depends(get_db),
                         "detail": f"Checking up to {min(len(tables), 10)} table(s) for anomalies."})
             result = scan_connection(
                 connector, tables, row_scope,
-                row_limit=settings.default_row_limit, timeout_seconds=settings.query_timeout_seconds,
+                row_limit=settings.default_row_limit, timeout_seconds=settings.query_timeout_seconds, kind=conn_row.kind,
             )
             yield _sse({"type": "step", "step": "scanning", "status": "done",
                         "detail": f"{len(result.scanned_anomalies)} anomal{'y' if len(result.scanned_anomalies) == 1 else 'ies'} "

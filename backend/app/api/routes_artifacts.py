@@ -24,6 +24,7 @@ from app.agents.presentation_generator import generate_presentation_pptx
 from app.agents.email_delivery import send_report
 from app.audit import logger as audit
 from app.config import settings
+from app.security.analysis_access import check_analysis_access
 from app.billing.plans import document_limit_for
 from app.billing.usage import count_documents_this_month
 
@@ -56,11 +57,11 @@ def _short_title(question: str, limit: int = 100) -> str:
     return q if len(q) <= limit else q[:limit].rstrip() + "…"
 
 
-def _get_query_record(db: Session, tenant_id: str, query_id: str) -> QueryRecord:
-    row = db.query(QueryRecord).filter_by(id=query_id, tenant_id=tenant_id).first()
+def _get_query_record(db: Session, tenant_id: str, query_id: str, user_id: str) -> QueryRecord:
+    row = db.query(QueryRecord).filter_by(id=query_id, tenant_id=tenant_id, user_id=user_id).first()
     if not row:
         raise HTTPException(404, "Analysis not found.")
-    return row
+    return check_analysis_access(db, row, user_id)
 
 
 def _record_artifact(db: Session, ctx: AuthContext, kind: str, title: str,
@@ -132,6 +133,8 @@ def download_artifact(artifact_id: str, token: str = "", db: Session = Depends(g
     artifact = db.query(GeneratedArtifact).filter_by(id=artifact_id).first()
     if not artifact or not os.path.isfile(artifact.file_path):
         raise HTTPException(404, "This artifact is no longer available.")
+    record = db.query(QueryRecord).filter_by(id=artifact.source_query_id, tenant_id=artifact.tenant_id).first()
+    check_analysis_access(db, record, artifact.user_id)
     return FileResponse(
         artifact.file_path,
         media_type=_MEDIA_TYPES.get(artifact.kind, "application/octet-stream"),
@@ -167,7 +170,7 @@ def create_report(query_id: str, db: Session = Depends(get_db),
                    ctx: AuthContext = Depends(get_current_user)):
     _require_capability(db, ctx, "report_generation")
     _check_document_limit(db, ctx)
-    record = _get_query_record(db, ctx.tenant_id, query_id)
+    record = _get_query_record(db, ctx.tenant_id, query_id, ctx.user_id)
     snap = record.result_snapshot
     path = generate_report_pdf(
         title=f"Analysis: {_short_title(record.question)}", question=record.question,
@@ -185,7 +188,7 @@ def create_presentation(query_id: str, db: Session = Depends(get_db),
                          ctx: AuthContext = Depends(get_current_user)):
     _require_capability(db, ctx, "presentation_generation")
     _check_document_limit(db, ctx)
-    record = _get_query_record(db, ctx.tenant_id, query_id)
+    record = _get_query_record(db, ctx.tenant_id, query_id, ctx.user_id)
     snap = record.result_snapshot
     path = generate_presentation_pptx(
         title=f"Analysis: {_short_title(record.question)}", question=record.question,
@@ -202,7 +205,7 @@ def create_presentation(query_id: str, db: Session = Depends(get_db),
 def create_export(query_id: str, format: str = "csv", db: Session = Depends(get_db),
                    ctx: AuthContext = Depends(get_current_user)):
     _check_document_limit(db, ctx)
-    record = _get_query_record(db, ctx.tenant_id, query_id)
+    record = _get_query_record(db, ctx.tenant_id, query_id, ctx.user_id)
     snapshot = record.result_snapshot or {}
     rows = snapshot.get("preview_rows", [])
     if format == "xlsx":
@@ -233,10 +236,10 @@ class EmailRequest(BaseModel):
 @router.post("/email")
 def email_artifact(body: EmailRequest, db: Session = Depends(get_db),
                     ctx: AuthContext = Depends(get_current_user)):
-    record = _get_query_record(db, ctx.tenant_id, body.query_id)
+    record = _get_query_record(db, ctx.tenant_id, body.query_id, ctx.user_id)
     attachment_path = None
     if body.artifact_id:
-        artifact = db.query(GeneratedArtifact).filter_by(id=body.artifact_id, tenant_id=ctx.tenant_id).first()
+        artifact = db.query(GeneratedArtifact).filter_by(id=body.artifact_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id).first()
         if artifact:
             attachment_path = artifact.file_path
 

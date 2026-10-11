@@ -21,6 +21,8 @@ import pandas as pd
 from app.agents.anomaly_detection import Anomaly
 from app.agents.query_generator import generate_sql
 from app.security.query_validator import validate_readonly_sql
+from app.security.query_policy import execute_authorized, QueryPolicyError
+from app.security.output_guard import check_dataframe
 from app.connectors.base import Connector, TableSchema
 
 
@@ -38,7 +40,8 @@ MAX_CASCADE_DEPTH = 3
 
 def investigate(connector: Connector, tables: list[TableSchema], schema_text: str,
                  value_col: str, filters: dict[str, str], already_used: set[str],
-                 change_description: str, row_limit: int, timeout_seconds: int) -> InvestigationResult | None:
+                 change_description: str, row_limit: int, timeout_seconds: int,
+                 row_scope: dict | None = None, kind: str = "postgres") -> InvestigationResult | None:
     """One drill-down level: breaks value_col down by the next unused
     candidate dimension, filtered to the (column -> value) pairs accumulated
     from every level above it."""
@@ -65,8 +68,14 @@ def investigate(connector: Connector, tables: list[TableSchema], schema_text: st
     if not validation.is_valid:
         return None
 
-    result = connector.run_query(validation.normalized_sql, row_limit, timeout_seconds)
+    try:
+        authorized, result = execute_authorized(connector, generated.sql, tables, row_scope or {},
+            row_limit, timeout_seconds, kind)
+    except QueryPolicyError:
+        return None
     df = result.dataframe
+    if not check_dataframe(df, None, row_limit).allowed:
+        return None
     if next_dim not in df.columns or value_col not in df.columns:
         return None
 
@@ -75,13 +84,14 @@ def investigate(connector: Connector, tables: list[TableSchema], schema_text: st
         return None
     breakdown = [{"group": str(k), "total": float(v)} for k, v in grouped.items()]
     top_group = str(grouped.index[0])
-    return InvestigationResult(dimension=next_dim, breakdown=breakdown, sql=validation.normalized_sql, top_group=top_group)
+    return InvestigationResult(dimension=next_dim, breakdown=breakdown, sql=authorized.sql, top_group=top_group)
 
 
 def investigate_cascade(connector: Connector, tables: list[TableSchema], schema_text: str,
                          anomaly: Anomaly, group_col: str, value_col: str,
                          row_limit: int, timeout_seconds: int,
-                         max_depth: int = MAX_CASCADE_DEPTH) -> list[InvestigationResult]:
+                         max_depth: int = MAX_CASCADE_DEPTH, row_scope: dict | None = None,
+                         kind: str = "postgres") -> list[InvestigationResult]:
     """Drills down repeatedly: the top contributor found at each level
     becomes an additional filter for the next, so a "revenue declined in
     South-East" anomaly can cascade South-East -> its top product ->
@@ -97,7 +107,7 @@ def investigate_cascade(connector: Connector, tables: list[TableSchema], schema_
     for _ in range(max_depth):
         result = investigate(
             connector, tables, schema_text, value_col, filters, already_used,
-            change_description, row_limit, timeout_seconds,
+            change_description, row_limit, timeout_seconds, row_scope, kind,
         )
         if not result or not result.top_group:
             break

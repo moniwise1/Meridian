@@ -115,10 +115,10 @@ class SnowflakeConnector(Connector):
             ))
         return result
 
-    def run_query(self, sql: str, row_limit: int, timeout_seconds: int) -> QueryResult:
+    def run_query(self, sql: str, row_limit: int, timeout_seconds: int, params: dict | None = None) -> QueryResult:
         start = time.time()
         with self._timed_conn(timeout_seconds) as conn:
-            df = pd.read_sql(text(sql), conn)
+            df = pd.read_sql(text(sql), conn, params=params)
         truncated = len(df) >= row_limit
         duration_ms = int((time.time() - start) * 1000)
         return QueryResult(dataframe=df, duration_ms=duration_ms, truncated=truncated)

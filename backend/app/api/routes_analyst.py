@@ -18,6 +18,8 @@ def authorize_source(db, ctx, key):
         raise HTTPException(403, "Querying access is required.")
     kind, _, source_id = key.partition(":")
     if kind == "doc":
+        if user.row_scope:
+            raise HTTPException(403, "Document Ask cannot enforce your row permissions. Use the scoped Executive Overview.")
         if "document_retrieval" not in (user.capabilities or []):
             raise HTTPException(403, "Document access is required.")
         source = db.query(UploadedDocument).filter_by(id=source_id, tenant_id=ctx.tenant_id).first()

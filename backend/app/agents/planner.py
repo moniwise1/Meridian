@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.db.models import DataSourceConnection, QueryRecord, Conversation, UploadedDocument
 from app.security.secrets import decrypt, RedactedSecret
 from app.security.query_validator import validate_readonly_sql
+from app.security.query_policy import execute_authorized, QueryPolicyError
 from app.security.output_guard import check_dataframe
 from app.security.ssrf import check_connection_host, BlockedHostError
 from app.connectors.postgres import PostgresConnector
@@ -357,6 +358,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "preview_rows": [],
     }
 
+    snapshot["source_document_ids"] = [d.id for d in documents]
     snapshot["forced_assumption"] = force_answer
     snapshot["analysis"] = build_analysis(
         query_id, question, snapshot, profile=profile_dict, computed=profile is not None,
@@ -423,6 +425,8 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     # document_id actually belongs here - same "never trust an id the
     # client handed us" discipline as everything else in this module.
     documents = []
+    if document_ids and row_scope:
+        raise PolicyViolation("Document Ask is unavailable for row-restricted accounts. Use an authorized database or the scoped Executive Overview.")
     if document_ids:
         documents = (
             db.query(UploadedDocument)
@@ -555,7 +559,7 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     if not tables:
         yield StepEvent("finding_data", "error", "No authorized tables available for this connection.")
         return
-    schema_text = schema_to_prompt_text(tables)
+    schema_text = schema_to_prompt_text(tables) + "\nSQL dialect: " + conn_row.kind
     if row_scope:
         schema_text += "\n\nMANDATORY FILTER (row-level policy — always include as a WHERE condition): " + \
             ", ".join(f"{k} IN ({', '.join(repr(v) for v in vals)})" for k, vals in row_scope.items())
@@ -578,7 +582,12 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         yield StepEvent("running_analysis", "error", f"Query rejected by policy: {validation.reason}")
         return
 
-    result = connector.run_query(validation.normalized_sql, settings.default_row_limit, settings.query_timeout_seconds)
+    try:
+        authorized, result = execute_authorized(connector, generated.sql, tables, row_scope,
+            settings.default_row_limit, settings.query_timeout_seconds, conn_row.kind)
+    except QueryPolicyError as e:
+        raise PolicyViolation(str(e)) from e
+    validation.normalized_sql = authorized.sql
     df = result.dataframe
 
     allowed_cols = None
@@ -586,7 +595,7 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
     if table_hint and conn_row.column_policy.get(table_hint):
         allowed_cols = set(conn_row.column_policy[table_hint])
 
-    output_check = check_dataframe(df, allowed_cols, max_raw_rows=settings.max_row_limit)
+    output_check = check_dataframe(df, None, max_raw_rows=settings.max_row_limit)
     if not output_check.allowed:
         audit.log(db, tenant_id, "output_blocked", user_id, connection_id, query_id,
                    {"reason": output_check.reason}, status="denied")
@@ -624,6 +633,7 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         investigation_results = investigate_cascade(
             connector, tables, schema_text, top_anomaly, group_col, value_col,
             row_limit=settings.default_row_limit, timeout_seconds=settings.query_timeout_seconds,
+            row_scope=row_scope, kind=conn_row.kind,
         )
     if anomalies:
         detail = "; ".join(a.what for a in anomalies[:3])
@@ -688,7 +698,9 @@ def run_analysis(db: Session, tenant_id: str, user_id: str, connection_id: str |
         "preview_rows": _json_safe(df.head(20).to_dict(orient="records")) if allowed_cols is not False else [],
     }
 
+    snapshot["source_document_ids"] = [d.id for d in documents]
     snapshot["forced_assumption"] = force_answer
+    snapshot["policy_signature"] = policy_signature(conn_row, row_scope)
     snapshot["analysis"] = build_analysis(query_id, resolved_question, snapshot,
                                           sources=[{"id": connection_id}])
 

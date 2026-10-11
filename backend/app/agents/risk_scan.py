@@ -31,6 +31,7 @@ from app.connectors.base import Connector, TableSchema
 from app.agents.column_heuristics import guess_columns
 from app.agents.anomaly_detection import Anomaly, detect
 from app.security.query_validator import validate_readonly_sql
+from app.security.query_policy import execute_authorized, QueryPolicyError
 from app.security.output_guard import check_dataframe
 
 MAX_TABLES_SCANNED = 10
@@ -76,7 +77,7 @@ def _build_scan_sql(table_name: str, group_col: str, date_col: str, value_col: s
 
 def scan_connection(connector: Connector, tables: list[TableSchema], row_scope: dict,
                      row_limit: int, timeout_seconds: int,
-                     max_tables: int = MAX_TABLES_SCANNED) -> ScanResult:
+                     max_tables: int = MAX_TABLES_SCANNED, kind: str = "postgres") -> ScanResult:
     result = ScanResult()
 
     for table in tables[:max_tables]:
@@ -93,7 +94,7 @@ def scan_connection(connector: Connector, tables: list[TableSchema], row_scope: 
             continue
 
         try:
-            query_result = connector.run_query(validation.normalized_sql, row_limit, timeout_seconds)
+            _, query_result = execute_authorized(connector, sql, tables, row_scope, row_limit, timeout_seconds, kind)
         except Exception:
             result.tables_skipped.append(table.name)
             continue

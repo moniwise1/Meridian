@@ -7,6 +7,7 @@ allowlist for a table are never included here, so the model literally
 cannot generate SQL that references them.
 """
 from app.connectors.base import Connector, TableSchema
+from app.security.output_guard import DEFAULT_SENSITIVE_COLUMN_PATTERNS
 
 
 def discover_schema(connector: Connector, table_allowlist: list[str] | None,
@@ -14,6 +15,10 @@ def discover_schema(connector: Connector, table_allowlist: list[str] | None,
     raw_tables = connector.get_schema(table_allowlist)
     filtered = []
     for table in raw_tables:
+        table = TableSchema(name=table.name, columns=[c for c in table.columns
+            if not any(p in c.name.lower() for p in DEFAULT_SENSITIVE_COLUMN_PATTERNS)])
+        if not table.columns:
+            continue
         allowed_cols = column_policy.get(table.name)
         if allowed_cols is None:
             # No explicit policy configured for this table -> allow all

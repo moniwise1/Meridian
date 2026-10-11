@@ -50,5 +50,5 @@ class Connector(ABC):
         ...
 
     @abstractmethod
-    def run_query(self, sql: str, row_limit: int, timeout_seconds: int) -> QueryResult:
+    def run_query(self, sql: str, row_limit: int, timeout_seconds: int, params: dict | None = None) -> QueryResult:
         ...
