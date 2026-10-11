@@ -63,15 +63,15 @@ export default function HomePage() {
         Welcome back, {greetingName}
       </h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
-        A snapshot of what the team has connected, asked, and generated.
+        Your connected sources, recent analyses and generated artifacts.
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
 
       <div className="grid grid-cols-3 gap-3 mb-10">
         <StatCard label="Data sources" value={connections.length} href="/connections" />
-        <StatCard label="Analyses run" value={analyses.length} href="/analyses" />
-        <StatCard label="Artifacts generated" value={artifacts.length} href="/library" />
+        <StatCard label="Recent analyses" value={analyses.length} href="/analyses" />
+        <StatCard label="Recent artifacts" value={artifacts.length} href="/library" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-10">

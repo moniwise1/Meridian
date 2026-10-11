@@ -16,6 +16,7 @@ import { useGlide } from "@/components/glide/useGlide";
 import ClarificationPrompt from "@/components/ClarificationPrompt";
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
+import { useAccountType } from "@/lib/useAccountType";
 
 // The "Data source" picker offers both database connections and uploaded
 // documents in one list — a document can now BE the thing being analysed,
@@ -49,6 +50,11 @@ type Turn = {
 };
 
 export default function AskDashboard() {
+  const accountType = useAccountType();
+  const [continueThread, setContinueThread] = useState(true);
+  const [loadingSources, setLoadingSources] = useState(true);
+  const controller = useRef<AbortController | null>(null);
+  useEffect(() => () => controller.current?.abort(), []);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [sourceValue, setSourceValue] = useState("");
@@ -85,7 +91,7 @@ export default function AskDashboard() {
     listConnections()
       .then((rows) => {
         setConnections(rows);
-        if (rows.length > 0) setSourceValue(`conn:${rows[0].id}`);
+        if (rows.length > 0) setSourceValue(prev => prev || `conn:${rows[0].id}`);
       })
       .catch((e) => setLoadError(e.message));
     listDocuments()
@@ -95,7 +101,8 @@ export default function AskDashboard() {
           setSourceValue((prev) => (prev === "" ? `doc:${rows[0].id}` : prev));
         }
       })
-      .catch(() => {}); // no document_retrieval capability, or none uploaded yet — fine either way
+      .catch((e) => setLoadError(`Documents could not be loaded: ${e.message}`))
+      .finally(() => setLoadingSources(false));
   }, []);
 
   useEffect(() => {
@@ -132,6 +139,8 @@ export default function AskDashboard() {
   ) {
     if (!source || requestRunning.current) return;
     requestRunning.current = true;
+    const abortController = new AbortController();
+    controller.current = abortController;
     setRunning(true);
 
     const id = opts.turnId ?? Date.now();
@@ -175,13 +184,15 @@ export default function AskDashboard() {
             setConversationId(evt.conversation_id);
           }
         },
+        abortController.signal,
       );
     } catch (e) {
       patch((t) => ({
         ...t,
-        steps: [...t.steps, { type: "step", step: "error", status: "error", detail: (e as Error).message }],
+        steps: [...t.steps, { type: "step", step: "error", status: "error", detail: abortController.signal.aborted ? "Response stopped. An analysis already in progress may still finish." : (e as Error).message }],
       }));
     } finally {
+      controller.current = null;
       requestRunning.current = false;
       setRunning(false);
     }
@@ -196,7 +207,7 @@ export default function AskDashboard() {
     if (!question.trim() || inputLocked || !source) return;
     const text = question;
     setQuestion("");
-    askText(text, !!conversationId);
+    askText(text, !!conversationId && continueThread);
   }
 
   // Folds the clarifying question and the user's answer into one
@@ -226,6 +237,7 @@ export default function AskDashboard() {
 
   function startNewConversation() {
     setConversationId(null);
+    setContinueThread(true);
     setTurns([]);
     setQuestion("");
     setSelectedDocIds([]);
@@ -238,7 +250,7 @@ export default function AskDashboard() {
         <div>
           <h1 className="text-[22px] font-medium text-ink tracking-tight">What do you want to understand?</h1>
           <p className="text-[13.5px] text-ink-soft mt-1.5">
-            Ask a business question. The agent will find the relevant authorized data, analyse it,
+            Ask a question about your data. Meridian will find the relevant authorized records, analyse them,
             check for anomalies, and explain the answer with evidence.
           </p>
         </div>
@@ -253,8 +265,12 @@ export default function AskDashboard() {
         )}
       </div>
 
+      {turns.length === 0 && sourceValue && <div className="grid sm:grid-cols-3 gap-2 mb-6">
+        {(documentIsSource ? ["Summarise the main findings and data limitations", "Which categories stand out?", "What should I verify before using these figures?"] : accountType === "business" ? ["Compare revenue by month", "Which products contribute most to revenue?", "Which branches need attention?"] : ["Summarise the available data", "Show the main trends over time", "Which categories have the highest totals?"]).map(text => <button key={text} disabled={inputLocked} onClick={() => setQuestion(text)} className="text-left text-xs border border-line rounded-lg p-3 text-ink-soft hover:border-teal disabled:opacity-40">{text}</button>)}
+      </div>}
+      {loadingSources && <p role="status" className="text-sm text-ink-soft mb-4">Loading your authorized sources…</p>}
       {loadError && <div className="mb-6 text-[13px] text-red">{loadError}</div>}
-      {connections.length === 0 && documents.length === 0 && !loadError && (
+      {connections.length === 0 && documents.length === 0 && !loadError && !loadingSources && (
         <div className="mb-6 p-3 border border-line rounded-[4px] text-[13px] text-ink-soft">
           No data sources connected and no documents uploaded yet. Go to{" "}
           <Link href="/connections" className="text-teal hover:text-teal-deep transition-colors">
@@ -351,6 +367,8 @@ export default function AskDashboard() {
         </div>
       )}
 
+      {conversationId && <label className="flex items-center gap-2 text-xs text-ink-soft mb-3"><input type="checkbox" checked={continueThread} disabled={inputLocked} onChange={e => setContinueThread(e.target.checked)} />Continue this conversation&apos;s context. Uncheck for an independent question.</label>}
+      {running && <button onClick={() => controller.current?.abort()} className="text-sm text-teal mb-3">Stop response</button>}
       {/* ---------- Composer ---------- */}
       <div className="sticky bottom-4 bg-panel border border-line rounded-[8px] shadow-sm p-4">
         <div ref={sourceRowRef} className="relative flex items-center gap-2 mb-3 flex-wrap">
@@ -455,6 +473,8 @@ export default function AskDashboard() {
             </div>
           )}
           <textarea
+            aria-label="Question for Ask Meridian"
+            maxLength={8000}
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => {

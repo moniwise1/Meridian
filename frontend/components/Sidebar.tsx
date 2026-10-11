@@ -9,6 +9,7 @@ import GlideNav from "@/components/glide/GlideNav";
 
 const NAV = [
   { href: "/home", label: "Home" },
+  { href: "/overview", label: "Executive Overview", businessOnly: true },
   { href: "/", label: "Ask" },
   { href: "/risks", label: "Risks" },
   { href: "/analyses", label: "Analyses" },
@@ -65,13 +66,13 @@ export default function Sidebar() {
   const navItems = NAV.filter(
     (item) =>
       (!item.adminOnly || session?.role === "admin") &&
-      (!item.businessOnly || accountType !== "individual"),
+      (!item.businessOnly || accountType === "business"),
   );
   const activeHref =
     navItems.find((item) => (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)))?.href ?? null;
 
   return (
-    <aside className="w-56 shrink-0 border-r border-line bg-panel px-5 py-6 flex flex-col gap-8">
+    <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-line bg-panel px-5 py-4 md:py-6 flex flex-col gap-4 md:gap-8">
       <div className="flex items-start justify-between">
         <div>
           <div className="text-[15px] font-semibold tracking-tight text-ink">Meridian</div>
@@ -80,9 +81,14 @@ export default function Sidebar() {
         {session && <NotificationBell />}
       </div>
 
-      <GlideNav items={navItems} activeHref={activeHref} />
+      <details className="md:hidden">
+        <summary className="cursor-pointer text-sm text-teal">Browse workspace</summary>
+        <div className="mt-3"><GlideNav items={navItems} activeHref={activeHref} /></div>
+        {session && <button onClick={handleLogout} className="text-sm text-teal mt-3">Sign out</button>}
+      </details>
+      <div className="hidden md:block"><GlideNav items={navItems} activeHref={activeHref} /></div>
 
-      <div className="mt-auto flex flex-col gap-3">
+      <div className="mt-auto hidden md:flex flex-col gap-3">
         {session && (
           <div className="text-[12px] border-t border-line pt-3">
             <div className="text-ink truncate">{session.email}</div>

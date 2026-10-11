@@ -585,3 +585,16 @@ export async function saveMyProfile(body: {
     body: JSON.stringify(body),
   }, "Could not save your profile.");
 }
+
+export type PlatformAnswer = {
+  generated_at: string; period: { start: string; end: string }; scope: string;
+  answer: string; supported: boolean;
+  metrics: { label: string; value: number; previous?: number; source: string; definition: string }[];
+};
+export async function askPlatform(question: string, days: number): Promise<PlatformAnswer> {
+  const res = await fetch(`${API_BASE}/platform/ask`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ question, days }) });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Could not answer this question.");
+  return body;
+}
