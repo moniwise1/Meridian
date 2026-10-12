@@ -1,0 +1,14 @@
+[
+ {"id":"wait-average","question":"What is the average wait time?","rows":[{"store":"Eket","wait":10},{"store":"Eket","wait":30},{"store":"Uyo","wait":5}],"request":{"operation":"average","value_column":"wait"},"expected":15},
+ {"id":"wait-filter","question":"What is Eket's average wait?","rows":[{"store":"Eket","wait":10},{"store":"Eket","wait":30},{"store":"Uyo","wait":5}],"request":{"operation":"average","value_column":"wait","filters":[{"column":"store","operator":"eq","value":"Eket"}]},"expected":20},
+ {"id":"weighted-conversion","question":"What is overall conversion using sales and footfall?","rows":[{"sold":1,"footfall":10},{"sold":9,"footfall":30}],"request":{"operation":"rate","value_column":"sold","denominator_column":"footfall"},"expected":25},
+ {"id":"paired-missing","question":"Calculate conversion and exclude rows missing either operand.","rows":[{"sold":1,"footfall":10},{"sold":9,"footfall":30},{"sold":null,"footfall":60}],"request":{"operation":"rate","value_column":"sold","denominator_column":"footfall"},"expected":25,"excluded":1},
+ {"id":"zero-denominator","question":"What is conversion when footfall is zero?","rows":[{"sold":0,"footfall":0}],"request":{"operation":"rate","value_column":"sold","denominator_column":"footfall"},"expected":null},
+ {"id":"median-outlier","question":"What is the median wait, rather than the mean?","rows":[{"wait":2},{"wait":3},{"wait":100}],"request":{"operation":"median","value_column":"wait"},"expected":3},
+ {"id":"refund-net","question":"Calculate net value including the refund.","rows":[{"value":100},{"value":50},{"value":-30}],"request":{"operation":"sum","value_column":"value"},"expected":120},
+ {"id":"missing-not-zero","question":"Calculate total, and distinguish missing data from zero.","rows":[{"value":null},{"value":null}],"request":{"operation":"sum","value_column":"value"},"expected":null,"excluded":2},
+ {"id":"no-matches","question":"What is the total for the missing store?","rows":[{"store":"Eket","value":10}],"request":{"operation":"sum","value_column":"value","filters":[{"column":"store","operator":"eq","value":"Missing"}]},"expected":null,"matched":0},
+ {"id":"threshold-count","question":"How many waits exceed five minutes?","rows":[{"wait":5},{"wait":6},{"wait":10},{"wait":null}],"request":{"operation":"count","filters":[{"column":"wait","operator":"gt","value":5}]},"expected":2},
+ {"id":"missing-not-unequal","question":"How many known wait values differ from five?","rows":[{"wait":5},{"wait":6},{"wait":null}],"request":{"operation":"count","filters":[{"column":"wait","operator":"ne","value":5}]},"expected":1},
+ {"id":"largest-is-not-cause","question":"Show totals by product; do not claim this establishes the cause of a decline.","rows":[{"product":"A","value":100},{"product":"B","value":10}],"request":{"operation":"sum","value_column":"value","group_column":"product"},"expected":110,"top_group":"A"}
+]
