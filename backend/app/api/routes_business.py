@@ -80,6 +80,9 @@ class OverviewRequest(BaseModel):
     revenue_column: str | None = None
     expense_column: str | None = None
     currency_column: str | None = None
+    group_column: str | None = None
+    group_value: str | None = Field(default=None, max_length=500)
+    rank_by: str = Field(default="revenue", pattern=r"^(revenue|expenses)$")
     currency: str = Field(pattern=r"^[A-Za-z]{3}$")
     include_duplicates: bool = False
     start: date

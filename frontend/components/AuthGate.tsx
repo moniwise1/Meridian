@@ -66,7 +66,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   }, [pathname, router, skipGate, isRoot, hydrated, session]);
 
   if (pathname === "/login" || skipGate) return <>{children}</>;
-  if (!hydrated) return null; // avoid a flash before the client reads the session
+  if (!hydrated) return isRoot ? <>{children}</> : null; // avoid a flash before the client reads the session
   if (!session) return isRoot ? <>{children}</> : null; // "/" renders (the landing page); everything else waits on its redirect
 
   return (

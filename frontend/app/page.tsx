@@ -33,7 +33,7 @@ export default function RootPage() {
     if (getTenantSubdomain()) router.replace("/login");
   }, [hydrated, session, router]);
 
-  if (!hydrated) return null; // avoid a flash of the wrong page before the client reads the session
+  if (!hydrated) return <LandingPage />; // avoid a flash of the wrong page before the client reads the session
   if (!session) return getTenantSubdomain() ? null : <LandingPage />;
 
   return (

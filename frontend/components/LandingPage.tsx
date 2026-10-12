@@ -2,810 +2,97 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { listPlans, type Plan, type AccountType } from "@/lib/api";
-import BillingIntervalToggle, { PlanPrice, type BillingInterval } from "@/components/BillingIntervalToggle";
+import { listPlans, type AccountType, type Plan } from "@/lib/api";
+import { formatNaira, type BillingInterval } from "@/components/BillingIntervalToggle";
 import InterestForm from "@/components/InterestForm";
 import { track } from "@/lib/analytics";
 
-const FEATURES = [
-  {
-    title: "Your next decision starts with a question",
-    body: "Why did revenue fall? Which accounts need attention? Ask in plain English and get an analysis of your data, without writing SQL or building another dashboard.",
-  },
-  {
-    title: "Walk into the meeting with the evidence",
-    body: "When someone asks how you reached a conclusion, have the answer ready. Meridian includes the source query, data-quality notes, and a confidence level so you can review the evidence before you act.",
-  },
-  {
-    title: "Start with the data you already have",
-    body: "Connect a live database or upload a report, spreadsheet, or presentation. Meridian also reads scanned documents, so you can start exploring without first moving everything into a new data warehouse.",
-  },
-  {
-    title: "Explore your data without changing it",
-    body: "Your production records stay untouched. Meridian verifies that each database connection is read-only before saving it, so you can investigate questions without writing to the source.",
-  },
-  {
-    title: "Give your team answers within their access",
-    body: "Let more people find what they need while keeping sensitive information restricted. Row- and column-level permissions control what each person can see on every query.",
-  },
-  {
-    title: "Be ready when someone asks what happened",
-    body: "Keep a traceable record of queries, connection changes, and exports. A tamper-evident audit trail and one-click verification help you respond to internal reviews and audit questions with evidence.",
-  },
+const NAV = [["Platform", "#platform"], ["How it works", "#workflow"], ["Pricing", "#pricing"], ["Contact", "#contact"]] as const;
+const MONTHS = [
+  { month: "Feb", revenue: 320, expenses: 150 }, { month: "Mar", revenue: 390, expenses: 170 },
+  { month: "Apr", revenue: 360, expenses: 180 }, { month: "May", revenue: 510, expenses: 230 },
+  { month: "Jun", revenue: 440, expenses: 210 }, { month: "Jul", revenue: 460, expenses: 240 },
+];
+const QUESTIONS = [
+  { question: "How did revenue compare with the previous period?", answer: "Revenue was ₦2,480,000, compared with ₦2,240,000 in the preceding equal-length period. The difference is ₦240,000, or 10.7%.", note: "Calculation: (2,480,000 − 2,240,000) ÷ 2,240,000 × 100." },
+  { question: "What is revenue less the mapped expenses?", answer: "Revenue of ₦2,480,000 less mapped expenses of ₦1,180,000 leaves ₦1,300,000. This comparison does not establish complete accounting profit.", note: "Both amounts use the same reporting window and confirmed currency." },
+  { question: "Which branch recorded the most revenue?", answer: "South-West recorded ₦960,000 of the ₦2,480,000 total. South-East recorded ₦760,000, North-Central ₦460,000, and South-South ₦300,000.", note: "A ranking describes the records. It does not establish the causes of a difference." },
 ] as const;
-
-const STEPS = [
-  {
-    n: "1",
-    title: "Bring your data",
-    body: "Connect a read-only database or upload a document you want to understand.",
-  },
-  {
-    n: "2",
-    title: "Ask what matters",
-    body: "Ask a business question in your own words. Add follow-up questions as you explore.",
-  },
-  {
-    n: "3",
-    title: "Review the answer and the proof",
-    body: "See the findings, supporting query, confidence level, and any data-quality concerns before deciding what to do next.",
-  },
-] as const;
-
-// Small hand-drawn line icons (currentColor, stroke-based) rather than a
-// photo or stock illustration - built from the app's own design tokens so
-// they never look like a mismatched stock asset bolted onto an otherwise
-// custom-built page, and need no image file to ship or keep in sync.
-function DatabaseIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-      <ellipse cx="12" cy="5.5" rx="7.5" ry="2.5" />
-      <path d="M4.5 5.5v6c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-6" />
-      <path d="M4.5 11.5v6c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-6" />
-    </svg>
-  );
-}
-
-function ChatIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-      <path d="M4 5.5h16v10.5H9.5L5 20v-4H4z" />
-      <path d="M8 9.5h8M8 12.5h5" />
-    </svg>
-  );
-}
-
-function EvidenceIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-      <path d="M12 3.5l7 3v5c0 4.5-3 7.5-7 8.5-4-1-7-4-7-8.5v-5z" />
-      <path d="M9 12l2 2 4-4.5" />
-    </svg>
-  );
-}
-
-function LockIcon({ small = false }: { small?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
-      strokeLinejoin="round" className={small ? "w-3.5 h-3.5 shrink-0" : "w-4 h-4 shrink-0"}
-    >
-      <rect x="5.5" y="10.5" width="13" height="9.5" rx="1.5" />
-      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
-    </svg>
-  );
-}
-
-// Contact icons for the footer's details row. Same stroke-based,
-// currentColor treatment as every other icon here, sized to sit on the
-// footer's 11.5px type without crowding it.
-function PhoneIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0">
-      <path d="M6.5 4h3l1.5 3.8-2 1.4a11.5 11.5 0 0 0 5.8 5.8l1.4-2L20 14.5v3a2 2 0 0 1-2.2 2A15.5 15.5 0 0 1 4.5 6.2 2 2 0 0 1 6.5 4Z" />
-    </svg>
-  );
-}
-
-function MailIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0">
-      <rect x="3" y="5.5" width="18" height="13" rx="2" />
-      <path d="m3.8 7 7.1 5.3a2 2 0 0 0 2.2 0L20.2 7" />
-    </svg>
-  );
-}
-
-function PinIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5 shrink-0">
-      <path d="M12 21s6.5-5.6 6.5-10.5a6.5 6.5 0 0 0-13 0C5.5 15.4 12 21 12 21Z" />
-      <circle cx="12" cy="10.3" r="2.4" />
-    </svg>
-  );
-}
-
-// Same hand-drawn line-icon treatment as the rest of this file's icons
-// (currentColor, stroke-based, no image asset) - simple line-art evoking
-// each platform's own mark rather than a pixel-accurate brand asset.
-function LinkedInIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-      <rect x="3" y="3" width="18" height="18" rx="3" />
-      <line x1="7.5" y1="10.5" x2="7.5" y2="16.5" />
-      <circle cx="7.5" cy="7" r="0.9" fill="currentColor" stroke="none" />
-      <path d="M11.5 16.5v-4a2.2 2.2 0 0 1 4.4 0v4" />
-      <line x1="11.5" y1="10.5" x2="11.5" y2="16.5" />
-    </svg>
-  );
-}
-
-function XIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-      <rect x="3" y="3" width="18" height="18" rx="3" />
-      <line x1="8" y1="8" x2="16" y2="16" />
-      <line x1="16" y1="8" x2="8" y2="16" />
-    </svg>
-  );
-}
-
-function InstagramIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-      <rect x="3" y="3" width="18" height="18" rx="5" />
-      <circle cx="12" cy="12" r="4" />
-      <circle cx="17" cy="7" r="0.8" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function FacebookIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
-      <rect x="3" y="3" width="18" height="18" rx="3" />
-      <path d="M14 8.5h-1a1.5 1.5 0 0 0-1.5 1.5v1.5H14l-.3 2h-2.2v4.5" />
-    </svg>
-  );
-}
-
-// Fill in each real profile URL as soon as the account exists - an empty
-// href renders the icon without a link (nothing to send anyone to yet)
-// rather than shipping a dead "#" link.
-// How to reach the company, shown in the footer's details row.
-//
-// Registered office. The country is spelled out because the footer no
-// longer says anywhere else what country the company is in, and a
-// locality on its own ("Ikeja, Lagos") means nothing to a reader outside
-// Nigeria - which is exactly the reader a findable company footer is
-// written for. The footer omits this line entirely if it is ever blanked,
-// rather than showing a placeholder address.
-const COMPANY_ADDRESS = "Ikeja, Lagos, Nigeria";
-
-const COMPANY_EMAIL = "hello@getmeridiananalytics.com";
-
-// The number as it is written for a reader, and the same number in the
-// form a phone can actually dial. They differ on purpose: a Nigerian
-// number drops its leading 0 behind the +234 country code, so the
-// displayed "(234) 09015954281" would not connect if it were handed
-// straight to tel:.
-const COMPANY_PHONE_DISPLAY = "(234) 09015954281";
-const COMPANY_PHONE_E164 = "+2349015954281";
-
-const SOCIAL_LINKS = [
-  { name: "LinkedIn", href: "", Icon: LinkedInIcon },
-  { name: "X (Twitter)", href: "", Icon: XIcon },
-  { name: "Instagram", href: "", Icon: InstagramIcon },
-  { name: "Facebook", href: "", Icon: FacebookIcon },
-] as const;
-
-const HERO_FLOW = [
-  { icon: DatabaseIcon, label: "Use your existing data" },
-  { icon: ChatIcon, label: "Ask in plain English" },
-  { icon: EvidenceIcon, label: "Check the evidence behind each answer" },
-] as const;
-
-// The same glass-button treatment used throughout this page - translucent,
-// blurred, with a soft inset highlight to read as real frosted glass
-// rather than a flat semi-transparent fill. Centralized here so every
-// button on the page stays visually identical instead of six near-copies
-// of the same long class string quietly drifting apart over edits.
-const GLASS_BUTTON =
-  "rounded-full border backdrop-blur-xl bg-linear-to-b from-white/20 to-white/0 " +
-  "shadow-[inset_0_1px_0_rgba(255,255,255,0.55),inset_0_-1px_0_rgba(255,255,255,0.12),0_5px_16px_rgba(18,63,61,0.12)] " +
-  "transition-[background-color,box-shadow,transform] duration-200 motion-safe:hover:-translate-y-0.5 active:translate-y-0";
-const GLASS_BUTTON_PRIMARY = `${GLASS_BUTTON} bg-teal-deep/85 border-white/35 text-white hover:bg-teal-deep/95`;
-const GLASS_BUTTON_SECONDARY = `${GLASS_BUTTON} bg-white/40 border-white/80 text-ink hover:bg-white/70`;
-
-// Illustrative product panels only; no live data or interactive controls.
-const FEATURE_VISUALS = [
-  <figure key="answer" className="p-6 md:p-8">
-    <figcaption className="mb-7 flex items-center justify-between border-b border-line pb-4 text-xs font-mono text-ink-soft"><span>REVENUE ANALYSIS</span><span>EXAMPLE</span></figcaption>
-    <div className="mb-2 text-sm text-ink-soft">South-East · quarter-over-quarter</div>
-    <div className="font-serif text-6xl tracking-tight">−14.2<span className="text-3xl">%</span></div>
-    <svg role="img" aria-label="Illustrative revenue trend declining in week six" viewBox="0 0 440 150" className="my-6 w-full text-teal" fill="none">
-      <path d="M0 30H440M0 75H440M0 120H440" stroke="var(--line)" />
-      <path d="M0 42L40 38L80 48L120 32L160 40L200 37L240 98L280 108L320 103L360 114L400 109L440 115" stroke="currentColor" strokeWidth="3" />
-      <path d="M240 10V140" stroke="currentColor" strokeDasharray="4 5" />
-    </svg>
-    <div className="flex justify-between text-xs font-mono text-ink-soft"><span>WEEK 1</span><span>WEEK 6 · 2 ACCOUNTS CHURNED</span></div>
-  </figure>,
-  <figure key="query" className="p-6 md:p-8">
-    <figcaption className="mb-6 flex justify-between border-b border-line pb-4 text-xs font-mono text-ink-soft"><span>QUERY EVIDENCE</span><span>EXAMPLE</span></figcaption>
-    <pre className="overflow-x-auto text-sm leading-8 text-teal-deep"><code>{`SELECT region, SUM(revenue)
-FROM quarterly_revenue
-WHERE region = 'South-East'
-GROUP BY region;`}</code></pre>
-    <dl className="mt-7 divide-y divide-line border-t border-line text-sm">
-      <div className="flex justify-between py-4"><dt className="text-ink-soft">Confidence</dt><dd>High</dd></div>
-      <div className="flex justify-between py-4"><dt className="text-ink-soft">Data-quality notes</dt><dd>2 anomalies flagged</dd></div>
-      <div className="flex justify-between pt-4"><dt className="text-ink-soft">Source query</dt><dd className="text-teal">Included</dd></div>
-    </dl>
-  </figure>,
-  <figure key="sources" className="p-6 md:p-8">
-    <figcaption className="mb-3 flex justify-between border-b border-line pb-4 text-xs font-mono text-ink-soft"><span>DATA SOURCES</span><span>EXAMPLE</span></figcaption>
-    <div className="divide-y divide-line">
-      <div className="flex items-center gap-4 py-5"><span className="font-mono text-xs text-ink-soft">01</span><div className="flex-1"><div className="text-base">Production database</div><div className="mt-1 text-sm text-ink-soft">Read-only connection</div></div><DatabaseIcon /></div>
-      <div className="flex items-center gap-4 py-5"><span className="font-mono text-xs text-ink-soft">02</span><div className="flex-1"><div className="text-base">Quarterly report.pdf</div><div className="mt-1 text-sm text-ink-soft">Document · OCR supported</div></div><span className="font-mono text-xs text-teal">PDF</span></div>
-      <div className="flex items-center gap-4 py-5"><span className="font-mono text-xs text-ink-soft">03</span><div className="flex-1"><div className="text-base">Regional revenue.xlsx</div><div className="mt-1 text-sm text-ink-soft">Spreadsheet</div></div><span className="font-mono text-xs text-teal">XLS</span></div>
-    </div>
-  </figure>,
-  <figure key="readonly" className="p-6 md:p-8">
-    <figcaption className="mb-7 flex justify-between border-b border-line pb-4 text-xs font-mono text-ink-soft"><span>CONNECTION VERIFICATION</span><span>EXAMPLE</span></figcaption>
-    <div className="mb-8 flex items-center gap-3 text-2xl font-serif"><LockIcon />Read-only by design.</div>
-    <div className="space-y-5 font-mono text-sm"><div className="flex justify-between"><span className="text-ink-soft">SELECT</span><span className="text-teal">ALLOWED</span></div><div className="flex justify-between"><span className="text-ink-soft">INSERT / UPDATE</span><span>BLOCKED</span></div><div className="flex justify-between"><span className="text-ink-soft">DELETE / ALTER</span><span>BLOCKED</span></div></div>
-    <p className="mt-8 border-t border-line pt-5 text-sm leading-relaxed text-ink-soft">Verified at the transaction level before a connection is saved.</p>
-  </figure>,
-  <figure key="access" className="p-6 md:p-8">
-    <figcaption className="mb-6 flex justify-between border-b border-line pb-4 text-xs font-mono text-ink-soft"><span>QUERY SCOPE</span><span>EXAMPLE</span></figcaption>
-    <table className="w-full text-left text-sm"><thead className="text-ink-soft"><tr><th className="pb-4 font-normal">Data</th><th className="pb-4 font-normal">Team member access</th></tr></thead><tbody className="divide-y divide-line"><tr><td className="py-5">Assigned region</td><td className="text-teal">Visible</td></tr><tr><td className="py-5">Other regions</td><td>Restricted</td></tr><tr><td className="py-5">Sensitive columns</td><td>Restricted</td></tr></tbody></table>
-    <p className="mt-3 border-t border-line pt-5 text-sm text-ink-soft">Permissions enforced on every query.</p>
-  </figure>,
-  <figure key="audit" className="p-6 md:p-8">
-    <figcaption className="mb-6 flex justify-between border-b border-line pb-4 text-xs font-mono text-ink-soft"><span>AUDIT TRAIL</span><span>EXAMPLE</span></figcaption>
-    <div className="space-y-0 text-sm"><div className="grid grid-cols-[70px_1fr] gap-4 border-b border-line py-5"><span className="font-mono text-ink-soft">09:41</span><span>Read-only connection verified</span></div><div className="grid grid-cols-[70px_1fr] gap-4 border-b border-line py-5"><span className="font-mono text-ink-soft">09:42</span><span>Revenue analysis completed</span></div><div className="grid grid-cols-[70px_1fr] gap-4 py-5"><span className="font-mono text-ink-soft">09:43</span><span>Result exported</span></div></div>
-    <div className="mt-5 bg-paper px-4 py-3 font-mono text-xs text-teal">HASH-CHAINED · TAMPER-EVIDENT</div>
-  </figure>,
+const CAPABILITIES = [
+  ["01", "Executive Overview", "See revenue, mapped expenses and period changes together. Inspect the records behind each figure before making a decision."],
+  ["02", "Financial Analytics", "Review income and expenses, compare periods and examine category totals. Keep calculations tied to the data and currency you confirm."],
+  ["03", "Sales & Performance", "Compare the products, branches or regions present in your data. Use rankings and breakdowns to see where results are concentrated."],
+];
+const WORKFLOW = [
+  ["01", "Bring in your data", "Upload a spreadsheet or document, or connect a supported database using a read-only role."],
+  ["02", "Define what you want to measure", "Choose reporting dates and map the relevant columns. Database questions work within your authorized source."],
+  ["03", "Review, investigate and report", "Inspect the figures, ask follow-up questions and create a report or export for the work ahead."],
+];
+const FAQ = [
+  ["Is Meridian only for businesses?", "No. Individuals can use Ask Meridian, connect supported sources and generate reports. Executive, financial and business performance workspaces are for business accounts."],
+  ["What data can I bring?", "Use CSV or Excel for mapped business metrics. Ask Meridian also supports PDF, Word and PowerPoint documents, plus PostgreSQL, MySQL, SQL Server and Snowflake connections. Available calculations depend on the source."],
+  ["Is Meridian an accounting system?", "Meridian analyses the records you provide. It does not replace bookkeeping, accounting controls or an accountant. Missing financial inputs are shown as unavailable."],
+  ["Can I see where a figure came from?", "Business views show mapped calculations and source rows. Database analyses include the generated query and result context. Review scope and data-quality notes before relying on a figure."],
 ];
 
-/**
- * The mint-and-gold rule that opens each section. It is the same motif
- * that divides sections in every PDF, deck and workbook Meridian
- * generates (app/agents/report_generator.py), so a downloaded report
- * reads as coming from the same product as the page it was generated
- * from, rather than from a different company.
- */
-function AccentRule({ className = "" }: { className?: string }) {
-  return (
-    <div aria-hidden="true" className={`flex h-[3px] w-[190px] ${className}`}>
-      <span className="w-[58%] bg-mint" />
-      <span className="w-[16%] bg-gold" />
-      <span className="flex-1 bg-line/70" />
-    </div>
-  );
+function Arrow() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6" /></svg>;
 }
-
-/**
- * A section's eyebrow. `tone="dark"` switches it to mint for the one
- * section set on the deep-green ground - mint is only legible as text
- * against a dark background (6.4:1 there, 2.3:1 on white), so it is
- * never used for type on paper.
- */
-function SectionKicker({ children, tone = "light" }: {
-  children: React.ReactNode; tone?: "light" | "dark";
-}) {
-  return (
-    <div
-      className={`text-xs font-[family-name:var(--font-mono)] tracking-[0.18em] uppercase mb-3 ${
-        tone === "dark" ? "text-mint" : "text-teal-deep"
-      }`}
-    >
-      {children}
+function Brand({ light = false }: { light?: boolean }) {
+  return <span className={"inline-flex items-center gap-3 " + (light ? "text-white" : "text-[#132f2e]")}><span className={"flex h-9 w-9 items-center justify-center rounded-[9px] font-bold text-lg " + (light ? "bg-white text-[#132f2e]" : "bg-[#123f3d] text-white")}>M</span><span className="text-lg font-semibold tracking-[-0.04em]">Meridian<span className="font-normal opacity-65 ml-1.5 text-sm tracking-normal">Analytics</span></span></span>;
+}
+function Kicker({ children }: { children: React.ReactNode }) {
+  return <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-[#436655] mb-4">{children}</p>;
+}
+function ProductPreview() {
+  const [view, setView] = useState("overview");
+  return <div className="rounded-xl border border-[#d7e0db] bg-white overflow-hidden shadow-[0_24px_70px_-30px_rgba(15,47,43,0.32)]">
+    <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-[#e9eeea]"><Brand /><span className="text-[9px] uppercase tracking-widest text-[#6a756e]">Illustrative example</span></div>
+    <div className="grid sm:grid-cols-[132px_1fr]">
+      <div className="hidden sm:block border-r border-[#e9eeea] bg-[#f6f8f5] p-3 pt-6"><p className="px-2 text-[10px] text-[#778078] uppercase tracking-widest mb-3">Workspace</p>{[["overview", "Executive Overview"], ["financial", "Financial Analytics"], ["performance", "Sales & Performance"]].map(([v, label]) => <button type="button" key={v} onClick={() => setView(v)} aria-pressed={view === v} className={"w-full text-left px-2.5 py-2.5 rounded-md mb-1 text-[11px] " + (view === v ? "bg-[#e2ebe5] text-[#163e35] font-medium" : "text-[#66746a] hover:bg-[#e9efea]")}>{label}</button>)}<div className="text-[11px] px-2.5 py-2.5 text-[#66746a]">Ask Meridian</div><div className="text-[11px] px-2.5 py-2.5 text-[#66746a]">Data sources</div></div>
+      <div className="p-4 sm:p-6"><div className="flex justify-between gap-2 mb-5"><div><p className="text-[10px] text-[#718076]">Sample workspace</p><h2 className="text-lg font-semibold tracking-tight mt-1">{view === "overview" ? "The business at a glance" : view === "financial" ? "Revenue and expenses" : "Revenue by branch"}</h2></div><span className="text-[10px] border border-[#dfe6df] rounded px-2 py-1.5 self-start whitespace-nowrap">Feb – Jul</span></div>
+        <div className="grid grid-cols-3 gap-2 mb-5">{[["Revenue", "₦2.48m"], ["Mapped expenses", "₦1.18m"], ["Difference", "₦1.30m"]].map(([label, value]) => <div key={label} className="border border-[#e0e7e1] rounded-md px-2 sm:px-3 py-3"><p className="text-[9px] sm:text-[10px] text-[#6c7870]">{label}</p><p className="text-base sm:text-xl font-medium tracking-tight mt-2">{value}</p></div>)}</div>
+        {view === "performance" ? <div className="space-y-4 py-3">{[["South-West", 960], ["South-East", 760], ["North-Central", 460], ["South-South", 300]].map(([label, value]) => <div key={String(label)}><div className="flex justify-between text-[11px] mb-2"><span>{label}</span><span>₦{Number(value).toLocaleString()}k</span></div><div className="h-2 bg-[#eef2ed] rounded-full"><div className="h-full bg-[#23594a] rounded-full" style={{ width: (Number(value) / 960 * 100) + "%" }} /></div></div>)}</div> : <div className="border border-[#e4e9e3] rounded-md p-4"><div className="flex justify-between text-[11px] mb-4"><span className="font-medium">{view === "financial" ? "Income and expense trend" : "Revenue over time"}</span><span className="text-[#728078]">NGN</span></div><div className="flex items-end gap-3 h-32">{MONTHS.map(d => <div key={d.month} className="flex-1"><div className="flex items-end justify-center gap-1 h-28"><div className="w-full max-w-7 bg-[#23594a] rounded-t-sm" style={{ height: (d.revenue / 510 * 100) + "%" }} title={d.month + ": ₦" + (d.revenue * 1000).toLocaleString()} />{view === "financial" && <div className="w-full max-w-7 bg-[#bba473] rounded-t-sm" style={{ height: (d.expenses / 510 * 100) + "%" }} title={"Expenses: ₦" + (d.expenses * 1000).toLocaleString()} />}</div><p className="text-center text-[9px] text-[#768279] mt-2">{d.month}</p></div>)}</div></div>}
+        <p className="mt-4 text-[10px] text-[#6b776f]">Source: sample-sales.csv · Example figures, not live data</p>
+      </div>
     </div>
-  );
+  </div>;
 }
 
 export default function LandingPage() {
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [billingInterval, setBillingInterval] = useState<BillingInterval>("monthly");
-  // Which catalogue the pricing section is showing. Businesses first:
-  // they are the main audience, and the team plans are what the rest of
-  // this page describes.
   const [audience, setAudience] = useState<AccountType>("business");
-
+  const [interval, setInterval] = useState<BillingInterval>("monthly");
+  const [pricing, setPricing] = useState<{ audience: AccountType; rows: Plan[]; ready: boolean; error: boolean }>({ audience: "business", rows: [], ready: false, error: false });
+  const [retry, setRetry] = useState(0);
+  const [selectedQuestion, setSelectedQuestion] = useState(0);
   useEffect(() => {
-    // Asked for by name rather than fetching all six and splitting them
-    // here - which plans belong to which kind of account is the backend's
-    // rule (app/billing/plans.py), and a copy of it in the browser is a
-    // copy that can drift. Re-runs when the visitor switches sides.
-    listPlans(audience).catch(() => []).then((p) => p && setPlans(p));
-  }, [audience]);
-
-  return (
-    <div className="min-h-screen font-sans bg-paper text-ink [&_a]:focus-visible:outline-2 [&_a]:focus-visible:outline-offset-4 [&_a]:focus-visible:outline-teal">
-
-      <header className="sticky top-0 z-40 bg-paper border-b border-line">
-        <div className="max-w-[1200px] mx-auto px-5 md:px-8 h-[72px] flex items-center justify-between">
-          <div className="flex items-center gap-2.5 font-serif text-xl sm:text-2xl tracking-tight text-ink"><span aria-hidden="true" className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center bg-ink text-2xl font-bold text-paper">M</span>Meridian</div>
-          <nav className="hidden md:flex items-center gap-9 text-sm text-ink-soft">
-            <a href="#features" className="hover:text-ink transition-colors">Product</a>
-            <a href="#security" className="hover:text-ink transition-colors">Security</a>
-            <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
-            <a href="#inquire" className="hover:text-ink transition-colors">Inquire now</a>
-          </nav>
-          <div className="flex items-center gap-3">
-            <Link href="/login" className="text-sm text-ink-soft hover:text-ink transition-colors">
-              Sign in
-            </Link>
-            <Link
-              href="/login?mode=register"
-              onClick={() => track("cta_get_started", { location: "nav" })}
-              className={`text-sm px-4 sm:px-5 py-2.5 ${GLASS_BUTTON_PRIMARY}`}
-            >
-              Get started
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      <section className="max-w-[1200px] mx-auto px-6 md:px-8 pt-14 pb-14 md:pt-20 md:pb-20">
-
-        <div className="flex flex-col gap-12 md:gap-16">
-          <div className="mx-auto w-full max-w-[1100px] text-center">
-            <div className="text-xs font-[family-name:var(--font-mono)] text-teal-deep tracking-[0.18em] uppercase mb-7">
-              AI analytics engine for individuals and enterprise
-            </div>
-            <h1 className="mx-auto max-w-[1000px] font-serif text-[clamp(2.25rem,4.8vw,4.25rem)] font-normal tracking-[-0.035em] text-ink leading-[1.1] mb-6 text-balance">
-              <span className="block">Less time being confused.</span>{" "}
-              <span className="block text-teal">More time getting answers and making decisions.</span>
-            </h1>
-            <p className="text-base text-ink-soft leading-7 mb-7 max-w-[650px] mx-auto">
-              Find out what changed, why it matters, and where to look next. Ask Meridian a question
-              about your database or documents and get a clear answer with the evidence to check it.
-              No SQL required. Your source data stays untouched.
-            </p>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 max-w-sm sm:max-w-none mx-auto">
-              <Link
-                href="/login?mode=register"
-                onClick={() => track("cta_get_started", { location: "hero" })}
-                className={`text-center text-sm font-medium px-6 py-3.5 ${GLASS_BUTTON_PRIMARY}`}
-              >
-                Start exploring free
-              </Link>
-              <a
-                href="#features"
-                className={`text-center text-sm font-medium px-6 py-3.5 ${GLASS_BUTTON_SECONDARY}`}
-              >
-                See Meridian in action
-              </a>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-8 mt-8 mx-auto max-w-[740px] border-t border-line pt-6 text-left">
-              {HERO_FLOW.map(({ icon: Icon, label }) => (
-                <div key={label} className="flex items-center gap-2.5">
-                  <span className="shrink-0 w-8 h-8 flex items-center justify-center text-teal-deep">
-                    <Icon />
-                  </span>
-                  <span className="text-sm text-ink-soft leading-snug">{label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="w-full border border-line bg-panel">
-            <div className="flex items-center gap-2.5 border-b border-line bg-paper px-6 py-4 text-xs font-mono uppercase tracking-widest text-ink-soft">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-deep" />
-              Example analysis
-            </div>
-            <div className="bg-panel overflow-hidden">
-              <div className="p-6 md:p-10">
-                <div className="text-[13px] text-ink-soft mb-1">You asked</div>
-                <div className="text-xl md:text-3xl font-serif leading-snug tracking-tight text-ink mb-7">Why did South-East revenue fall last quarter?</div>
-                <div className="text-[13px] text-ink-soft mb-2">Meridian found</div>
-                <div className="grid items-center gap-8 lg:grid-cols-[1.1fr_1fr] lg:gap-x-16 border-t border-line pt-6">
-                  <div className="border-l-2 border-mint pl-5 text-lg md:text-xl text-ink leading-relaxed max-w-xl">
-                    South-East revenue fell 14.2% quarter-over-quarter, concentrated in two accounts
-                    that churned in week 6. The decline was not spread across the region.
-                  </div>
-
-                  <div className="flex items-end gap-5 h-44 mb-1">
-                    {[
-                      { label: "NW", pct: 68 },
-                      { label: "NE", pct: 54 },
-                      { label: "SE", pct: 27 },
-                      { label: "SW", pct: 61 },
-                      { label: "C", pct: 47 },
-                    ].map((bar) => (
-                      <div key={bar.label} className="flex-1 flex flex-col items-center gap-1.5">
-                        <div className="w-full flex items-end h-40 border-b border-line">
-                          <div
-                            // Gold marks the bar the answer is about. Red
-                            // is reserved for genuine warnings, and a
-                            // revenue fall is the finding, not a fault.
-                            className={`w-full rounded-t-[2px] ${bar.label === "SE" ? "bg-gold" : "bg-line"}`}
-                            style={{ height: `${bar.pct}%` }}
-                          />
-                        </div>
-                        <span className="text-xs text-ink-soft">{bar.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex flex-wrap gap-3 lg:col-span-2 border-t border-line pt-5">
-                    <span className="text-xs px-3 py-1.5 bg-paper text-ink-soft font-[family-name:var(--font-mono)]">
-                      SQL query included
-                    </span>
-                    <span className="text-xs px-3 py-1.5 bg-paper text-ink-soft font-[family-name:var(--font-mono)]">
-                      2 anomalies flagged
-                    </span>
-                    <span className="text-xs px-3 py-1.5 bg-teal-deep text-white font-[family-name:var(--font-mono)]">
-                      Confidence: high
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+    let live = true;
+    listPlans(audience).then(rows => { if (live) setPricing({ audience, rows, ready: true, error: !rows.length }); })
+      .catch(() => { if (live) setPricing({ audience, rows: [], ready: true, error: true }); });
+    return () => { live = false; };
+  }, [audience, retry]);
+  const plans = pricing.audience === audience ? pricing.rows : [];
+  const loadingPrices = pricing.audience !== audience || !pricing.ready;
+  const signup = "/login?mode=register&account=" + audience;
+  const primary = "inline-flex items-center justify-center gap-3 rounded-md bg-[#173f36] px-5 py-3 text-sm font-medium text-white hover:bg-[#255747] transition-colors";
+  const secondary = "inline-flex items-center justify-center gap-3 rounded-md border border-[#cdd7ce] px-5 py-3 text-sm font-medium text-[#183d33] hover:bg-[#edf1e9] transition-colors";
+  const section = "max-w-[1240px] mx-auto px-5 sm:px-8 py-16 md:py-24";
+  return <div className="bg-[#f8f9f5] text-[#172c25] font-sans [&_a]:focus-visible:outline-2 [&_a]:focus-visible:outline-offset-4 [&_a]:focus-visible:outline-[#23594a] [&_button]:focus-visible:outline-2 [&_button]:focus-visible:outline-offset-4 [&_button]:focus-visible:outline-[#23594a]">
+    <a href="#main-content" className="sr-only focus:not-sr-only focus:block focus:p-3">Skip to content</a>
+    <header className="sticky top-0 z-40 bg-[#f8f9f5]/95 backdrop-blur-sm border-b border-[#dde4dc]"><div className="max-w-[1240px] mx-auto px-5 sm:px-8 h-20 flex items-center justify-between gap-4"><Link href="/" aria-label="Meridian Analytics home"><Brand /></Link><nav aria-label="Main navigation" className="hidden lg:flex items-center gap-8 text-sm text-[#59695e]">{NAV.map(([label, href]) => <a key={label} href={href} className="hover:text-[#173f36]">{label}</a>)}</nav><div className="flex items-center gap-5"><Link href="/login" className="hidden sm:block text-sm font-medium">Sign in</Link><Link href="/login?mode=register" onClick={() => track("cta_get_started", { location: "nav" })} className={primary + " px-3 sm:px-5"}>Create account <span className="hidden sm:inline"><Arrow /></span></Link></div></div><details className="lg:hidden border-t border-[#e6eae3] px-5 py-2 text-sm"><summary className="cursor-pointer text-[#506156]">Explore Meridian</summary><nav aria-label="Mobile navigation" className="grid grid-cols-2 gap-4 py-4">{NAV.map(([label, href]) => <a href={href} key={label}>{label}</a>)}<Link href="/login">Sign in</Link></nav></details></header>
+    <main id="main-content">
+      <section className={section + " pt-14 md:pt-24 grid lg:grid-cols-[0.85fr_1.15fr] gap-12 lg:gap-14 items-center"}><div><Kicker>Business intelligence. Financial clarity.</Kicker><h1 className="text-[clamp(2.7rem,5.4vw,4.6rem)] leading-[1.04] tracking-[-0.06em] font-semibold max-w-xl">Know where your<br className="hidden sm:block" /> business stands.</h1><p className="text-base sm:text-lg leading-8 text-[#617064] max-w-[440px] mt-7">Turn your business data into a clear view of revenue, expenses and performance. Explore the figures, ask questions, and follow the answer back to its source.</p><div className="flex flex-wrap gap-3 mt-8"><Link href="/login?mode=register&account=business" onClick={() => track("cta_get_started", { location: "hero" })} className={primary}>Create a business account <Arrow /></Link><a href="#platform" className={secondary}>Explore the platform</a></div><p className="text-xs text-[#708075] mt-5">For business owners, finance teams and people who work with data.</p></div><div className="min-w-0"><ProductPreview /><p className="text-[11px] text-[#7a857d] mt-3 text-right">Examples use sample records, not customer data.</p></div></section>
+      <section className="border-y border-[#dde4dc] bg-[#f0f3ec]"><div className="max-w-[1240px] mx-auto px-5 sm:px-8 py-6 flex flex-wrap justify-between items-center gap-6"><p className="text-xs text-[#6c7a70] max-w-[170px]">Work with the records you already have.</p><div className="flex flex-wrap gap-x-8 gap-y-3 text-sm font-medium text-[#3c5647]">{["Excel", "CSV", "PostgreSQL", "MySQL", "SQL Server", "Snowflake"].map(s => <span key={s}>{s}</span>)}</div></div></section>
+      <section id="platform" className={section + " scroll-mt-28"}><div className="grid md:grid-cols-2 gap-8 md:gap-20 mb-14"><div><Kicker>The platform</Kicker><h2 className="text-3xl sm:text-4xl leading-tight tracking-[-0.04em] font-medium max-w-md">A practical view of the whole business.</h2></div><p className="text-base leading-8 text-[#647366] self-end">Business intelligence turns day-to-day records into measures you can compare and understand. Meridian brings that work into one workspace, from your first source file to the figures you take into a meeting.</p></div><div className="grid md:grid-cols-3 border-y border-[#dce3d8]">{CAPABILITIES.map(([n, title, text], i) => <article key={title} className={"py-8 md:py-10 " + (i < 2 ? "border-b md:border-b-0 md:border-r border-[#dce3d8] md:pr-8 " : "") + (i > 0 ? "md:pl-8" : "")}><span className="text-xs font-mono text-[#7a8b7e]">{n}</span><h3 className="text-xl font-medium tracking-tight mt-6 mb-4">{title}</h3><p className="text-sm leading-7 text-[#667568]">{text}</p></article>)}</div><div className="flex flex-wrap justify-between gap-4 mt-6 text-xs text-[#718074]"><p>Business workspaces are available to business accounts.</p><p>Individuals can connect data, ask questions and generate reports.</p></div></section>
+      <section className="bg-[#153c32] text-[#f4f7ef]"><div className={section + " grid lg:grid-cols-[0.85fr_1.15fr] gap-10 lg:gap-20"}><div><p className="text-[11px] uppercase tracking-[0.16em] text-[#b1c9b6] mb-5">Ask Meridian</p><h2 className="text-3xl sm:text-4xl tracking-[-0.04em] leading-tight font-medium mb-6">A useful answer starts with a better question.</h2><p className="text-base leading-8 text-[#bdcdbf]">Ask in your own words. Review the calculation, reporting period and supporting records. Continue the conversation when you need a closer look.</p><p className="mt-6 text-sm text-[#bdcdbf]">Available to individuals and business teams.</p></div><div className="min-w-0"><div className="flex justify-between border-b border-white/15 pb-4 mb-5"><span className="text-sm font-medium">Explore an example</span><span className="text-[10px] uppercase tracking-widest text-[#b1c9b6]">Sample data</span></div><div className="space-y-2">{QUESTIONS.map((q, i) => <button type="button" key={q.question} onClick={() => setSelectedQuestion(i)} aria-pressed={selectedQuestion === i} className={"w-full text-left rounded-md px-4 py-3 text-sm border transition-colors " + (selectedQuestion === i ? "bg-[#e9efe3] text-[#173f36] border-[#e9efe3]" : "border-white/20 text-[#d2ddd0] hover:bg-white/5")}>{q.question}</button>)}</div><div aria-live="polite" className="mt-5 border-l-2 border-[#b7ab72] pl-5 py-1"><p className="text-sm leading-7">{QUESTIONS[selectedQuestion].answer}</p><p className="text-xs leading-6 text-[#b5c8b9] mt-4">{QUESTIONS[selectedQuestion].note}</p></div></div></div></section>
+      <section id="workflow" className={section + " scroll-mt-28"}><div className="flex flex-wrap justify-between items-end gap-6 mb-12"><div><Kicker>How it works</Kicker><h2 className="text-3xl sm:text-4xl tracking-[-0.04em] font-medium">From a source file to a clearer decision.</h2></div><Link href="/login?mode=register" className="inline-flex items-center gap-3 text-sm font-medium text-[#23594a]">Set up your workspace <Arrow /></Link></div><div className="grid md:grid-cols-3 gap-10">{WORKFLOW.map(([n, title, text]) => <div key={n} className="border-t border-[#c8d5c9] pt-5"><span className="text-sm font-mono text-[#6d836f]">{n}</span><h3 className="text-lg font-medium mt-5 mb-3">{title}</h3><p className="text-sm text-[#69776b] leading-7">{text}</p></div>)}</div></section>
+      <section className="border-y border-[#dde4dc] bg-[#edf1e9]"><div className={section + " py-14 grid lg:grid-cols-[0.85fr_1.15fr] gap-10 lg:gap-20"}><div><Kicker>Your data, under control</Kicker><h2 className="text-3xl tracking-[-0.04em] leading-tight font-medium">Built for work that needs evidence.</h2></div><div className="grid sm:grid-cols-2 gap-8">{[["Read-only source access", "Connected databases are queried through read-only controls. Meridian does not offer source-record editing."], ["Permissions on the server", "Tenant, role and source policies are enforced before data is returned. Saved analyses are private to their creator."], ["Traceable answers", "Inspect source queries, calculation notes and data-quality limitations alongside the result."], ["Reports you can use", "Generate PDF reports, presentations and CSV or Excel exports from an authorized analysis."]].map(([title, text]) => <div key={title}><h3 className="text-sm font-semibold mb-3">{title}</h3><p className="text-sm leading-7 text-[#69776b]">{text}</p></div>)}</div></div></section>
+      <section id="pricing" className={section + " scroll-mt-28"}><div className="grid md:grid-cols-2 gap-8 mb-10"><div><Kicker>Pricing</Kicker><h2 className="text-3xl sm:text-4xl font-medium tracking-[-0.04em]">Choose the capacity you need.</h2><p className="text-sm leading-7 text-[#69776b] mt-4 max-w-md">Separate plans for business teams and individuals. Prices and allowances come directly from Meridian&apos;s subscription catalogue.</p></div><div className="flex flex-col items-start md:items-end justify-end gap-3"><fieldset className="flex border border-[#ced8cc] rounded-md p-1"><legend className="sr-only">Account type</legend>{(["business", "individual"] as const).map(a => <button type="button" key={a} aria-pressed={audience === a} onClick={() => { setAudience(a); track("pricing_audience_toggled", { audience: a }); }} className={"px-4 py-2 text-xs rounded " + (a === audience ? "bg-[#173f36] text-white" : "text-[#5c705f]")}>{a === "business" ? "Business" : "Individual"}</button>)}</fieldset><fieldset className="flex items-center gap-4 text-sm"><legend className="sr-only">Billing period</legend>{(["monthly", "annual"] as const).map(i => <label key={i} className="flex items-center gap-2"><input type="radio" name="landing-billing-period" value={i} checked={interval === i} onChange={() => setInterval(i)} className="accent-[#173f36]" />{i === "monthly" ? "Monthly" : "Annual"}</label>)}</fieldset></div></div>
+        {loadingPrices ? <p role="status" className="text-sm text-[#6b7a6d] py-6">Loading current plans…</p> : pricing.error ? <div className="border border-[#cdd7ce] rounded-md p-5 text-sm"><p>Current plans could not be loaded. Please retry or contact us for pricing.</p><button type="button" onClick={() => setRetry(n => n + 1)} className="text-[#23594a] underline mt-3">Retry pricing</button></div> : <div className="grid md:grid-cols-3 gap-4">{plans.map((plan, i) => <article key={plan.key} className={"bg-white rounded-lg border p-6 sm:p-7 flex flex-col " + (i === 1 ? "border-[#173f36]" : "border-[#dce4d9]")}><p className="text-sm font-semibold">{plan.label}</p><p className="text-4xl tracking-[-0.05em] mt-6">{formatNaira(interval === "annual" ? Math.round(plan.annual_amount / 12) : plan.amount)}<span className="text-xs font-normal tracking-normal text-[#718073] ml-1">/month</span></p><p className="text-xs text-[#718073] mt-3">{interval === "annual" ? formatNaira(plan.annual_amount) + " billed annually" : "Billed monthly"}</p><p className="text-sm leading-6 mt-5 text-[#637366]">{plan.tagline}</p><ul className="space-y-3 mt-6 py-6 border-y border-[#e6eae2] text-sm flex-1">{plan.features.map(f => <li key={f} className="flex gap-3"><span className="text-[#557353]" aria-hidden="true">✓</span><span>{f.replace(/\bAI(?:-powered)?\s+/gi, "")}</span></li>)}</ul><Link href={signup} onClick={() => track("cta_get_started", { location: "pricing", plan: plan.key, interval })} className={primary + " mt-6"}>Create account <Arrow /></Link><p className="text-[11px] text-[#7a857a] mt-3">{interval === "annual" ? plan.annual_refund_window_days : plan.refund_window_days}-day refund window · <Link href="/terms" className="underline">See terms</Link></p></article>)}</div>}
       </section>
-
-      {/* Sections alternate between paper and panel, with one deep-green
-          band at Security. Before this the whole page sat on a single
-          paper ground separated only by hairlines, which is what made a
-          well-written page read as flat. */}
-      <section id="features" className="scroll-mt-24 border-t border-line bg-panel">
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 md:py-20">
-        <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr] lg:gap-20 mb-8 md:mb-12">
-          <div>
-            <SectionKicker>The product</SectionKicker>
-            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">Spend less time finding answers. More time using them.</h2>
-            <AccentRule />
-          </div>
-          <p className="text-base text-ink-soft leading-relaxed">
-            A missed target. A sudden revenue dip. A board meeting coming up.
-            You need to understand what is happening, not spend the day piecing together reports.
-            Meridian helps you move from a business question to an answer you can examine,
-            explain, and use.
-          </p>
-        </div>
-        <div className="divide-y divide-line">
-          {FEATURES.map((f, index) => {
-            // Alternates text/visual sides every other row for an editorial
-            // feel instead of a repetitive fixed grid - computed in JS
-            // rather than a CSS "nth-child of group" selector, since
-            // Tailwind has no built-in variant for that.
-            const reversed = index % 2 === 1;
-            return (
-              <article key={f.title} className="grid items-center gap-8 py-10 md:py-14 lg:grid-cols-2 lg:gap-16">
-                <div className={reversed ? "lg:order-2" : undefined}>
-                  <h3 className="mb-4 max-w-lg font-serif text-[1.75rem] leading-[1.2] tracking-[-0.025em] md:text-[2.15rem]">{f.title}</h3>
-                  <p className="max-w-[52ch] text-base leading-7 text-ink-soft">{f.body}</p>
-                </div>
-                <div className={`min-w-0 border border-line bg-panel ${reversed ? "lg:order-1" : ""}`}>
-                  {FEATURE_VISUALS[index]}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-        </div>
-      </section>
-
-      <section className="border-t border-line bg-paper">
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 scroll-mt-24 py-14 md:py-20">
-          <SectionKicker>How it works</SectionKicker>
-          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">From your first question to the evidence</h2>
-          <AccentRule className="mb-12" />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-10">
-            {STEPS.map((s) => (
-              <div key={s.n} className="border-t-2 border-mint/40 pt-6">
-                <div className="mb-5 flex h-9 w-9 items-center justify-center rounded-full bg-mint-soft font-mono text-sm font-medium text-teal-deep">
-                  {s.n}
-                </div>
-                <div className="text-xl font-medium text-ink mb-3">{s.title}</div>
-                <div className="text-base text-ink-soft leading-relaxed">{s.body}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* The one dark band on the page, and it is deliberately here: for a
-          B2B buyer the security review is the moment the decision is
-          actually made, so it gets the weight. Mint reaches its proper
-          contrast on this ground (6.4:1) where it could not on paper. */}
-      <section id="security" className="scroll-mt-24 bg-teal-deep text-white">
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-16 md:py-24">
-        <div className="max-w-xl mb-10">
-          <SectionKicker tone="dark">Security</SectionKicker>
-          <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-white mb-5">Move forward with control over your data</h2>
-          <AccentRule className="mb-6" />
-          <p className="text-base text-white/75 leading-relaxed">
-            Putting an analytics tool in front of your data should not mean giving up control.
-            Meridian combines verified read-only connections, scoped access, and an audit trail
-            to support your security review.
-          </p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-0">
-          {[
-            "Protect source records with connections that must pass a read-only check before they are saved.",
-            "Keep stored credentials encrypted, with AWS KMS envelope encryption available for production.",
-            "Control access by role, row, and column, with permissions enforced on every query.",
-            "Add two-factor authentication for individual users or require it across your organization.",
-            "Review queries, connection changes, and exports in a tamper-evident audit log.",
-            "Treat uploaded content and database results as data to analyze, rather than instructions for the AI to follow.",
-          ].map((point) => (
-            <div key={point} className="flex items-start gap-3 border-t border-white/15 py-5">
-              <span className="text-mint shrink-0 mt-0.5" aria-hidden="true">✓</span>
-              <span className="text-base text-white/80 leading-relaxed">{point}</span>
-            </div>
-          ))}
-        </div>
-        </div>
-      </section>
-
-      <section id="pricing" className="scroll-mt-24 bg-paper">
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 md:py-20">
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-12">
-          <div className="max-w-xl">
-            <SectionKicker>Pricing</SectionKicker>
-            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">
-              {audience === "individual"
-                ? "Choose the plan that fits your work"
-                : "Choose the plan that fits your team"}
-            </h2>
-            <AccentRule className="mb-6" />
-            <p className="text-base text-ink-soft leading-relaxed">
-              {audience === "individual" ? (
-                <>
-                  Get the full product on every plan. Choose the capacity you need for data
-                  sources, questions, and downloads, with clear monthly limits.
-                </>
-              ) : (
-                <>
-                  Get the full product on every plan. Choose the capacity your team needs for people,
-                  data sources, questions, and downloads, with clear monthly limits.
-                </>
-              )}
-            </p>
-            {plans.length > 0 && (
-              // Straight from the backend policy (/billing/plans), so this can't
-              // drift from what /billing/cancel actually refunds.
-              <p className="mt-3 text-sm text-ink-soft leading-relaxed">
-                Pay monthly, or yearly and save {plans[0].annual_discount_percent}%. Not for you? Cancel
-                within {plans[0].refund_window_days} days for a full refund
-                ({plans[0].annual_refund_window_days} days on annual plans).
-              </p>
-            )}
-          </div>
-          <div className="flex flex-col gap-3 self-start md:self-auto shrink-0 md:items-end">
-            <div
-              role="radiogroup"
-              aria-label="Who the plan is for"
-              className="inline-flex border border-line bg-panel p-0.5"
-            >
-              {(["business", "individual"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  role="radio"
-                  aria-checked={audience === option}
-                  onClick={() => {
-                    setAudience(option);
-                    track("pricing_audience_toggled", { audience: option });
-                  }}
-                  className={`text-sm px-4 py-2 transition-colors ${
-                    audience === option
-                      ? "bg-teal-deep text-white"
-                      : "text-ink-soft hover:text-ink"
-                  }`}
-                >
-                  {option === "business" ? "For teams" : "For individuals"}
-                </button>
-              ))}
-            </div>
-            {plans.length > 0 && (
-              <BillingIntervalToggle
-                value={billingInterval}
-                onChange={(next) => {
-                  setBillingInterval(next);
-                  track("pricing_interval_toggled", { interval: next });
-                }}
-                discountPercent={plans[0].annual_discount_percent}
-              />
-            )}
-          </div>
-        </div>
-
-        {plans.length === 0 ? (
-          <div className="text-[13px] text-ink-soft">Loading pricing…</div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-            {plans.map((plan, index) => {
-              const recommended = index === Math.floor((plans.length - 1) / 2);
-              return (
-              <div
-                key={plan.key}
-                className={`relative bg-panel border p-7 md:p-8 flex flex-col transition-shadow ${
-                  recommended
-                    ? "border-teal-deep border-2 shadow-[0_2px_24px_-8px_rgba(18,63,61,0.35)]"
-                    : "border-line hover:border-mint"
-                }`}
-              >
-                {recommended && (
-                  <>
-                    {/* The recommended plan is marked twice - a mint cap and
-                        a badge - so it still reads as the recommendation
-                        for anyone who cannot distinguish the border colour. */}
-                    <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-mint" />
-                    <span className="absolute -top-3 left-7 text-xs px-3 py-1 bg-teal-deep text-white">
-                      Most popular
-                    </span>
-                  </>
-                )}
-                <div className="text-xl font-medium text-ink mb-4">{plan.label}</div>
-                <PlanPrice plan={plan} interval={billingInterval} />
-                <div className="text-sm text-ink-soft mb-5 mt-2">{plan.tagline}</div>
-                <ul className="flex flex-col gap-2 mb-6 flex-1">
-                  {plan.features.map((f, i) => (
-                    <li key={i} className="text-sm text-ink flex items-start gap-2">
-                      <span className="text-teal-deep shrink-0">✓</span>
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-                <Link
-                  href="/login?mode=register"
-                  onClick={() => track("cta_get_started", { location: "pricing", plan: plan.key, interval: billingInterval })}
-                  className={`text-center text-sm px-5 py-3 ${recommended ? GLASS_BUTTON_PRIMARY : GLASS_BUTTON_SECONDARY}`}
-                >
-                  Get started
-                </Link>
-              </div>
-              );
-            })}
-          </div>
-        )}
-        </div>
-      </section>
-
-      {/* The enquiry form itself, not a link to it: someone who has read
-          this far shouldn't have to load another page to get in touch.
-          /interest carries the same form for ad traffic. */}
-      <section id="inquire" className="scroll-mt-24 py-14 md:py-20 border-t border-line bg-panel">
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 grid gap-10 lg:grid-cols-2 lg:items-start">
-          <div className="max-w-xl">
-            <SectionKicker>Talk to us</SectionKicker>
-            <h2 className="font-serif text-3xl md:text-[2.75rem] leading-[1.15] font-normal tracking-[-0.035em] text-ink mb-5">
-              What question is holding up your next decision?
-            </h2>
-            <AccentRule className="mb-6" />
-            <p className="text-base text-ink-soft leading-relaxed mb-6">
-              Leave your details and we&apos;ll show you what Meridian can do with your own data —
-              a report you already have, or a database you already run. No payment to start the
-              conversation.
-            </p>
-            <Link
-              href="/login?mode=register"
-              onClick={() => track("cta_get_started", { location: "final_cta" })}
-              className={`inline-block text-base px-8 py-3.5 ${GLASS_BUTTON_SECONDARY}`}
-            >
-              Or start exploring free
-            </Link>
-          </div>
-          <InterestForm defaultSource="landing_page" compact />
-        </div>
-      </section>
-
-      {/* Two bars, not three. It used to be a nav grid, then a bar
-          carrying the copyright AND a second copy of the Paystack line
-          from the brand column AND four dead social icons at 30%
-          opacity, then a third bar with the contact details. Three rules
-          stacked at the foot of a page read as a layout that got away
-          from someone. The contact details now sit in a Contact column
-          beside the other links, which is where a reader looks for them
-          rather than three rows further down. */}
-      <footer className="border-t border-line bg-panel">
-        <div aria-hidden="true" className="flex h-[3px] w-full">
-          <span className="w-[22%] bg-mint" />
-          <span className="w-[6%] bg-gold" />
-          <span className="flex-1 bg-line/60" />
-        </div>
-
-        <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-14 grid grid-cols-2 lg:grid-cols-6 gap-x-8 gap-y-10">
-          <div className="col-span-2 lg:col-span-2 pr-4">
-            <div className="flex items-center gap-2.5 mb-4">
-              <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center bg-ink text-xl font-bold text-paper">M</span>
-              <span className="font-serif text-2xl tracking-tight text-ink">Meridian</span>
-            </div>
-            <p className="text-sm text-ink-soft leading-relaxed max-w-[260px] mb-4">
-              Business answers backed by your data. Ask in plain English,
-              review the evidence, and make your next decision with more confidence.
-            </p>
-            <div className="flex items-center gap-2 text-xs text-ink-soft border border-line bg-paper rounded-[4px] px-3 py-2 max-w-[260px]">
-              <span className="text-teal-deep"><LockIcon /></span>
-              <span>
-                Payments secured by <strong className="text-ink font-medium">Paystack</strong>.
-                PCI DSS Level 1 certified
-              </span>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Product</div>
-            <nav className="flex flex-col gap-3 text-sm text-ink-soft">
-              <a href="#features" className="hover:text-teal transition-colors">Product</a>
-              <a href="#security" className="hover:text-teal transition-colors">Security</a>
-              <a href="#pricing" className="hover:text-teal transition-colors">Pricing</a>
-              <a href="#inquire" className="hover:text-teal transition-colors">Inquire now</a>
-            </nav>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Account</div>
-            <nav className="flex flex-col gap-3 text-sm text-ink-soft">
-              <Link href="/login" className="hover:text-teal transition-colors">Sign in</Link>
-              <Link href="/login?mode=register" className="hover:text-teal transition-colors">Create account</Link>
-            </nav>
-          </div>
-
-          <div>
-            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Legal</div>
-            <nav className="flex flex-col gap-3 text-sm text-ink-soft">
-              <Link href="/status" className="hover:text-teal transition-colors">System status</Link>
-              <Link href="/privacy" className="hover:text-teal transition-colors">Privacy Policy</Link>
-              <Link href="/terms" className="hover:text-teal transition-colors">Terms of Service</Link>
-            </nav>
-          </div>
-
-          <div className="col-span-2 lg:col-span-1">
-            <div className="text-xs font-medium text-ink uppercase tracking-wide mb-3">Contact</div>
-            <div className="flex flex-col gap-3 text-sm text-ink-soft">
-              {COMPANY_ADDRESS && (
-                <span className="flex items-start gap-2 leading-snug">
-                  <span className="mt-0.5 text-teal-deep"><PinIcon /></span>
-                  {COMPANY_ADDRESS}
-                </span>
-              )}
-              <a href={`mailto:${COMPANY_EMAIL}`} className="flex items-start gap-2 leading-snug break-all hover:text-teal transition-colors">
-                <span className="mt-0.5 text-teal-deep"><MailIcon /></span>
-                {COMPANY_EMAIL}
-              </a>
-              <a href={`tel:${COMPANY_PHONE_E164}`} className="flex items-start gap-2 leading-snug hover:text-teal transition-colors">
-                <span className="mt-0.5 text-teal-deep"><PhoneIcon /></span>
-                {COMPANY_PHONE_DISPLAY}
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-line">
-          <div className="max-w-[1200px] mx-auto px-6 md:px-8 py-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <p className="text-xs text-ink-soft">
-              © {new Date().getFullYear()}{" "}
-              <span className="text-ink">Meridian Techverse Limited</span>{" "}
-              <span className="font-[family-name:var(--font-mono)]">(RC 9849528)</span>. All rights reserved.
-            </p>
-            <div className="flex items-center gap-4">
-              <span className="text-xs text-ink-soft">Read-only by design</span>
-              {/* Only live links are rendered. Four permanently greyed-out
-                  icons read as a half-finished site, and each one appears
-                  here the moment it has somewhere to point. */}
-              {SOCIAL_LINKS.some((s) => s.href) && (
-                <div className="flex items-center gap-3.5 text-ink-soft">
-                  {SOCIAL_LINKS.filter((s) => s.href).map(({ name, href, Icon }) => (
-                    <a
-                      key={name} href={href} target="_blank" rel="noopener noreferrer" aria-label={name}
-                      className="hover:text-teal transition-colors"
-                    >
-                      <Icon />
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
+      <section className={section + " pt-0"}><div className="grid md:grid-cols-[0.7fr_1.3fr] gap-8 md:gap-20"><h2 className="text-3xl font-medium tracking-[-0.04em]">Before you get started.</h2><div className="divide-y divide-[#dde4d9]">{FAQ.map(([q, a]) => <details key={q} className="py-5 first:pt-0"><summary className="cursor-pointer text-sm font-medium">{q}</summary><p className="text-sm leading-7 text-[#66776a] mt-4 max-w-xl">{a}</p></details>)}</div></div></section>
+      <section id="contact" className="scroll-mt-28 bg-[#eef2ea] border-t border-[#dde4dc]"><div className={section + " grid lg:grid-cols-2 gap-10 lg:gap-24"}><div><Kicker>Let&apos;s talk about your data</Kicker><h2 className="text-3xl sm:text-4xl font-medium tracking-[-0.04em] leading-tight max-w-md">Start with the question your business needs answered.</h2><p className="text-sm leading-7 text-[#68796a] mt-6 max-w-md">Tell us what you work with and what you need to understand. We can discuss the right source, workflow and account for your needs.</p><a href="mailto:hello@getmeridiananalytics.com" className="inline-flex items-center gap-3 text-sm text-[#23594a] mt-6">hello@getmeridiananalytics.com <Arrow /></a><div className="mt-8"><Link href="/login?mode=register" className={secondary}>Or create an account <Arrow /></Link></div></div><InterestForm defaultSource="landing_page" compact /></div></section>
+    </main>
+    <footer className="bg-[#102e26] text-[#ccdbcd]"><div className="max-w-[1240px] mx-auto px-5 sm:px-8 py-12 grid sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr_1.3fr] gap-10"><div><Brand light /><p className="text-sm leading-7 text-[#a3bba9] mt-5 max-w-xs">Business intelligence, financial analysis and conversations grounded in your data.</p></div><div><h2 className="text-xs uppercase tracking-widest text-[#8faf99] mb-5">Platform</h2><nav className="space-y-3 text-sm flex flex-col">{NAV.map(([label, href]) => <a key={label} href={href}>{label}</a>)}</nav></div><div><h2 className="text-xs uppercase tracking-widest text-[#8faf99] mb-5">Account & legal</h2><nav className="space-y-3 text-sm flex flex-col"><Link href="/login">Sign in</Link><Link href="/login?mode=register">Create account</Link><Link href="/privacy">Privacy policy</Link><Link href="/terms">Terms of service</Link><Link href="/status">System status</Link></nav></div><div><h2 className="text-xs uppercase tracking-widest text-[#8faf99] mb-5">Contact</h2><p className="text-sm">Ikeja, Lagos, Nigeria</p><a href="mailto:hello@getmeridiananalytics.com" className="text-sm break-all block mt-3">hello@getmeridiananalytics.com</a><a href="tel:+2349015954281" className="text-sm block mt-3">+234 901 595 4281</a></div></div><div className="border-t border-white/10"><div className="max-w-[1240px] mx-auto px-5 sm:px-8 py-5 flex flex-wrap justify-between gap-3 text-[11px] text-[#89a992]"><span>© {new Date().getFullYear()} Meridian Techverse Limited · RC 9849528</span><span>Meridian Analytics</span></div></div></footer>
+  </div>;
 }
