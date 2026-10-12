@@ -272,6 +272,7 @@ class Settings(BaseSettings):
     # (default) makes that endpoint return 503, so a deployment that hasn't
     # set the cron up can't have a stray request trigger a reminder sweep.
     subscription_reminder_secret: str = ""
+    analysis_schedule_secret: str = ""
 
     # Email delivery (app/agents/email_delivery.py). "console" (default):
     # logs instead of sending - the original MVP stand-in, still what a

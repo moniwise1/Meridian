@@ -16,8 +16,11 @@ def policy_signature(connection, row_scope):
 
 
 def memories_for(db, tenant_id, user_id, source_key):
+    from app.db.models import SharedSourceDefinition
     rows = db.query(AskMemory).filter_by(tenant_id=tenant_id, user_id=user_id, source_key=source_key).order_by(AskMemory.created_at.desc()).limit(30).all()
-    return [{"id": r.id, "kind": r.kind, "content": r.content, "confirmed": True} for r in rows]
+    shared = db.query(SharedSourceDefinition).filter_by(tenant_id=tenant_id, source_key=source_key).order_by(SharedSourceDefinition.created_at.desc()).limit(30).all()
+    return ([{"id": r.id, "kind": r.kind, "content": r.content, "confirmed": True, "shared": True} for r in shared]
+        + [{"id": r.id, "kind": r.kind, "content": r.content, "confirmed": True, "shared": False} for r in rows])
 
 
 def enqueue_upload_check(db, doc):

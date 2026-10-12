@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { clearPlatformSession } from "@/lib/platformAuth";
 import { usePlatformSession, useHydrated } from "@/lib/useSession";
+import DashboardTopbar from "@/components/DashboardTopbar";
 import GlideNav from "@/components/glide/GlideNav";
 
 // `restricted: true` marks the areas a limited role (currently "sales")
@@ -73,11 +74,10 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
     )?.href ?? null;
 
   return (
-    <div className="flex flex-col md:flex-row min-h-screen">
-      <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-line bg-panel px-5 py-4 md:py-6 flex flex-col gap-4 md:gap-8">
+    <div data-dashboard="true" className="workspace-shell flex flex-col md:flex-row min-h-screen">
+      <aside className="workspace-sidebar w-full md:w-[220px] shrink-0 px-4 py-4 md:py-6 flex flex-col gap-4 md:gap-6">
         <div>
-          <div className="text-[15px] font-semibold tracking-tight text-ink">Meridian</div>
-          <div className="text-[11px] text-ink-soft mt-0.5">Internal admin</div>
+          <div className="flex items-center gap-2.5"><span className="brand-mark">M</span><div><div className="text-[16px] font-semibold tracking-tight">Meridian</div><div className="text-[10px] opacity-65 mt-0.5">Owner workspace</div></div></div>
         </div>
 
         <details className="md:hidden">
@@ -102,7 +102,7 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
           </div>
         </div>
       </aside>
-      <main className="flex-1 min-w-0">
+      <main className="flex-1 min-w-0"><DashboardTopbar platform />
         {allowedForRole(pathname, session.role) ? (
           children
         ) : (

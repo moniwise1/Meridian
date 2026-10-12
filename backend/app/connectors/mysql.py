@@ -11,12 +11,13 @@ syntax:
      (seconds) on MariaDB 10.1+. Both are set on every connection, each
      guarded — one applies, the other raises harmlessly — so neither
      server is left without a bound (see _readonly_conn).
-  3. `verify_read_only()` proactively proves a write is rejected inside the
-     read-only transaction, the same probe pattern as Postgres.
+  3. `verify_read_only()` inspects explicit grants. Ambiguous inherited
+     roles, write privileges and grant options are rejected without DDL probes.
 """
 import time
 from contextlib import contextmanager
 from sqlalchemy import create_engine, text, inspect
+from sqlalchemy.engine import URL
 import pandas as pd
 
 from app.connectors.base import Connector, TableSchema, ColumnInfo, QueryResult
@@ -27,12 +28,13 @@ class MySQLConnector(Connector):
     def __init__(self, host: str, port: int, database: str, username: str,
                  password: RedactedSecret, timeout_seconds: int = 15,
                  extra_config: dict | None = None):
-        # extra_config: see the note in app/connectors/postgres.py - unused here.
-        url = (
-            f"mysql+pymysql://{username}:{password.reveal()}"
-            f"@{host}:{port}/{database}"
-        )
-        self._engine = create_engine(url, pool_pre_ping=True, pool_size=3)
+        url = URL.create("mysql+pymysql", username=username, password=password.reveal(),
+                         host=host, port=port, database=database)
+        options = {}
+        if (extra_config or {}).get("transport_tls") == "verify":
+            import ssl
+            options = {"ssl": ssl.create_default_context(), "connect_timeout": 10}
+        self._engine = create_engine(url, pool_pre_ping=True, pool_size=3, connect_args=options)
 
     @contextmanager
     def _readonly_conn(self, timeout_seconds: int):
@@ -73,16 +75,22 @@ class MySQLConnector(Connector):
             return False
 
     def verify_read_only(self) -> bool:
+        """Require explicit read-only grants; inherited/ambiguous grants fail closed."""
+        import re
         try:
-            with self._engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                conn.execute(text("START TRANSACTION READ ONLY"))
-                try:
-                    conn.execute(text("CREATE TEMPORARY TABLE _ro_probe (x INT)"))
-                    conn.execute(text("ROLLBACK"))
+            with self._readonly_conn(5) as conn:
+                grants = conn.execute(text("SHOW GRANTS FOR CURRENT_USER")).fetchall()
+                if not grants:
                     return False
-                except Exception:
-                    conn.execute(text("ROLLBACK"))
-                    return True
+                for row in grants:
+                    statement = str(row[0]).upper()
+                    match = re.match(r"^GRANT (.+?) ON ", statement)
+                    if not match or "WITH GRANT OPTION" in statement:
+                        return False
+                    privileges = {p.strip() for p in match.group(1).split(",")}
+                    if not privileges.issubset({"USAGE", "SELECT", "SHOW VIEW"}):
+                        return False
+                return True
         except Exception:
             return False
 

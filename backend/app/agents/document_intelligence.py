@@ -202,7 +202,8 @@ OCR_RENDER_DPI = 200  # balance of accuracy vs. render+recognition time
 # elements, never a real sentence).
 NATIVE_TEXT_MIN_CHARS = 20
 
-SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx", ".csv": "csv"}
+SUPPORTED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx", ".csv": "csv",
+                        ".txt": "txt", ".md": "md", ".tsv": "tsv", ".json": "json"}
 
 # DOCX/XLSX/PPTX (Office Open XML) are plain ZIP archives when unprotected.
 # A password-protected one is instead wrapped in the much older OLE2/
@@ -670,6 +671,26 @@ def extract(filename: str, file_bytes: bytes) -> tuple[str, ExtractionResult]:
             f"Unsupported file type '{ext or filename}'. Supported: "
             f"{', '.join(sorted(SUPPORTED_EXTENSIONS))}.",
         )
+    if kind in ("txt", "md", "json", "tsv"):
+        from app.agents.portable_files import decode_text, parse_json
+        text = decode_text(file_bytes)
+        source_count = len(text.splitlines())
+        row_truncated = False
+        if kind == "json":
+            value = parse_json(text)
+            source_count = len(value) if isinstance(value, list) else 1
+            if isinstance(value, list) and len(value) > MAX_CSV_ROWS:
+                value = value[:MAX_CSV_ROWS]
+                row_truncated = True
+            import json
+            text = json.dumps(value, ensure_ascii=False, indent=2)
+        elif kind == "tsv":
+            rows = list(csv.reader(io.StringIO(text), delimiter="\t"))
+            source_count = max(0, len(rows) - 1)
+            row_truncated = source_count > MAX_CSV_ROWS
+            text = "\n".join(" | ".join(row) for row in rows[:MAX_CSV_ROWS + 1])
+        text, char_truncated = _truncate(text)
+        return kind, ExtractionResult(text=text, truncated=char_truncated or row_truncated, source_unit_count=source_count)
     if kind in ("docx", "xlsx", "pptx"):
         _check_ooxml_not_locked(file_bytes, kind)
         _check_ooxml_zip_safety(file_bytes)

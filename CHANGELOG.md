@@ -1,3 +1,7 @@
+## 2026-10-12 — General file/database analysis
+
+Inline and multi-file Ask uploads; JSON/TSV/text/Markdown; grounded document conversation memory; shared company definitions and saved reporting views; private recurring analyses/PDFs and metric alerts; verified PostgreSQL/MySQL TLS for new registrations; credential URL escaping and grant inspection; owner error drill-down and subscription email improvements. See docs/GENERAL_ANALYSIS.md for rollout and limits.
+
 # Changelog
 
 ## Unreleased — Executive Overview and Ask foundation

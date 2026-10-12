@@ -431,6 +431,17 @@ def extract_tables(file_path: str, kind: str) -> tuple[list[pd.DataFrame], list[
     adding a PDF-table library later without re-reading that docstring
     first - see verify_csv_documents.py's dedicated regression check for
     this exact behavior."""
+    if kind in ("json", "tsv"):
+        from pathlib import Path
+        from app.agents.portable_files import read_portable_table
+        try:
+            df = _coerce_numeric_columns(pd.DataFrame(read_portable_table(Path(file_path).read_bytes(), kind)))
+            reason = _rejection_reason(df)
+            return ([], [reason]) if reason else ([df], [])
+        except (ValueError, UnicodeError, RecursionError):
+            return [], ["This export cannot be parsed as a bounded flat table; reading extracted text instead."]
+    if kind in ("txt", "md"):
+        return [], ["Text document; reading its content without assuming a numerical table."]
     if kind == "xlsx":
         return _extract_xlsx_tables(file_path)
     if kind == "csv":
@@ -560,7 +571,8 @@ class TabularProfile:
     threshold_band: dict | None
 
 
-def build_profile(df: pd.DataFrame, question: str) -> TabularProfile:
+def build_profile(df: pd.DataFrame, question: str, sticky_value_col: str | None = None,
+                  sticky_group_col: str | None = None) -> TabularProfile:
     """The actual computation - every number below comes from pandas
     arithmetic on real parsed cells, never from the LLM. This is then
     handed to explain_document_only() (insight_agent.py) as
@@ -577,8 +589,8 @@ def build_profile(df: pd.DataFrame, question: str) -> TabularProfile:
     q_lower = question.lower()
     named_group = next((c for c in group_cols if str(c).lower() in q_lower), None)
     named_value = next((c for c in value_cols if str(c).lower() in q_lower), None)
-    primary_group = named_group or (group_cols[0] if group_cols else None)
-    primary_value = named_value or (value_cols[0] if value_cols else None)
+    primary_group = named_group or (sticky_group_col if sticky_group_col in group_cols else None) or (group_cols[0] if group_cols else None)
+    primary_value = named_value or (sticky_value_col if sticky_value_col in value_cols else None) or (value_cols[0] if value_cols else None)
 
     overall = summarize(df, value_col=primary_value, group_col=primary_group, date_col=date_col).summary
 

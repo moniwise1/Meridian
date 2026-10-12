@@ -1339,3 +1339,38 @@ export async function getOverview(input: import("@/lib/overview").OverviewInput)
   if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Check the source, dates and column mappings.");
   return body;
 }
+
+export async function verifyConnectionTls(id: string): Promise<Connection> {
+  const res = await fetch(`${API_BASE}/connections/${encodeURIComponent(id)}/verify-tls`, { method: "POST", headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not verify TLS.");
+  return body;
+}
+
+export type AnalysisSchedule = {
+  id: string; source_key: string; question: string; frequency: "daily" | "weekly";
+  next_run_at: string; enabled: boolean; status: string; last_message: string | null;
+  last_query_id: string | null; generate_pdf: boolean;
+  alert_metric: string | null; alert_above: "above" | "below" | null; alert_threshold: string | null;
+};
+export async function scheduleRequest<T>(path = "", method = "GET", body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}/schedules${path}`, { method,
+    headers: { ...authHeaders(), ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}) });
+  await handleAuthFailure(res);
+  const data = await res.json();
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The schedule could not be saved. Check the fields and your permissions.");
+  return data;
+}
+
+export type BusinessSavedView = { id: string; name: string; mapping: import("./overview").OverviewInput };
+export async function businessViewRequest<T>(path = "", method = "GET", body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}/business/views${path}`, { method,
+    headers: { ...authHeaders(), ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}) });
+  await handleAuthFailure(res);
+  const data = await res.json();
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The reporting view could not be saved.");
+  return data;
+}

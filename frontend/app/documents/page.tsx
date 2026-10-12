@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   listDocuments,
   uploadDocument,
@@ -10,7 +11,7 @@ import {
 } from "@/lib/api";
 
 const KIND_LABEL: Record<string, string> = {
-  pdf: "PDF", docx: "Word document", xlsx: "Spreadsheet", pptx: "PowerPoint", csv: "CSV",
+  pdf: "PDF", docx: "Word document", xlsx: "Spreadsheet", pptx: "PowerPoint", csv: "CSV", tsv: "TSV", json: "JSON export", txt: "Text", md: "Markdown",
 };
 
 export default function DocumentsPage() {
@@ -76,11 +77,10 @@ export default function DocumentsPage() {
     <div className="max-w-3xl mx-auto px-8 py-12">
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Documents</h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
-        Upload a PDF, Word, PowerPoint, Excel, or CSV file to attach its content to a question on
-        the Ask screen — the agent will reference it alongside the database analysis. Text and
-        table content only (PowerPoint slide text, tables, and speaker notes). Scanned/image-only
-        PDF pages are read via OCR automatically, up to 15 pages per document. Only the first
-        50,000 characters of a document are used.
+        Analyse files directly in Ask Meridian, or attach them to questions about a connected
+        database. Supported formats: PDF, Word, PowerPoint, Excel, CSV, TSV, JSON, text and Markdown.
+        Scanned PDFs use OCR for up to 15 pages. Text context is limited to 50,000 characters;
+        clean structured tables are also analysed numerically, with limits shown in the result.
       </p>
 
       {error && <div className="mb-6 text-[13px] text-red">{error}</div>}
@@ -89,7 +89,7 @@ export default function DocumentsPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.docx,.pptx,.xlsx,.csv"
+          accept=".pdf,.docx,.pptx,.xlsx,.csv,.tsv,.json,.txt,.md"
           onChange={handleFileSelected}
           disabled={uploading}
           className="text-[13px] text-ink file:mr-3 file:text-[12.5px] file:px-3 file:py-1.5 file:rounded-[3px] file:border file:border-line file:bg-panel file:text-ink hover:file:border-teal hover:file:text-teal file:cursor-pointer disabled:opacity-40"
@@ -115,6 +115,7 @@ export default function DocumentsPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                <Link href="/" className="text-[11.5px] text-teal">Ask Meridian</Link>
                 <button
                   onClick={() => handlePreview(d.id)}
                   className="text-[11.5px] text-teal hover:text-teal-deep transition-colors"

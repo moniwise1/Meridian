@@ -18,6 +18,8 @@ const KIND_ACCENT: Record<string, string> = {
   subscription_cancelled: "bg-ink-soft",
   subscription_renewal_failed: "bg-red",
   teammate_joined: "bg-slate",
+  scheduled_analysis: "bg-teal",
+  analysis_alert: "bg-amber",
 };
 
 function relativeTime(iso: string): string {
@@ -122,7 +124,7 @@ export default function NotificationBell() {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
             ref={panelRef}
-            className="fixed left-3 top-14 z-50 w-[340px] max-h-[70vh] overflow-y-auto rounded-[6px] border border-line bg-panel shadow-lg"
+            className="fixed right-3 top-20 z-50 w-[340px] max-h-[70vh] overflow-y-auto rounded-[6px] border border-line bg-panel shadow-lg"
           >
             <div className="flex items-center justify-between border-b border-line px-3.5 py-2.5">
               <span className="text-[12.5px] font-medium text-ink">Notifications</span>

@@ -6,9 +6,8 @@ no equivalent of `BEGIN TRANSACTION READ ONLY` that makes a session
 structurally incapable of writing. There is no engine-level read-only
 transaction mode to fall back on here. Enforcement therefore rests entirely
 on the connecting role's own GRANTs being SELECT-only —
-`verify_read_only()` proves that by attempting a real, rolled-back write
-and checking SQL Server rejects it, the same probe pattern as the other
-connectors. But a role that's *mis-configured* with write access would
+`verify_read_only()` inspects effective database and table permissions
+and rejects non-read privileges. It does not issue a write probe. But a role that's *mis-configured* with write access would
 slip a write through where Postgres/MySQL would still block it at the
 session level regardless of grants. The README's recommended GRANT
 statements matter more for this connector than for the others — don't
@@ -23,6 +22,7 @@ against lock contention, not a hard ceiling on runaway queries.
 import time
 from contextlib import contextmanager
 from sqlalchemy import create_engine, text, inspect
+from sqlalchemy.engine import URL
 import pandas as pd
 
 from app.connectors.base import Connector, TableSchema, ColumnInfo, QueryResult
@@ -34,10 +34,8 @@ class MSSQLConnector(Connector):
                  password: RedactedSecret, timeout_seconds: int = 15,
                  extra_config: dict | None = None):
         # extra_config: see the note in app/connectors/postgres.py - unused here.
-        url = (
-            f"mssql+pymssql://{username}:{password.reveal()}"
-            f"@{host}:{port}/{database}"
-        )
+        url = URL.create("mssql+pymssql", username=username, password=password.reveal(),
+                         host=host, port=port, database=database)
         self._engine = create_engine(url, pool_pre_ping=True, pool_size=3)
 
     @contextmanager
@@ -64,21 +62,27 @@ class MSSQLConnector(Connector):
             return False
 
     def verify_read_only(self) -> bool:
-        """SQL Server DDL is transactional, so a rolled-back CREATE TABLE
-        genuinely leaves no trace when it succeeds — same as the temp-table
-        probe the Postgres/MySQL connectors use. See module docstring for
-        why "rejected" here proves a role-level grant, not a session-level
-        guarantee."""
+        """Inspect effective permissions; temp tables do not prove data-write restrictions."""
         try:
-            with self._engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-                conn.execute(text("BEGIN TRANSACTION"))
-                try:
-                    conn.execute(text("CREATE TABLE #_ro_probe (x INT)"))
-                    conn.execute(text("ROLLBACK"))
-                    return False  # mutation was NOT rejected -> not safely read-only
-                except Exception:
-                    conn.execute(text("ROLLBACK"))
-                    return True  # mutation was rejected, as required
+            with self._readonly_conn(5) as conn:
+                writable = conn.execute(text("""
+                    SELECT CASE WHEN EXISTS (
+                        SELECT 1 FROM sys.fn_my_permissions(NULL, 'DATABASE')
+                        WHERE permission_name NOT IN ('CONNECT','SELECT','VIEW DEFINITION',
+                            'VIEW DATABASE STATE','VIEW DATABASE PERFORMANCE STATE','SHOWPLAN')
+                    ) OR EXISTS (
+                        SELECT 1 FROM sys.objects t
+                        CROSS APPLY sys.fn_my_permissions(
+                            QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name), 'OBJECT') p
+                        WHERE t.is_ms_shipped = 0 AND t.type IN ('U','V','P','FN','IF','TF')
+                        AND p.permission_name NOT IN ('SELECT','VIEW DEFINITION')
+                    ) OR EXISTS (
+                        SELECT 1 FROM sys.schemas s
+                        CROSS APPLY sys.fn_my_permissions(QUOTENAME(s.name), 'SCHEMA') p
+                        WHERE p.permission_name NOT IN ('SELECT','VIEW DEFINITION')
+                    ) THEN 1 ELSE 0 END
+                """)).scalar()
+                return writable == 0
         except Exception:
             return False
 
