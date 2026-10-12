@@ -71,6 +71,17 @@ def _record_artifact(db: Session, ctx: AuthContext, kind: str, title: str,
         source_query_id=query_id, file_path=path,
     )
     db.add(artifact)
+    db.flush()
+    from app.file_storage import store_path
+    try:
+        store_path(db, ctx.tenant_id, "artifact", artifact.id, path)
+    except Exception:
+        db.rollback()
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
     audit.log(db, ctx.tenant_id, f"artifact_generated:{kind}", ctx.user_id, query_id=query_id,
                detail={"title": title})
     db.commit()
@@ -131,10 +142,13 @@ def download_artifact(artifact_id: str, token: str = "", db: Session = Depends(g
     if verify_artifact_download_token(token) != artifact_id:
         raise HTTPException(403, "This download link is invalid or has expired. Regenerate it from the analysis.")
     artifact = db.query(GeneratedArtifact).filter_by(id=artifact_id).first()
-    if not artifact or not os.path.isfile(artifact.file_path):
+    if not artifact:
         raise HTTPException(404, "This artifact is no longer available.")
     record = db.query(QueryRecord).filter_by(id=artifact.source_query_id, tenant_id=artifact.tenant_id).first()
     check_analysis_access(db, record, artifact.user_id)
+    from app.file_storage import ensure_file
+    if not ensure_file(db, artifact.tenant_id, "artifact", artifact.id, artifact.file_path):
+        raise HTTPException(404, "This artifact is no longer available.")
     return FileResponse(
         artifact.file_path,
         media_type=_MEDIA_TYPES.get(artifact.kind, "application/octet-stream"),
@@ -241,6 +255,11 @@ def email_artifact(body: EmailRequest, db: Session = Depends(get_db),
     if body.artifact_id:
         artifact = db.query(GeneratedArtifact).filter_by(id=body.artifact_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id).first()
         if artifact:
+            if artifact.source_query_id != record.id:
+                raise HTTPException(403, "This artifact does not belong to the selected analysis.")
+            from app.file_storage import ensure_file
+            if not ensure_file(db, ctx.tenant_id, "artifact", artifact.id, artifact.file_path):
+                raise HTTPException(404, "This artifact is no longer available.")
             attachment_path = artifact.file_path
 
     result = send_report(

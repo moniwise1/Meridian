@@ -75,6 +75,8 @@ def run_pending_checks(tenant_id: str, user_id: str):
             try:
                 doc = db.query(UploadedDocument).filter_by(id=job.document_id, tenant_id=tenant_id).first()
                 if doc:
+                    from app.file_storage import ensure_file
+                    ensure_file(db, tenant_id, "document", doc.id, doc.file_path)
                     for item in scan_findings(doc):
                         key = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()
                         fid = hashlib.sha256(f"{tenant_id}:{user_id}:{doc.id}:{key}".encode()).hexdigest()

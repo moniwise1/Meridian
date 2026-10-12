@@ -32,6 +32,9 @@ def load_source(db, ctx, document_id, sheet=0):
         raise HTTPException(404, "Source not found.")
     if doc.kind not in ("csv", "xlsx"):
         raise HTTPException(422, "Executive Overview currently requires a CSV or Excel table.")
+    from app.file_storage import ensure_file
+    if not ensure_file(db, ctx.tenant_id, "document", doc.id, doc.file_path):
+        raise HTTPException(404, "The original source file is unavailable. Upload it again to calculate this view.")
     try:
         if doc.kind == "csv":
             header = pd.read_csv(doc.file_path, nrows=0, skip_blank_lines=False)

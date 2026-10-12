@@ -68,6 +68,18 @@ print(f"2. OK  signed url downloads the real PDF ({len(dl.content)} bytes, nosni
 
 artifact_id = art["url"].split("/artifacts/file/")[1].split("?")[0]
 
+# The real generated PDF survives loss of its ephemeral local cache.
+from app.db.models import GeneratedArtifact, StoredFile
+from pathlib import Path
+stored = db.query(StoredFile).filter_by(object_id=artifact_id, kind="artifact").one()
+assert dl.content not in stored.ciphertext
+cache = db.query(GeneratedArtifact).filter_by(id=artifact_id).one().file_path
+Path(cache).unlink()
+restored = client.get(art["url"])
+assert restored.status_code == 200 and restored.content == dl.content
+assert Path(cache).is_file()
+print("2b. OK  real signed download restores the encrypted PDF after local cache loss")
+
 # --- negative cases ---
 assert client.get(f"/artifacts/file/{artifact_id}").status_code == 403          # no token
 assert client.get(f"/artifacts/file/{artifact_id}?token=garbage").status_code == 403

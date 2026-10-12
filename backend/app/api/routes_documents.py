@@ -135,6 +135,17 @@ async def upload_document(background_tasks: BackgroundTasks, file: UploadFile = 
         images_described=extraction.images_described,
     )
     db.add(doc)
+    db.flush()
+    from app.file_storage import store_bytes
+    try:
+        store_bytes(db, ctx.tenant_id, "document", doc.id, file_bytes)
+    except Exception:
+        db.rollback()
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
     audit.log(db, ctx.tenant_id, "document_uploaded", ctx.user_id,
                detail={"filename": doc.filename, "kind": kind, "char_count": doc.char_count,
                        "ocr_pages_used": doc.ocr_pages_used, "images_described": doc.images_described})
@@ -208,6 +219,8 @@ def delete_document(document_id: str, db: Session = Depends(get_db),
     except OSError:
         pass  # already gone / never written — deleting the DB record still proceeds
     db.delete(doc)
+    from app.file_storage import delete_bytes
+    delete_bytes(db, ctx.tenant_id, "document", doc.id)
     audit.log(db, ctx.tenant_id, "document_deleted", ctx.user_id, detail={"filename": doc.filename})
     db.commit()
     return {"status": "deleted"}

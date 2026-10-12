@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     artifacts_dir: str = "./artifacts"
     documents_dir: str = "./documents"
     max_document_upload_bytes: int = 20 * 1024 * 1024  # 20 MB
+    max_stored_file_bytes: int = 50 * 1024 * 1024
+    max_stored_files_bytes: int = 256 * 1024 * 1024  # encrypted bytes, global budget
+    max_tenant_stored_files_bytes: int = 100 * 1024 * 1024
     # How many uploaded documents a tenant can have stored at once (a
     # deleted document frees a slot). Bounds disk growth - there was no
     # cap before.
