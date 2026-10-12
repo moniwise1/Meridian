@@ -230,7 +230,7 @@ seen_context = []
 
 
 def _fake_explain_doc_only(question, documents, computed_profile=None, force_answer=False,
-                           business_context=None, conversation_history=None):
+                           business_context=None, conversation_history=None, table_workspace=None):
     seen_context.append(business_context)
     return (
         DocumentInsight(

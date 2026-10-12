@@ -205,3 +205,26 @@ except HTTPException as error: assert error.status_code == 403
 else: raise AssertionError('Member saved a company reporting view')
 remove_view(view['id'], db, admin)
 print('PASS: reusable company mappings, admin management and tenant isolation')
+
+# Real multi-file planner calculations are isolated by source and saved as evidence.
+second_path = root / 'october.csv'
+second_path.write_text('Team,Wait\nSupport,8\nRetail,12\n')
+db.add(UploadedDocument(id='october', tenant_id='t', user_id='u', filename='october.csv', kind='csv',
+    file_path=str(second_path), extracted_text='Support wait 8; Retail wait 12.', char_count=34))
+db.commit()
+def calculate_files(question, documents, **kwargs):
+    workspace = kwargs['table_workspace']
+    assert len(workspace.catalog()) == 2
+    for table in workspace.catalog():
+        result = workspace.execute({'table_id':table['table_id'], 'operation':'average', 'value_column':'Wait',
+            'filters':[{'column':'Team','operator':'eq','value':'Support'}]})
+        assert result['result'] == (15.0 if table['filename'] == 'service.json' else 8.0)
+    return explain(question, documents, **kwargs)
+with patch.object(planner, 'explain_document_only_v2', calculate_files):
+    events = list(planner.run_analysis(db, 't', 'u', None, 'Compare Support waits across files', {},
+        document_ids=['d','october']))
+    final = next(event for event in events if isinstance(event, dict) and event.get('final'))
+    record = db.query(QueryRecord).filter_by(id=final['query_id']).one()
+    assert len(record.result_snapshot['table_calculations']) == 2
+    assert any('Verified calculation' in note for note in record.result_snapshot['data_quality']['notes'])
+print('PASS: real multi-file planner computes per-source figures and persists evidence')
