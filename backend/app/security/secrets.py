@@ -99,8 +99,20 @@ def encrypt(value: str) -> str:
     return _backend.encrypt(value)
 
 
+def _kms_decryption_backend():
+    return _backend if isinstance(_backend, _AwsKmsBackend) else _AwsKmsBackend()
+
+
 def decrypt(token: str) -> str:
-    return _backend.decrypt(token)
+    # Legacy Fernet tokens contain no dot; KMS envelopes contain exactly
+    # a wrapped data key and ciphertext separated by a dot. Select by
+    # ciphertext format, not the current writer, so a staged migration
+    # can read both. A KMS failure NEVER falls back to local decryption.
+    if "." in token:
+        backend = _kms_decryption_backend()
+        return backend.decrypt(token)
+    backend = _backend if isinstance(_backend, _LocalBackend) else _LocalBackend()
+    return backend.decrypt(token)
 
 
 class RedactedSecret(str):

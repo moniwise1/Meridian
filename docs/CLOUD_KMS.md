@@ -65,14 +65,45 @@ AWS_SECRET_ACCESS_KEY=...   # boto3 reads these standard env vars itself -
 
 ## 4. Migrating existing credentials
 
-Switching `KMS_PROVIDER` does **not** re-encrypt anything already stored —
-existing `encrypted_password` values were encrypted with the local Fernet
-key and stay that way; the app has no dual-read fallback for this. To
-migrate a live database: for each `DataSourceConnection` row, decrypt with
-the old (`local`) backend, re-encrypt with the new (`aws`) backend, and
-update the row — a one-off script, not built into this app, since it needs
-to run with *both* backends configured simultaneously for the duration of
-the migration.
+Switching `KMS_PROVIDER` does **not** re-encrypt stored data. Deploy the
+dual-format reader before changing any ciphertext: Fernet tokens are read with
+the existing local key and KMS envelopes with the configured KMS key. KMS errors
+never fall back to local decryption. The selected provider controls new writes.
+
+Take a restorable database backup and preserve the existing APP_SECRET_KEY in
+a separately secured recovery location. Configure the scoped AWS credentials,
+region and key ARN, initially keeping KMS_PROVIDER=local. Run from backend:
+
+```
+PYTHONPATH=. python scripts/migrate_encryption.py
+```
+
+This dry run reports legacy counts only and does not call KMS or modify records.
+After the key's real GenerateDataKey/Decrypt roundtrip is independently verified,
+put writes in a controlled maintenance window and apply:
+
+```
+PYTHONPATH=. python scripts/migrate_encryption.py --apply --batch-size 10
+```
+
+The script migrates connected-database passwords, users' MFA secrets and stored
+file ciphertext. Each new ciphertext is decrypted and compared before commit.
+A failure rolls back the active batch; completed batches remain migrated. It is
+safe to resume, skips KMS envelopes, updates encrypted file size accounting, and
+enforces the configured file budgets. It never prints plaintext values or raw
+provider errors. Test a synthetic record before a production-wide apply.
+
+Switch the writer to KMS_PROVIDER=aws only after startup prerequisites (distinct
+signing secrets and key access) are satisfied. Re-run the dry count after writes
+resume and migrate any newly created local records. Do not rotate the local key
+or remove recovery access while local records remain. Do not run this against
+production without a verified backup and appropriate account authorization.
+
+Tests cover actual Fernet and exact stubbed KMS calls plus SQLite migration of
+all three secret classes, idempotency and batch rollback. They do not prove
+access to a real AWS account, Postgres concurrent migration behavior, or backup
+restorability. A key ARN change is a separate migration; the script does not
+rewrap ciphertext encrypted under a different KMS key.
 
 ## 5. Rotating the master key
 
