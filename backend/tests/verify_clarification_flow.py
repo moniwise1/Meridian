@@ -210,7 +210,7 @@ print("6. OK  the resumed (force_answer=True) request produces a real final resu
 # --- 7 & 8. same two checks, for the document-only path
 #            (_run_document_only_analysis) - two documents, so this never
 #            touches real table-extraction file I/O ---
-def _fake_explain_doc_only(question, document_payload, computed_profile=None, force_answer=False):
+def _fake_explain_doc_only(question, document_payload, computed_profile=None, force_answer=False, table_workspace=None):
     if force_answer:
         return (
             DocumentInsight(

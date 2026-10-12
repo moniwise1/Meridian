@@ -50,6 +50,7 @@ from app.agents.context_resolver import resolve as resolve_followup, build_conte
 from app.agents import query_cache
 from app.agents.column_heuristics import guess_columns
 from app.agents import tabular_analysis
+from app.agents.table_tools import ParsedTable, TableWorkspace
 from app.agents.analyst_contract import build_analysis
 from app.agents.analyst_workspace import memories_for, policy_signature
 from app.audit import logger as audit
@@ -178,11 +179,13 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     quality_report = None
     detected_anomalies = []
     investigation_results: list[dict] = []
+    parsed_tables = []
     if len(documents) == 1:
         doc = documents[0]
         tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
         table = tabular_analysis.pick_best_table(tables)
         if table is not None:
+            parsed_tables.append(ParsedTable("table-1", doc.filename, table))
             prior_context = (conversation.context or {}) if conversation else {}
             profile = tabular_analysis.build_profile(table, question,
                 sticky_value_col=prior_context.get("primary_value_column"),
@@ -229,9 +232,14 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
                 "\"Structured-table document analysis\" section for exactly what this check requires.",
             )
     else:
+        for index, doc in enumerate(documents, start=1):
+            tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
+            table = tabular_analysis.pick_best_table(tables)
+            if table is not None:
+                parsed_tables.append(ParsedTable(f"table-{index}", doc.filename, table))
         yield StepEvent("running_analysis", "done",
                          f"No database query — analysing {len(documents)} documents' content directly "
-                         "(structured-table parsing only applies when exactly one document is selected).")
+                         f"with {len(parsed_tables)} independently parsed table(s) available for calculations; no automatic joins.")
 
     if quality_report:
         detail = (f"Completeness {quality_report.completeness_pct}%, "
@@ -270,11 +278,13 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     charts: list[dict] = []
     model_charts: list[dict] = []
     profile_dict = tabular_analysis.profile_to_dict(profile) if profile else None
+    table_workspace = TableWorkspace(parsed_tables) if parsed_tables else None
     try:
         insight, model_charts = explain_document_only_v2(
             question, document_payload, computed_profile=profile_dict, force_answer=force_answer,
             **({"business_context": business_context} if business_context else {}),
             **({"conversation_history": (conversation.context or {}).get("turns", [])} if conversation else {}),
+            **({"table_workspace": table_workspace} if table_workspace else {}),
         )
         if insight.clarification_question:
             yield ClarificationEvent(question=insight.clarification_question)
@@ -336,6 +346,16 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         }
         row_count = 0
 
+    if table_workspace:
+        for calculation in table_workspace.evidence:
+            data_quality["notes"].append(
+                f"Verified calculation {calculation['evidence_id']}: {calculation['filename']}, "
+                f"{calculation['operation']} of {calculation['value_column'] or 'rows'}, "
+                f"denominator {calculation.get('denominator_column') or 'not applicable'}, "
+                f"{calculation['matched_row_count']} matched rows, result {calculation['result']}; "
+                f"{calculation['excluded_numeric_values']} missing/non-finite values excluded. "
+                f"Filters: {json.dumps(calculation['filters'])}."
+            )
     snapshot = {
         "sql": "-- No SQL executed; this analysis used document content only.",
         "sql_rationale": "Document-only analysis — the data source was a document, not a database.",
@@ -361,6 +381,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         "forecast": [],
         "documents_used": [d.filename for d in documents],
         "preview_rows": [],
+        "table_calculations": table_workspace.evidence if table_workspace else [],
     }
 
     snapshot["source_document_ids"] = [d.id for d in documents]
