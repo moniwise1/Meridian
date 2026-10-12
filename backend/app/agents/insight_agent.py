@@ -32,11 +32,11 @@ conditional "well, unless there's no database involved at all" branch.
 """
 import json
 from dataclasses import dataclass
-from anthropic import Anthropic
+from app.agents.model_provider import get_model_client
 from app.config import settings
 from app.agents.analyst_prompt import ANALYST_RULES
 
-_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+_client = get_model_client()
 
 # settings.llm_model_reasoning (claude-sonnet-5) has extended thinking ON
 # BY DEFAULT with no parameter needed to turn it on - confirmed against
@@ -261,7 +261,7 @@ def _parse_json_response(text_out: str) -> dict:
 def explain(question: str, metrics: dict, quality_notes: list[str],
             documents: list[dict] | None = None, business_context: list[dict] | None = None) -> Insight:
     if _client is None:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+        raise RuntimeError("The analysis model provider is not configured.")
 
     payload = {
         "question": question,
@@ -418,7 +418,7 @@ see your draft, only your conclusion.
 
 def explain_document_only(question: str, documents: list[dict], computed_profile: dict | None = None) -> Insight:
     if _client is None:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+        raise RuntimeError("The analysis model provider is not configured.")
 
     payload = {"question": question, "reference_documents": documents}
     if computed_profile:
@@ -820,7 +820,7 @@ def explain_document_only_v2(
     function, which has no opinion about ordering beyond "sanitized, in the
     order the model produced them."""
     if _client is None:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+        raise RuntimeError("The analysis model provider is not configured.")
 
     payload = {"question": question, "reference_documents": documents}
     if conversation_history:

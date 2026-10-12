@@ -72,7 +72,7 @@ import pptx
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 import pytesseract
 import pymupdf
-from anthropic import Anthropic
+from app.agents.model_provider import get_model_client
 
 from app.config import settings
 
@@ -97,7 +97,7 @@ if settings.tesseract_cmd:
 # reasoning. Same fail-open pattern as a missing Tesseract install below:
 # no key configured means images are still extracted, just never
 # described - never a failed or degraded-looking upload over it.
-_vision_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+_vision_client = get_model_client(vision=True)
 
 MAX_IMAGES_DESCRIBED_PER_DOCUMENT = 20
 # Below this on either side, an embedded image is almost always a

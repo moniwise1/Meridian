@@ -13,11 +13,11 @@ security.query_validator before it is ever executed.
 """
 import json
 from dataclasses import dataclass
-from anthropic import Anthropic
+from app.agents.model_provider import get_model_client
 from app.config import settings
 from app.agents.analyst_prompt import ANALYST_RULES
 
-_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+_client = get_model_client()
 
 SYSTEM_PROMPT = """You are a SQL generation component inside a secure analytics system.
 You will be given a database schema (already filtered to only the tables and
@@ -63,7 +63,7 @@ class GeneratedQuery:
 def generate_sql(question: str, schema_text: str, force_answer: bool = False,
                   business_context: list[dict] | None = None) -> GeneratedQuery:
     if _client is None:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured.")
+        raise RuntimeError("The analysis model provider is not configured.")
 
     user_prompt = f"Schema (authorized tables/columns only):\n{schema_text}\n\nQuestion: {question}"
     if business_context:

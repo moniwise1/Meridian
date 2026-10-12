@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     platform_bootstrap_token: str = ""
     metadata_db_url: str = "sqlite:///./metadata.db"
     anthropic_api_key: str = ""
+    llm_provider: str = "anthropic"  # anthropic | ollama
+    # Operator-owned endpoint only; never accepted from a customer request.
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model_fast: str = ""
+    ollama_model_reasoning: str = ""
+    ollama_model_vision: str = ""
+    llm_timeout_seconds: float = 120.0
+    llm_max_response_bytes: int = 2_000_000
     # Comma-separated when there's more than one real frontend origin to
     # allow (e.g. a custom domain plus the platform's own auto-generated
     # *.up.railway.app URL, kept reachable as a fallback/testing path) -
