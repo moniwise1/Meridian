@@ -8,8 +8,8 @@ import SubscriptionExpiryBanner from "@/components/SubscriptionExpiryBanner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Meridian — Enterprise Analytics Agent",
-  description: "Ask business questions of your authorized data. Read-only, audited, evidence-backed.",
+  title: "Meridian Analytics | Business intelligence and financial analysis",
+  description: "Understand revenue, expenses and business performance. Explore your data, ask questions and trace the figures to their source with Meridian Analytics.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -51,7 +51,7 @@ function LoginPageInner() {
   // address and a whole plan catalogue - a support job, not a toggle).
   // Defaults to business: that is the product's main audience, and it is
   // also what every account created before this existed is.
-  const [accountType, setAccountType] = useState<AccountType>("business");
+  const [accountType, setAccountType] = useState<AccountType>(searchParams.get("account") === "individual" ? "individual" : "business");
   const isIndividual = accountType === "individual";
   // One field, two meanings: the company's name for a business, the
   // person's own name for an individual. Same column on the backend,

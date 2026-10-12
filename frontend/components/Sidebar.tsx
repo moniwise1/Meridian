@@ -10,6 +10,8 @@ import GlideNav from "@/components/glide/GlideNav";
 const NAV = [
   { href: "/home", label: "Home" },
   { href: "/overview", label: "Executive Overview", businessOnly: true },
+  { href: "/financial", label: "Financial Analytics", businessOnly: true },
+  { href: "/performance", label: "Sales & Performance", businessOnly: true },
   { href: "/", label: "Ask" },
   { href: "/risks", label: "Risks" },
   { href: "/analyses", label: "Analyses" },

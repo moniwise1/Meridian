@@ -13,7 +13,7 @@ os.environ["ANTHROPIC_API_KEY"] = ""
 import pandas as pd
 from sqlalchemy import create_engine, text
 from fastapi.testclient import TestClient
-from app.agents.business_metrics import compute_overview, MetricInputError
+from app.agents.business_metrics import compute_overview, answer_overview, MetricInputError
 from app.security.query_policy import authorize_query, QueryPolicyError
 from app.connectors.base import TableSchema, ColumnInfo
 from app.security.auth import create_access_token
@@ -46,6 +46,15 @@ empty = compute_overview(frame, mapping, date(2025, 1, 1), date(2025, 1, 1))
 assert all(m["value"] is None for m in empty["metrics"])
 refund = frame.copy(); refund.loc[2, "revenue"] = "-10.20"
 assert compute_overview(refund, mapping, date(2026, 10, 1), date(2026, 10, 1))["metrics"][0]["value"] == "190.00"
+
+# Group comparisons use complete totals from all groups and the same filters.
+grouped = frame.copy(); grouped["branch"] = ["A", "A", "B"]
+g = compute_overview(grouped, {**mapping, "group_column": "branch"}, date(2026, 10, 1), date(2026, 10, 1))
+assert g["group_leaders"]["revenue"]["group"] == "A"
+assert "200.20" in answer_overview("Which branch has the highest revenue?", g)
+filtered = compute_overview(grouped, {**mapping, "group_column": "branch", "group_value": "B"}, date(2026, 10, 1), date(2026, 10, 1))
+assert filtered["metrics"][0]["value"] == "0.10" and filtered["records"][0]["source_row"] == 4
+assert "145.30" in answer_overview("What is revenue less mapped expenses?", r)
 
 # Aggregate SQL omits the restricted dimension; the server must still scope it.
 schema = [TableSchema("sales", [ColumnInfo("revenue", "NUMERIC"), ColumnInfo("region", "TEXT")])]

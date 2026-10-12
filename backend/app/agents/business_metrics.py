@@ -70,6 +70,14 @@ def compute_overview(frame, mapping, start: date, end: date, detail_date: date |
     for key in ("revenue_column", "expense_column"):
         if mapping.get(key):
             work["_" + key] = [money(v) for v in work[mapping[key]]]
+    group_column = mapping.get("group_column")
+    if group_column:
+        if group_column not in frame.columns or group_column in {"_row", "_day", "_revenue_column", "_expense_column"}:
+            raise MetricInputError("Choose an available grouping column.")
+        if mapping.get("group_value") is not None:
+            work = work[work[group_column].astype(str) == mapping["group_value"]]
+    elif mapping.get("group_value") is not None:
+        raise MetricInputError("A group filter requires a grouping column.")
     previous_end = start - timedelta(days=1)
     previous_start = previous_end - (end - start)
     current = work[(work._day >= start) & (work._day <= end)]
@@ -98,6 +106,19 @@ def compute_overview(frame, mapping, start: date, end: date, detail_date: date |
         rows = current[current._day == day]
         trend.append({"date": day.isoformat(), "revenue": display(total(rows, "revenue_column")),
                       "expenses": display(total(rows, "expense_column"))})
+    breakdown = []
+    if group_column:
+        for group, rows in current.groupby(group_column, dropna=False):
+            breakdown.append({"group": None if pd.isna(group) else str(group), "row_count": len(rows),
+                "revenue": display(total(rows, "revenue_column")), "expenses": display(total(rows, "expense_column"))})
+        sort_key = "expense_column" if mapping.get("rank_by") == "expenses" else "revenue_column"
+        sort_field = "expenses" if sort_key == "expense_column" else "revenue"
+        breakdown.sort(key=lambda r: (r[sort_field] is not None, Decimal(r[sort_field] or "0")), reverse=True)
+    leaders = {}
+    for field in ("revenue", "expenses"):
+        complete_groups = [g for g in breakdown if g[field] is not None]
+        leaders[field] = max(complete_groups, key=lambda g: Decimal(g[field])) if complete_groups else None
+    group_count = len(breakdown)
     detail_rows = current if detail_date is None else current[current._day == detail_date]
     if detail_date is not None and not start <= detail_date <= end:
         raise MetricInputError("Drill-down date must be within the reporting period.")
@@ -107,7 +128,8 @@ def compute_overview(frame, mapping, start: date, end: date, detail_date: date |
                         "revenue": display(row.get("_revenue_column")), "expenses": display(row.get("_expense_column"))})
     return {"currency": currency, "period": {"start": start.isoformat(), "end": end.isoformat()},
             "previous_period": {"start": previous_start.isoformat(), "end": previous_end.isoformat()},
-            "metrics": metrics, "trend": trend, "records": records, "record_count": len(current),
+            "metrics": metrics, "trend": trend, "breakdown": breakdown[:100], "group_column": group_column,
+            "group_leaders": leaders, "group_filter": mapping.get("group_value"), "group_count": group_count, "breakdown_truncated": group_count > 100, "records": records, "record_count": len(current),
             "detail_date": detail_date.isoformat() if detail_date else None, "detail_count": len(detail_rows),
             "records_truncated": len(detail_rows) > 100, "duplicates_included": duplicate_count,
             "limitations": ["Upload snapshot, not a live feed; period completeness is not established.",
@@ -121,10 +143,16 @@ def answer_overview(question, overview):
     q = question.lower()
     if any(w in q for w in ("why", "cause", "forecast", "predict", "cash flow", "net profit", "gross")):
         return "The mapped snapshot cannot establish that. Inspect the source records and supply the missing accounting or explanatory data."
-    if any(w in q for w in ("expense", "cost", "spend")):
-        metric = overview["metrics"][1]
-    elif any(w in q for w in ("balance", "difference", "less")):
+    if any(w in q for w in ("highest", "top", "lead", "largest", "rank")) and overview.get("group_column"):
+        field = "expenses" if any(w in q for w in ("expense", "cost", "spend")) else "revenue"
+        top = overview.get("group_leaders", {}).get(field)
+        if not top:
+            return "No complete grouped amount is available for the selected period."
+        return f"Highest {field}: {top['group'] or '(No group value)'} with {overview['currency']} {top[field]} in the selected period. Grouping: {overview['group_column']}. Incomplete group totals are excluded from this ranking."
+    if any(w in q for w in ("difference", "revenue less", "income less")):
         metric = overview["metrics"][2]
+    elif any(w in q for w in ("expense", "cost", "spend")):
+        metric = overview["metrics"][1]
     elif any(w in q for w in ("revenue", "sales", "income")):
         metric = overview["metrics"][0]
     else:
