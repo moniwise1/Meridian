@@ -58,6 +58,7 @@ export default function BusinessWorkspace({ view = "overview" }: { view?: "overv
 
   function update<K extends keyof OverviewInput>(key: K, value: OverviewInput[K]) {
     setInput(prev => ({ ...prev, [key]: value })); setResult(null); setError("");
+    if (key === "group_column") setInput(prev => ({ ...prev, group_value: null }));
     if (key === "document_id" || key === "sheet") {
       setColumns([]);
       setInput(prev => ({ ...prev, date_column: "", revenue_column: null, expense_column: null, currency_column: null, group_column: null, group_value: null }));
@@ -69,7 +70,8 @@ export default function BusinessWorkspace({ view = "overview" }: { view?: "overv
     try {
       setResult(await getOverview({ ...input, question: ask, detail_date: detailDate, rank_by: view === "financial" ? "expenses" : "revenue" }));
       const session = loadSession();
-      sessionStorage.setItem("meridian_business_mapping:" + session?.tenantId + ":" + session?.userId, JSON.stringify(input));
+      try { sessionStorage.setItem("meridian_business_mapping:" + session?.tenantId + ":" + session?.userId, JSON.stringify(input)); }
+      catch { /* Browser storage restrictions do not invalidate a successful calculation. */ }
     }
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
