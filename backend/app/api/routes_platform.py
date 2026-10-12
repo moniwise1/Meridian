@@ -736,6 +736,8 @@ def delete_tenant(tenant_id: str, db: Session = Depends(get_db),
     db.query(QueryRecord).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)
     db.query(Conversation).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)
     db.query(GeneratedArtifact).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)
+    from app.db.models import StoredFile
+    db.query(StoredFile).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)
     db.query(UploadedDocument).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)
     db.query(EmailDeliveryLog).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)
     db.query(DataSourceConnection).filter_by(tenant_id=tenant_id).delete(synchronize_session=False)

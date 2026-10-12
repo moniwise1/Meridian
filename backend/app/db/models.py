@@ -7,7 +7,7 @@ audit log. Never confuse this with a customer's connected database.
 import uuid
 from datetime import datetime
 from sqlalchemy import (
-    Column, String, DateTime, ForeignKey, JSON, Integer, Boolean, Text,
+    Column, String, DateTime, ForeignKey, JSON, Integer, Boolean, Text, LargeBinary,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -18,6 +18,19 @@ def _uuid() -> str:
 
 class Base(DeclarativeBase):
     pass
+
+
+class StoredFile(Base):
+    """Encrypted original bytes, distinct from extracted text and result metadata."""
+    __tablename__ = "stored_files"
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, index=True)
+    kind = Column(String, nullable=False)
+    object_id = Column(String, nullable=False)
+    sha256 = Column(String, nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    ciphertext = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Tenant(Base):

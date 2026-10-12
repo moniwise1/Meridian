@@ -180,6 +180,11 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
     detected_anomalies = []
     investigation_results: list[dict] = []
     parsed_tables = []
+    unavailable_originals = []
+    from app.file_storage import ensure_file
+    for selected in documents:
+        if not ensure_file(db, tenant_id, "document", selected.id, selected.file_path):
+            unavailable_originals.append(selected.filename)
     if len(documents) == 1:
         doc = documents[0]
         tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
@@ -356,6 +361,9 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
                 f"{calculation['excluded_numeric_values']} missing/non-finite values excluded. "
                 f"Filters: {json.dumps(calculation['filters'])}."
             )
+    if unavailable_originals:
+        data_quality["notes"].append("Original file bytes are unavailable for: " + ", ".join(unavailable_originals)
+                                     + ". Any analysis of those files uses stored extracted text only.")
     snapshot = {
         "sql": "-- No SQL executed; this analysis used document content only.",
         "sql_rationale": "Document-only analysis — the data source was a document, not a database.",
