@@ -10,10 +10,10 @@ ambiguity, it does not get any extra trust.
 """
 import json
 from dataclasses import dataclass
-from anthropic import Anthropic
+from app.agents.model_provider import get_model_client
 from app.config import settings
 
-_client = Anthropic(api_key=settings.anthropic_api_key) if settings.anthropic_api_key else None
+_client = get_model_client()
 
 SYSTEM_PROMPT = """You rewrite a short follow-up business question into a
 fully self-contained question, using the context of the previous analysis
