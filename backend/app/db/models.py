@@ -581,6 +581,18 @@ class AskMemory(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class SharedSourceDefinition(Base):
+    """Admin-published definitions, shared deliberately; analysis results remain private."""
+    __tablename__ = "shared_source_definitions"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False)
+    source_key = Column(String, nullable=False, index=True)
+    kind = Column(String, nullable=False, default="definition")
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class AskFinding(Base):
     __tablename__ = "ask_findings"
     id = Column(String, primary_key=True)
@@ -616,3 +628,36 @@ class BillingPayment(Base):
     amount = Column(Integer, nullable=False)
     currency = Column(String, nullable=False)
     applied_at = Column(DateTime, nullable=True)
+
+
+class AnalysisSchedule(Base):
+    __tablename__ = "analysis_schedules"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    source_key = Column(String, nullable=False)
+    document_ids = Column(JSON, default=list)
+    question = Column(Text, nullable=False)
+    frequency = Column(String, nullable=False)
+    next_run_at = Column(DateTime, nullable=False, index=True)
+    enabled = Column(Boolean, default=True)
+    generate_pdf = Column(Boolean, default=True)
+    alert_metric = Column(String, nullable=True)
+    alert_above = Column(String, nullable=True)
+    alert_threshold = Column(String, nullable=True)
+    last_alert_state = Column(Boolean, default=False)
+    status = Column(String, default="pending")
+    last_message = Column(String, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    last_query_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BusinessViewConfiguration(Base):
+    __tablename__ = "business_view_configurations"
+    id = Column(String, primary_key=True, default=_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    mapping = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { listDocuments, getOverviewColumns, getOverview, type DocumentSummary } from "@/lib/api";
+import { listDocuments, getOverviewColumns, getOverview, businessViewRequest, type BusinessSavedView, type DocumentSummary } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 import { useAccountType } from "@/lib/useAccountType";
+import DashboardIcon from "@/components/DashboardIcon";
 import type { Overview, OverviewInput } from "@/lib/overview";
 
 function calendarDay(d: Date) {
@@ -32,10 +33,16 @@ export default function BusinessWorkspace({ view = "overview" }: { view?: "overv
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [question, setQuestion] = useState("");
+  const [savedViews, setSavedViews] = useState<BusinessSavedView[]>([]);
+  const [canManage, setCanManage] = useState(false);
+  const [viewName, setViewName] = useState("");
 
   useEffect(() => {
     if (account !== "business") return;
     let live = true;
+    businessViewRequest<{ can_manage: boolean; views: BusinessSavedView[] }>().then(data => {
+      if (live) { setSavedViews(data.views); setCanManage(data.can_manage); }
+    }).catch(error => { if (live) setError(error.message); });
     listDocuments().then((rows) => { if (live) {
       const available = rows.filter(d => ["csv", "xlsx"].includes(d.kind));
       setDocuments(available);
@@ -89,13 +96,19 @@ export default function BusinessWorkspace({ view = "overview" }: { view?: "overv
   if (account === null) return <p className="p-8 text-ink-soft">Checking workspace access…</p>;
   if (account !== "business") return <div className="p-8"><h1 className="text-xl">Business workspace</h1><p className="mt-2">These analytics workspaces are available to business accounts.</p><Link href="/" className="text-teal">Return to Ask Meridian</Link></div>;
 
-  return <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8 text-ink">
-    <div className="flex flex-wrap justify-between items-start gap-4 mb-8">
-      <div><p className="text-xs uppercase tracking-widest text-teal mb-2">Business intelligence</p><h1 className="text-3xl tracking-tight">{title}</h1>
+  return <div className="max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-7 text-ink">
+    <div className="dashboard-greeting flex flex-wrap justify-between items-center gap-4 p-5 mb-5">
+      <div><p className="text-xs uppercase tracking-widest text-teal mb-2">Business intelligence</p><h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
         <p className="text-sm text-ink-soft mt-2">A clear view of your mapped revenue and expenses, with every figure linked to its source.</p></div>
       <Link href="/documents" className="border border-line rounded-md px-4 py-2 text-sm">Upload data</Link>
     </div>
     {!documents.length && <div className="border border-line rounded-lg p-6 mb-6"><p>Start with a CSV or Excel table containing dates and monetary amounts.</p><p className="text-sm text-ink-soft mt-2">Dates should use YYYY-MM-DD. Keep currencies separate. Nothing is assumed or filled with sample data.</p></div>}
+    <section className="border border-line rounded-lg p-4 mb-4">
+      <label className="text-xs text-ink-soft">Company reporting views<select className={selectClass} defaultValue="" disabled={busy} onChange={event => { const saved = savedViews.find(view => view.id === event.target.value); if (saved) { if (input.document_id !== saved.mapping.document_id || input.sheet !== saved.mapping.sheet) setColumns([]); setInput(saved.mapping); setResult(null); setError(""); } }}><option value="">Choose a saved view</option>{savedViews.map(view => <option key={view.id} value={view.id}>{view.name}</option>)}</select></label>
+      {canManage && <div className="flex flex-wrap items-center gap-2 mt-3"><input aria-label="Company reporting view name" maxLength={100} className="border border-line bg-panel rounded-md p-2 text-xs flex-1" placeholder="Name this reporting view" value={viewName} disabled={busy} onChange={event => setViewName(event.target.value)} /><button type="button" disabled={busy || !viewName.trim() || !input.document_id} className="text-xs text-teal disabled:opacity-40" onClick={async () => { setBusy(true); setError(""); try { await businessViewRequest("", "POST", { name: viewName.trim(), mapping: input }); const data = await businessViewRequest<{ views: BusinessSavedView[] }>(); setSavedViews(data.views); setViewName(""); } catch (error) { setError((error as Error).message); } finally { setBusy(false); } }}>Save for the company</button></div>}
+      <p className="text-xs text-ink-soft mt-2">Saved mappings and dates can be reused across the company. Each calculation still applies your current source and row permissions.</p>
+      {canManage && savedViews.length > 0 && <details className="text-xs text-ink-soft mt-2"><summary className="cursor-pointer">Manage saved views</summary>{savedViews.map(view => <div className="flex justify-between gap-2 mt-2" key={view.id}><span>{view.name}</span><button disabled={busy} className="text-teal" onClick={async () => { setBusy(true); try { await businessViewRequest(`/${view.id}`, "DELETE"); setSavedViews(previous => previous.filter(item => item.id !== view.id)); } catch (error) { setError((error as Error).message); } finally { setBusy(false); } }}>Remove</button></div>)}</details>}
+    </section>
     <form onSubmit={e => { e.preventDefault(); void calculate(); }} className="bg-panel border border-line rounded-xl p-5 mb-6">
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <label className="text-xs text-ink-soft">Source document<select required className={selectClass} value={input.document_id} disabled={busy} onChange={e => update("document_id", e.target.value)}><option value="">Choose an upload</option>{documents.map(d => <option key={d.id} value={d.id}>{d.filename}</option>)}</select></label>
@@ -112,7 +125,7 @@ export default function BusinessWorkspace({ view = "overview" }: { view?: "overv
     {error && <div role="alert" className="border border-red text-red rounded-lg p-4 mb-6">{error}</div>}
     {result && <>
       <div className="text-xs text-ink-soft mb-4">{result.source.filename} · Sheet {result.source.sheet + 1} · Uploaded {new Date(result.source.uploaded_at).toLocaleString()} · Calculated {new Date(result.generated_at).toLocaleString()}<br />{result.period.start} – {result.period.end} · {result.record_count} records · Previous: {result.previous_period.start} – {result.previous_period.end}</div>
-      <div className="grid sm:grid-cols-3 gap-4 mb-6">{result.metrics.map(m => <article key={m.id} className="bg-panel border border-line rounded-xl p-5"><h2 className="text-sm text-ink-soft">{m.label}</h2><p className="text-2xl mt-3 tabular-nums break-words">{amount(m.value, result.currency)}</p><p className="text-xs mt-3 text-ink-soft">{m.change_pct !== null ? `${m.change_pct}% vs previous period` : "Comparison unavailable"}</p><details className="text-xs mt-3"><summary className="cursor-pointer text-teal">Calculation</summary><p className="mt-2">{m.formula}</p>{m.unavailable_reason && <p>{m.unavailable_reason}</p>}</details></article>)}</div>
+      <div className="grid sm:grid-cols-3 gap-3 mb-5">{result.metrics.map((m, index) => <article key={m.id} className="dashboard-card p-4"><div className="flex items-center gap-2.5"><span className={index === 1 ? "bg-gold-soft text-amber p-2 rounded-full" : "bg-mint-soft text-teal p-2 rounded-full"}><DashboardIcon name="chart" size={16} /></span><h2 className="text-xs text-ink-soft">{m.label}</h2></div><p className="text-[25px] font-semibold mt-3 tabular-nums break-words">{amount(m.value, result.currency)}</p><p className="text-xs mt-3 text-ink-soft">{m.change_pct !== null ? `${m.change_pct}% vs previous period` : "Comparison unavailable"}</p><details className="text-xs mt-3"><summary className="cursor-pointer text-teal">Calculation</summary><p className="mt-2">{m.formula}</p>{m.unavailable_reason && <p>{m.unavailable_reason}</p>}</details></article>)}</div>
       {result.group_column && <section className="bg-panel border border-line rounded-xl p-5 mb-6">
         <h2 className="text-lg mb-2">{view === "financial" ? "Expense categories" : "Performance breakdown"} · {result.group_column}</h2>
         <p className="text-xs text-ink-soft mb-4">{result.group_filter ? "Filtered to: " + result.group_filter : "All authorized groups"}. {result.breakdown_truncated ? "Showing the top 100 groups; totals include all groups." : "All groups shown."}</p>

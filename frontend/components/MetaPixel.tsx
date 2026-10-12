@@ -2,6 +2,7 @@
 
 import Script from "next/script";
 import { usePathname } from "next/navigation";
+import { useSession, useHydrated } from "@/lib/useSession";
 import { useEffect, useRef } from "react";
 
 // Meta (Facebook) advertising pixel. Public pixel ids are visible in the
@@ -50,14 +51,17 @@ export function trackLead(): void {
 
 export default function MetaPixel() {
   const pathname = usePathname();
-  const tracked = TRACKED_PATHS.has(pathname);
+  const session = useSession();
+  const hydrated = useHydrated();
+  const tracked = hydrated && !session && TRACKED_PATHS.has(pathname);
   // The path the most recent PageView was counted for. This component is
   // always mounted and simply renders nothing off a tracked path, so the
   // ref survives navigation away and back.
   const counted = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!tracked) return;
+    if (!tracked) { window.fbq?.("consent", "revoke"); return; }
+    window.fbq?.("consent", "grant");
     if (counted.current === null) {
       // The first tracked page of the visit: the inline snippet below
       // counts it as it initialises. Recording it here stops the effect
@@ -83,7 +87,7 @@ n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
 n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
 t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
 document,'script','https://connect.facebook.net/en_US/fbevents.js');
-fbq('init','${PIXEL_ID}');fbq('track','PageView');`}
+fbq('set','autoConfig',false,'${PIXEL_ID}');fbq('init','${PIXEL_ID}');fbq('track','PageView');`}
       </Script>
       <noscript>
         {/* eslint-disable-next-line @next/next/no-img-element */}

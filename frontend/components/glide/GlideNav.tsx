@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import DashboardIcon, { navigationIcon } from "@/components/DashboardIcon";
 import { useGlide } from "@/components/glide/useGlide";
 
 export type GlideNavItem = { href: string; label: string };
@@ -37,12 +38,12 @@ export default function GlideNav({
             href={item.href}
             data-glide-key={item.href}
             aria-current={active ? "page" : undefined}
-            className={`relative z-10 text-[13.5px] px-2.5 py-1.5 rounded-[3px] transition-colors duration-200 ${
+            className={`relative z-10 flex items-center gap-2.5 text-[12px] px-2.5 py-2 rounded-[3px] transition-colors duration-200 ${
               // White only once the highlight has (mostly) arrived underneath.
               active ? "text-white [transition-delay:140ms]" : "text-ink-soft hover:text-ink hover:bg-paper"
             }`}
           >
-            {item.label}
+            <DashboardIcon name={navigationIcon(item.href)} size={16} /><span>{item.label}</span>
           </Link>
         );
       })}

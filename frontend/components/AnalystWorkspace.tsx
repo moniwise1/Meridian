@@ -26,6 +26,7 @@ export default function AnalystWorkspace({
   const [data, setData] = useState<AnalystWorkspaceData | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [shareNote, setShareNote] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
 
@@ -88,7 +89,7 @@ export default function AnalystWorkspace({
         </button>
       </div>
       <p className="mt-1 text-[12.5px] text-ink-soft">
-        Notes and conversations here are private to you and to this source.
+        Conversations and personal notes stay private. Company definitions are published by an administrator for everyone authorized to use this source.
       </p>
 
       {error && (
@@ -146,11 +147,11 @@ export default function AnalystWorkspace({
                   key={m.id}
                   className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 bg-paper rounded-[3px] p-2 text-[12.5px]"
                 >
-                  <span className="min-w-0 break-words text-ink">{m.content}</span>
+                  <span className="min-w-0 break-words text-ink">{m.shared && <span className="text-teal mr-2">Company definition ·</span>}{m.content}</span>
                   <button
                     type="button"
                     aria-label={`Remove note: ${m.content}`}
-                    disabled={busy || disabled}
+                    disabled={busy || disabled || (m.shared && !data.can_manage_shared)}
                     onClick={() => act(() => analystRequest(`/memory/${m.id}`, "DELETE"))}
                     className="shrink-0 text-teal hover:text-teal-deep transition-colors disabled:opacity-40"
                   >
@@ -159,13 +160,14 @@ export default function AnalystWorkspace({
                 </li>
               ))}
             </ul>
+            {data.can_manage_shared && <label className="flex items-center gap-2 mt-3 text-xs text-ink-soft"><input type="checkbox" checked={shareNote} onChange={event => setShareNote(event.target.checked)} disabled={busy || disabled} />Publish this note as a company definition for this source</label>}
             <form
               className="mt-3 flex flex-wrap gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!note.trim()) return;
                 void act(async () => {
-                  await analystRequest("/memory", "POST", { source_key: sourceKey, content: note.trim() });
+                  await analystRequest("/memory", "POST", { source_key: sourceKey, content: note.trim(), shared: shareNote });
                   setNote("");
                 });
               }}

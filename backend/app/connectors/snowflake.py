@@ -18,20 +18,11 @@ every other connector (build_connector()/routes_connections.py construct
 all connectors identically) but genuinely unused — Snowflake's driver has
 no concept of one.
 
-Technical read-only enforcement here is honestly weaker than Postgres/
-MySQL/MSSQL's, not glossed over as equivalent: Snowflake has no
-session-level READ ONLY transaction pragma the way those three do (no
-`BEGIN TRANSACTION READ ONLY` equivalent), so there's no independent,
-universal backstop. verify_read_only() instead attempts a real write
-(`CREATE TEMPORARY TABLE`, then drops it if it somehow succeeded) and
-relies entirely on the connected role's own grants to reject it — a
-genuine technical probe (an actual write attempt, actually rejected by
-the server, not just a documentation promise), but its correctness is
-only as strong as the role really having no write grants, with no second
-independent layer catching a misconfigured role the way the other three
-connectors have. Setup instructions for this connector should say so
-explicitly: create a role with USAGE + SELECT only, nothing else, and
-confirm that manually in Snowflake before connecting it here.
+Snowflake has no session-level READ ONLY transaction pragma. This connector
+restricts queries through the shared SQL policy, disables secondary roles,
+and inspects active/inherited role grants without a write probe. It rejects
+write privileges, ownership and grant options. Create a dedicated role with
+USAGE + SELECT only and verify its permissions in Snowflake.
 
 Unverified against a live Snowflake account — none available in this
 environment. Built strictly to snowflake-sqlalchemy's documented
@@ -43,6 +34,7 @@ real query) before trusting this in production.
 import time
 from contextlib import contextmanager
 from sqlalchemy import create_engine, text, inspect
+from sqlalchemy.engine import URL
 import pandas as pd
 
 from app.connectors.base import Connector, TableSchema, ColumnInfo, QueryResult
@@ -63,9 +55,11 @@ class SnowflakeConnector(Connector):
         schema = extra_config.get("schema") or "PUBLIC"
         role = extra_config.get("role")
 
-        url = f"snowflake://{username}:{password.reveal()}@{host}/{database}/{schema}?warehouse={warehouse}"
+        query = {"warehouse": warehouse}
         if role:
-            url += f"&role={role}"
+            query["role"] = role
+        url = URL.create("snowflake", username=username, password=password.reveal(),
+                         host=host, database=f"{database}/{schema}", query=query)
         self._engine = create_engine(url)
 
     @contextmanager
@@ -77,6 +71,7 @@ class SnowflakeConnector(Connector):
         there's no BEGIN/COMMIT/ROLLBACK bracket needed either."""
         conn = self._engine.connect()
         try:
+            conn.execute(text("USE SECONDARY ROLES NONE"))
             conn.execute(text(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {int(timeout_seconds)}"))
             yield conn
         finally:
@@ -91,14 +86,35 @@ class SnowflakeConnector(Connector):
             return False
 
     def verify_read_only(self) -> bool:
+        """Inspect the active role and inherited roles without issuing a DDL probe."""
         try:
-            with self._engine.connect() as conn:
-                try:
-                    conn.execute(text("CREATE TEMPORARY TABLE _ro_probe (x INT)"))
-                    conn.execute(text("DROP TABLE _ro_probe"))
-                    return False  # the write succeeded -> not safely read-only
-                except Exception:
-                    return True  # the write was rejected, as required
+            with self._timed_conn(5) as conn:
+                role = conn.execute(text("SELECT CURRENT_ROLE()")).scalar()
+                if not role:
+                    return False
+                pending, seen = [str(role), "PUBLIC"], set()
+                while pending:
+                    current = pending.pop()
+                    if current in seen:
+                        continue
+                    seen.add(current)
+                    if len(seen) > 20:
+                        return False
+                    quoted = current.replace('"', '""')
+                    grants = conn.execute(text(f'SHOW GRANTS TO ROLE "{quoted}"')).mappings().all()
+                    for grant in grants:
+                        item = {str(k).lower(): v for k, v in grant.items()}
+                        privilege = str(item.get("privilege", "")).upper()
+                        if str(item.get("grant_option", "false")).lower() == "true":
+                            return False
+                        if str(item.get("granted_on", "")).upper() == "ROLE" and privilege == "USAGE":
+                            pending.append(str(item["name"]))
+                        elif str(item.get("granted_on", "")).upper() in {"DATABASE_ROLE", "APPLICATION_ROLE"}:
+                            # These have distinct SHOW GRANTS syntax; never assume their grants are read-only.
+                            return False
+                        elif privilege not in {"SELECT", "USAGE", "MONITOR"}:
+                            return False
+                return True
         except Exception:
             return False
 

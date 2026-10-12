@@ -21,6 +21,7 @@ resolved them from a verified auth token (see api/routes_ask.py) - this
 module never trusts a client-supplied identity.
 """
 import logging
+import json
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -182,7 +183,10 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         tables, diagnostics = tabular_analysis.extract_tables(doc.file_path, doc.kind)
         table = tabular_analysis.pick_best_table(tables)
         if table is not None:
-            profile = tabular_analysis.build_profile(table, question)
+            prior_context = (conversation.context or {}) if conversation else {}
+            profile = tabular_analysis.build_profile(table, question,
+                sticky_value_col=prior_context.get("primary_value_column"),
+                sticky_group_col=prior_context.get("primary_group_column"))
             quality_report, detected_anomalies = tabular_analysis.compute_data_quality_and_anomalies(table, profile)
             if detected_anomalies:
                 investigation_results = tabular_analysis.investigate_document_anomalies(
@@ -270,6 +274,7 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
         insight, model_charts = explain_document_only_v2(
             question, document_payload, computed_profile=profile_dict, force_answer=force_answer,
             **({"business_context": business_context} if business_context else {}),
+            **({"conversation_history": (conversation.context or {}).get("turns", [])} if conversation else {}),
         )
         if insight.clarification_question:
             yield ClarificationEvent(question=insight.clarification_question)
@@ -375,7 +380,14 @@ def _run_document_only_analysis(db: Session, tenant_id: str, user_id: str,
                                     connection_id=DOCUMENT_ONLY_SOURCE_ID, context={})
         db.add(conversation)
         db.flush()
+    prior_turns = (conversation.context or {}).get("turns", [])
+    # Bound context; prior answers only help resolve references, never become evidence.
+    turn = {"question": (original_question or question)[:8000],
+            "answer": json.dumps(insight_dict, ensure_ascii=False)[:12000]}
     conversation.context = {
+        "turns": (prior_turns + [turn])[-10:],
+        "primary_value_column": profile.primary_value_column if profile else None,
+        "primary_group_column": profile.primary_group_column if profile else None,
         "source_key": "doc:" + documents[0].id,
         "document_ids": [d.id for d in documents],
         "last_question": original_question or question,

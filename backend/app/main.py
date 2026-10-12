@@ -10,7 +10,7 @@ from app.api import (
     routes_connections, routes_ask, routes_audit, routes_auth, routes_artifacts,
     routes_history, routes_scan, routes_documents, routes_billing,
     routes_platform, routes_support, routes_status, routes_mfa, routes_monitor,
-    routes_notifications, routes_analyst, routes_leads, routes_platform_leads, routes_business, routes_platform_ask,
+    routes_notifications, routes_analyst, routes_leads, routes_platform_leads, routes_business, routes_platform_ask, routes_schedules,
 )
 
 _IS_PRODUCTION = settings.environment == "production"
@@ -121,3 +121,5 @@ app.include_router(routes_notifications.router)
 # is still the right production end state; this closes the hole without
 # it. The files themselves live under settings.artifacts_dir on the
 # server's own disk and are never in the web root.
+
+app.include_router(routes_schedules.router)

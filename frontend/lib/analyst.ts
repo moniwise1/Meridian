@@ -96,7 +96,8 @@ export type AnalystAnalysis = {
 };
 
 export type AnalystWorkspaceData = {
-  memories: { id: string; kind: string; content: string; confirmed: boolean }[];
+  can_manage_shared?: boolean;
+  memories: { id: string; kind: string; content: string; confirmed: boolean; shared?: boolean }[];
   conversations: { id: string; title: string; updated_at: string }[];
   findings: {
     id: string;

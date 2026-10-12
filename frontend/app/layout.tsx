@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
-import Sidebar from "@/components/Sidebar";
+import WorkspaceChrome from "@/components/WorkspaceChrome";
 import AuthGate from "@/components/AuthGate";
 import MetaPixel from "@/components/MetaPixel";
 import MfaWarningBanner from "@/components/MfaWarningBanner";
@@ -8,8 +8,8 @@ import SubscriptionExpiryBanner from "@/components/SubscriptionExpiryBanner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Meridian Analytics | Business intelligence and financial analysis",
-  description: "Understand revenue, expenses and business performance. Explore your data, ask questions and trace the figures to their source with Meridian Analytics.",
+  title: "Meridian Analytics | Data analysis and business intelligence",
+  description: "Analyse files or securely connect your database. Ask questions about operations, customers, sales, research and finance, with answers grounded in your data.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -45,10 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="flex flex-col min-h-screen">
             <MfaWarningBanner />
             <SubscriptionExpiryBanner />
-            <div className="flex flex-col md:flex-row flex-1 min-h-0">
-              <Sidebar />
-              <main className="flex-1 min-w-0">{children}</main>
-            </div>
+            <WorkspaceChrome>{children}</WorkspaceChrome>
           </div>
         </AuthGate>
       </body>

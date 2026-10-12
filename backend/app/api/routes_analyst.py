@@ -4,10 +4,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.db.models import AskMemory, AskFinding, AskScanJob, UploadedDocument, DataSourceConnection, Conversation, QueryRecord, User
+from app.db.models import AskMemory, AskFinding, AskScanJob, UploadedDocument, DataSourceConnection, Conversation, QueryRecord, User, Tenant, SharedSourceDefinition
 from app.security.auth import get_current_user, require_active_subscription, AuthContext
 from app.agents.analyst_workspace import memories_for, run_pending_checks, policy_signature, enqueue_upload_check
 from app.audit import logger as audit
+from app.billing.plans import normalize_account_type
 
 router = APIRouter(prefix="/ask", tags=["analyst"], dependencies=[Depends(require_active_subscription)])
 
@@ -54,13 +55,19 @@ def workspace(source_key: str, background_tasks: BackgroundTasks, db: Session = 
                     for f in db.query(AskFinding).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id, document_id=source.id).order_by(AskFinding.created_at.desc()).limit(20).all()]
         checks = [{"status": j.status, "attempts": j.attempts} for j in db.query(AskScanJob).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id, document_id=source.id).all()]
         background_tasks.add_task(run_pending_checks, ctx.tenant_id, ctx.user_id)
-    return {"memories": memories_for(db, ctx.tenant_id, ctx.user_id, source_key), "conversations": recent[:20], "findings": findings, "checks": checks}
+    return {"can_manage_shared": can_share_definitions(db, ctx), "memories": memories_for(db, ctx.tenant_id, ctx.user_id, source_key), "conversations": recent[:20], "findings": findings, "checks": checks}
 
 
 class MemoryInput(BaseModel):
     source_key: str
     kind: Literal["definition", "correction", "quirk", "seasonality"] = "definition"
     content: str = Field(min_length=1, max_length=1000)
+    shared: bool = False
+
+
+def can_share_definitions(db, ctx):
+    tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
+    return bool(ctx.role == "admin" and tenant and normalize_account_type(tenant.account_type) == "business")
 
 
 @router.post("/memory")
@@ -69,18 +76,26 @@ def save_memory(body: MemoryInput, db: Session = Depends(get_db), ctx: AuthConte
     content = body.content.strip()
     if not content:
         raise HTTPException(400, "Enter a definition or correction.")
-    if db.query(AskMemory).filter_by(tenant_id=ctx.tenant_id, user_id=ctx.user_id, source_key=body.source_key).count() >= 30:
-        raise HTTPException(400, "Remove an old note before adding another (30 per source).")
-    row = AskMemory(tenant_id=ctx.tenant_id, user_id=ctx.user_id, source_key=body.source_key, kind=body.kind, content=content)
+    if body.shared and not can_share_definitions(db, ctx):
+        raise HTTPException(403, "Only a business administrator can publish company definitions.")
+    model = SharedSourceDefinition if body.shared else AskMemory
+    query = db.query(model).filter_by(tenant_id=ctx.tenant_id, source_key=body.source_key)
+    if not body.shared:
+        query = query.filter_by(user_id=ctx.user_id)
+    if query.count() >= 30:
+        raise HTTPException(400, "Remove an old note before adding another (30 per source and scope).")
+    row = model(tenant_id=ctx.tenant_id, user_id=ctx.user_id, source_key=body.source_key, kind=body.kind, content=content)
     db.add(row)
     audit.log(db, ctx.tenant_id, "ask_memory_confirmed", ctx.user_id, detail={"source_key": body.source_key})
     db.commit()
-    return {"id": row.id, "kind": row.kind, "content": row.content, "confirmed": True}
+    return {"id": row.id, "kind": row.kind, "content": row.content, "confirmed": True, "shared": body.shared}
 
 
 @router.delete("/memory/{memory_id}")
 def delete_memory(memory_id: str, db: Session = Depends(get_db), ctx: AuthContext = Depends(get_current_user)):
     row = db.query(AskMemory).filter_by(id=memory_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id).first()
+    if not row and can_share_definitions(db, ctx):
+        row = db.query(SharedSourceDefinition).filter_by(id=memory_id, tenant_id=ctx.tenant_id).first()
     if not row:
         raise HTTPException(404, "Memory not found.")
     authorize_source(db, ctx, row.source_key)

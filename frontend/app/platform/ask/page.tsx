@@ -1,13 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { askPlatform, type PlatformAnswer } from "@/lib/platformApi";
+import { readAskDraft, clearAskDraft } from "@/lib/askDraft";
 import { usePlatformSession } from "@/lib/useSession";
 
 const questions = ["How many new accounts signed up?", "Compare analysis usage with the previous period", "How many subscriptions are active?", "How many support tickets are open?"];
 export default function PlatformAskPage() {
   const session = usePlatformSession();
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(() => readAskDraft(true));
+  useEffect(() => {
+    clearAskDraft(true);
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<{ question: string; platform: boolean }>).detail;
+      if (detail.platform) { setQuestion(detail.question); clearAskDraft(true); }
+    };
+    window.addEventListener("meridian:ask-draft", receive);
+    return () => window.removeEventListener("meridian:ask-draft", receive);
+  }, []);
   const [days, setDays] = useState(30);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

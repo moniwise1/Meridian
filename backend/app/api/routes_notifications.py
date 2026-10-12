@@ -26,7 +26,7 @@ Two audiences, two auth models:
 import hmac
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -85,6 +85,7 @@ def _list_for(db: Session, ctx: AuthContext, limit: int = 30) -> NotificationLis
 
 @router.get("", response_model=NotificationList)
 def list_notifications(
+    background_tasks: BackgroundTasks,
     limit: int = 30,
     db: Session = Depends(get_db),
     ctx: AuthContext = Depends(get_current_user),
@@ -97,6 +98,8 @@ def list_notifications(
     # here never breaks loading the bell.
     tenant = db.query(Tenant).filter_by(id=ctx.tenant_id).first()
     maybe_send_expiry_reminder(db, tenant)
+    from app.api.routes_schedules import run_due
+    background_tasks.add_task(run_due, ctx.tenant_id, ctx.user_id)
     return _list_for(db, ctx, limit)
 
 

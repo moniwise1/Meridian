@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.db.models import DataSourceConnection, Tenant
-from app.security.secrets import encrypt, RedactedSecret
+from app.security.secrets import encrypt, decrypt, RedactedSecret
 from app.security.ssrf import check_connection_host, BlockedHostError
 from app.security.auth import get_current_user, require_role, require_active_subscription, AuthContext
 from app.connectors.postgres import PostgresConnector
@@ -99,11 +99,15 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
                 f"Upgrade on the Billing page to connect more.",
             )
 
+    extra_config = dict(body.extra_config)
+    if body.kind in ("postgres", "mysql"):
+        # New registrations cannot opt out of certificate and hostname validation.
+        extra_config["transport_tls"] = "verify"
     try:
         connector = connector_cls(
             host=body.host, port=body.port, database=body.database,
             username=body.username, password=RedactedSecret(body.password),
-            extra_config=body.extra_config,
+            extra_config=extra_config,
         )
     except ValueError as e:
         # e.g. Snowflake's "extra_config.warehouse is required" - a
@@ -112,7 +116,7 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
         # "could not connect" below.
         raise HTTPException(400, str(e))
     if not connector.test_connection():
-        raise HTTPException(400, "Could not connect with the supplied credentials.")
+        raise HTTPException(400, "Could not connect securely. Check the host, credentials, network access and server TLS certificate.")
 
     if not connector.verify_read_only():
         audit.log(db, ctx.tenant_id, "connection_rejected_not_readonly", ctx.user_id,
@@ -128,7 +132,7 @@ def create_connection(body: ConnectionCreate, db: Session = Depends(get_db),
         port=body.port, database=body.database, username=body.username,
         encrypted_password=encrypt(body.password),
         table_allowlist=body.table_allowlist, column_policy=body.column_policy,
-        extra_config=body.extra_config,
+        extra_config=extra_config,
         verified_read_only=True,
     )
     db.add(row)
@@ -163,4 +167,29 @@ def update_policy(connection_id: str, body: PolicyUpdate, db: Session = Depends(
     db.commit()
     db.refresh(row)
     audit.log(db, ctx.tenant_id, "connection_policy_updated", ctx.user_id, connection_id=row.id)
+    return row
+
+
+@router.post("/{connection_id}/verify-tls", response_model=ConnectionOut)
+def verify_tls(connection_id: str, db: Session = Depends(get_db),
+               ctx: AuthContext = Depends(require_role("admin")),
+               _billing: AuthContext = Depends(require_active_subscription)):
+    row = db.query(DataSourceConnection).filter_by(id=connection_id, tenant_id=ctx.tenant_id).first()
+    if not row:
+        raise HTTPException(404, "Connection not found.")
+    if row.kind not in ("postgres", "mysql"):
+        raise HTTPException(422, "This TLS upgrade is available for PostgreSQL and MySQL connections.")
+    try:
+        check_connection_host(row.host)
+    except BlockedHostError:
+        raise HTTPException(400, "This host is not permitted.")
+    config = {**(row.extra_config or {}), "transport_tls": "verify"}
+    connector = _CONNECTOR_CLASSES[row.kind](host=row.host, port=row.port, database=row.database,
+        username=row.username, password=RedactedSecret(decrypt(row.encrypted_password)), extra_config=config)
+    if not connector.test_connection() or not connector.verify_read_only():
+        raise HTTPException(400, "Verified TLS/read-only checks failed. The existing configuration was retained.")
+    row.extra_config = config
+    db.commit()
+    db.refresh(row)
+    audit.log(db, ctx.tenant_id, "connection_tls_verified", ctx.user_id, connection_id=row.id)
     return row

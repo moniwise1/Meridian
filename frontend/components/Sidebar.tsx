@@ -4,17 +4,17 @@ import { usePathname, useRouter } from "next/navigation";
 import { clearSession } from "@/lib/auth";
 import { useSession } from "@/lib/useSession";
 import { useAccountType } from "@/lib/useAccountType";
-import NotificationBell from "@/components/NotificationBell";
 import GlideNav from "@/components/glide/GlideNav";
 
 const NAV = [
-  { href: "/home", label: "Home" },
+  { href: "/home", label: "Overview" },
   { href: "/overview", label: "Executive Overview", businessOnly: true },
   { href: "/financial", label: "Financial Analytics", businessOnly: true },
   { href: "/performance", label: "Sales & Performance", businessOnly: true },
   { href: "/", label: "Ask" },
   { href: "/risks", label: "Risks" },
   { href: "/analyses", label: "Analyses" },
+  { href: "/schedules", label: "Scheduled analyses" },
   { href: "/library", label: "Library" },
   { href: "/documents", label: "Documents" },
   { href: "/connections", label: "Data sources" },
@@ -74,13 +74,11 @@ export default function Sidebar() {
     navItems.find((item) => (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)))?.href ?? null;
 
   return (
-    <aside className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-line bg-panel px-5 py-4 md:py-6 flex flex-col gap-4 md:gap-8">
+    <aside className="workspace-sidebar w-full md:w-[220px] shrink-0 px-4 py-4 md:py-6 flex flex-col gap-4 md:gap-6">
       <div className="flex items-start justify-between">
         <div>
-          <div className="text-[15px] font-semibold tracking-tight text-ink">Meridian</div>
-          <div className="text-[11px] text-ink-soft mt-0.5">Enterprise analytics</div>
+          <div className="flex items-center gap-2.5"><span className="brand-mark">M</span><div><div className="text-[16px] font-semibold tracking-tight">Meridian</div><div className="text-[10px] opacity-65 mt-0.5">Analytics</div></div></div>
         </div>
-        {session && <NotificationBell />}
       </div>
 
       <details className="md:hidden">
@@ -103,7 +101,7 @@ export default function Sidebar() {
           </div>
         )}
         <div className="text-[11px] text-ink-soft leading-relaxed border-t border-line pt-3">
-          Read-only by design. The agent can query and explain — it cannot write, alter, or delete.
+          Read-only source access. Your data stays under your control.
         </div>
       </div>
     </aside>

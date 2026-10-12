@@ -55,7 +55,7 @@ export default function AnalysesPage() {
     <div className="max-w-3xl mx-auto px-8 py-12">
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Analyses</h1>
       <p className="text-[13.5px] text-ink-soft mb-6">
-        Every question the team has asked, with the evidence behind the answer — reopen any of
+        Every question you have asked, with the evidence behind the answer — reopen any of
         these instead of re-running the same question. Star one to keep it in Saved for quick access.
       </p>
 

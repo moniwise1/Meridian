@@ -109,3 +109,44 @@ def overview(body: OverviewRequest, db: Session = Depends(get_db),
     if body.question:
         result["answer"] = answer_overview(body.question, result)
     return result
+
+
+class SaveViewRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    mapping: OverviewRequest
+
+
+@router.get("/views")
+def saved_views(db: Session = Depends(get_db), ctx: AuthContext = Depends(require_business),
+                _paid=Depends(require_active_subscription)):
+    from app.db.models import BusinessViewConfiguration
+    rows = db.query(BusinessViewConfiguration).filter_by(tenant_id=ctx.tenant_id).order_by(BusinessViewConfiguration.created_at.desc()).limit(20).all()
+    return {"can_manage": ctx.role == "admin", "views": [{"id": r.id, "name": r.name, "mapping": r.mapping} for r in rows]}
+
+
+@router.post("/views")
+def save_view(body: SaveViewRequest, db: Session = Depends(get_db), ctx: AuthContext = Depends(require_business),
+              _paid=Depends(require_active_subscription)):
+    from app.db.models import BusinessViewConfiguration
+    if ctx.role != "admin": raise HTTPException(403, "Only a business administrator can save a company reporting view.")
+    if not body.name.strip(): raise HTTPException(422, "Enter a view name.")
+    if db.query(BusinessViewConfiguration).filter_by(tenant_id=ctx.tenant_id).count() >= 20:
+        raise HTTPException(422, "Remove an old reporting view first (20 per company).")
+    # Check the definition against the same permission-filtered source used by real metrics.
+    doc, frame = load_source(db, ctx, body.mapping.document_id, body.mapping.sheet)
+    try: compute_overview(frame, body.mapping.model_dump(), body.mapping.start, body.mapping.end)
+    except MetricInputError as exc: raise HTTPException(422, str(exc)) from exc
+    mapping = body.mapping.model_dump(mode="json", exclude={"question", "detail_date"})
+    row = BusinessViewConfiguration(tenant_id=ctx.tenant_id, user_id=ctx.user_id, name=body.name.strip(), mapping=mapping)
+    db.add(row); db.commit(); db.refresh(row)
+    return {"id": row.id, "name": row.name, "mapping": row.mapping}
+
+
+@router.delete("/views/{view_id}")
+def remove_view(view_id: str, db: Session = Depends(get_db), ctx: AuthContext = Depends(require_business)):
+    from app.db.models import BusinessViewConfiguration
+    if ctx.role != "admin": raise HTTPException(403, "Only a business administrator can remove a company reporting view.")
+    row = db.query(BusinessViewConfiguration).filter_by(id=view_id, tenant_id=ctx.tenant_id).first()
+    if not row: raise HTTPException(404, "Reporting view not found.")
+    db.delete(row); db.commit()
+    return {"deleted": True}

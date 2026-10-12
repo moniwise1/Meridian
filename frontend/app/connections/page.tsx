@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listConnections, createConnection, updateConnectionPolicy, type Connection } from "@/lib/api";
+import { listConnections, createConnection, updateConnectionPolicy, verifyConnectionTls, type Connection } from "@/lib/api";
 import { loadSession } from "@/lib/auth";
 
 const DB_KINDS = [
@@ -74,7 +74,8 @@ export default function ConnectionsPage() {
       <h1 className="text-[22px] font-medium text-ink tracking-tight mb-1.5">Data sources</h1>
       <p className="text-[13.5px] text-ink-soft mb-8">
         Connect a database with a dedicated read-only credential. The connection is verified —
-        not just assumed — to be incapable of writing before it&apos;s saved.
+        checked before it is saved. PostgreSQL and MySQL registrations require verified TLS.
+        Choose the tables and columns Meridian may analyse; Ask also applies each user’s row permissions.
       </p>
 
       <div className="flex flex-col gap-3 mb-10">
@@ -95,6 +96,8 @@ export default function ConnectionsPage() {
                 >
                   {c.verified_read_only ? "Read-only verified" : "Unverified"}
                 </span>
+                {["postgres", "mysql"].includes(c.kind) && <span className="text-[11px] text-ink-soft">{c.extra_config.transport_tls === "verify" ? "Verified TLS" : "Legacy TLS configuration"}</span>}
+                {isAdmin && ["postgres", "mysql"].includes(c.kind) && c.extra_config.transport_tls !== "verify" && <button type="button" disabled={submitting} className="text-xs text-teal" onClick={async () => { setSubmitting(true); setError(""); try { await verifyConnectionTls(c.id); refresh(); } catch (error) { setError((error as Error).message); } finally { setSubmitting(false); } }}>Verify TLS</button>}
                 {isAdmin && (
                   <button
                     onClick={() => setEditingPolicy(editingPolicy === c.id ? null : c.id)}

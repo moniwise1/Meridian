@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { readAskDraft, clearAskDraft } from "@/lib/askDraft";
 import {
   listConnections,
   listDocuments,
+  uploadDocument,
   askStream,
   type Connection,
   type DocumentSummary,
@@ -16,7 +18,6 @@ import { useGlide } from "@/components/glide/useGlide";
 import ClarificationPrompt from "@/components/ClarificationPrompt";
 import ProgressTrace from "@/components/ProgressTrace";
 import ResultView from "@/components/ResultView";
-import { useAccountType } from "@/lib/useAccountType";
 
 // The "Data source" picker offers both database connections and uploaded
 // documents in one list — a document can now BE the thing being analysed,
@@ -50,7 +51,8 @@ type Turn = {
 };
 
 export default function AskDashboard() {
-  const accountType = useAccountType();
+  const uploadInput = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [continueThread, setContinueThread] = useState(true);
   const [loadingSources, setLoadingSources] = useState(true);
   const controller = useRef<AbortController | null>(null);
@@ -60,7 +62,16 @@ export default function AskDashboard() {
   const [sourceValue, setSourceValue] = useState("");
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const [attachOpen, setAttachOpen] = useState(false);
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(() => readAskDraft());
+  useEffect(() => {
+    clearAskDraft();
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<{ question: string; platform: boolean }>).detail;
+      if (!detail.platform) { setQuestion(detail.question); clearAskDraft(); }
+    };
+    window.addEventListener("meridian:ask-draft", receive);
+    return () => window.removeEventListener("meridian:ask-draft", receive);
+  }, []);
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -76,33 +87,18 @@ export default function AskDashboard() {
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Connections and documents load independently (two separate
-    // requests, arriving in whichever order the network gives them) and
-    // either one alone can supply a usable default source. A database
-    // connection always wins if one exists (unconditional - matches the
-    // original behavior before documents could be a source at all), but
-    // if there are zero connections and at least one document, the
-    // document needs to become the default too - otherwise sourceValue
-    // stays "", which means nothing downstream (the Ask button's enabled
-    // check, the "hide the redundant attach section" logic) sees anything
-    // selected. The functional update below only sets a document default
-    // when nothing has claimed sourceValue yet, so a connection arriving
-    // either before or after documents always takes priority correctly.
-    listConnections()
-      .then((rows) => {
-        setConnections(rows);
-        if (rows.length > 0) setSourceValue(prev => prev || `conn:${rows[0].id}`);
-      })
-      .catch((e) => setLoadError(e.message));
-    listDocuments()
-      .then((rows) => {
-        setDocuments(rows);
-        if (rows.length > 0) {
-          setSourceValue((prev) => (prev === "" ? `doc:${rows[0].id}` : prev));
-        }
-      })
-      .catch((e) => setLoadError(`Documents could not be loaded: ${e.message}`))
-      .finally(() => setLoadingSources(false));
+    let live = true;
+    Promise.allSettled([listConnections(), listDocuments()]).then(([dbResult, fileResult]) => {
+      if (!live) return;
+      const dbs = dbResult.status === "fulfilled" ? dbResult.value : [];
+      const files = fileResult.status === "fulfilled" ? fileResult.value : [];
+      setConnections(dbs); setDocuments(files);
+      setSourceValue(prev => prev || (dbs[0] ? `conn:${dbs[0].id}` : files[0] ? `doc:${files[0].id}` : ""));
+      const errors = [dbResult.status === "rejected" ? "Databases: " + dbResult.reason.message : "",
+        fileResult.status === "rejected" ? "Files: " + fileResult.reason.message : ""].filter(Boolean);
+      setLoadError(errors.join(" · ")); setLoadingSources(false);
+    });
+    return () => { live = false; };
   }, []);
 
   useEffect(() => {
@@ -118,16 +114,18 @@ export default function AskDashboard() {
 
   const activeTurn = turns.length > 0 ? turns[turns.length - 1] : null;
   const pendingClarification = !!activeTurn && !!activeTurn.clarificationQuestion && !activeTurn.result;
-  const inputLocked = running || pendingClarification;
+  const inputLocked = running || uploading || pendingClarification;
 
   function toggleDoc(id: string) {
-    setSelectedDocIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
+    if (inputLocked || conversationId) return;
+    setSelectedDocIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : prev.length < (documentIsSource ? 9 : 10) ? [...prev, id] : prev));
   }
 
   function currentSourceLabel(): string {
     if (!source) return "";
     if (source.type === "connection") return connections.find((c) => c.id === source.id)?.name ?? "Database";
-    return documents.find((d) => d.id === source.id)?.filename ?? "Document";
+    const filename = documents.find((d) => d.id === source.id)?.filename ?? "Document";
+    return selectedDocIds.length ? `${filename} + ${selectedDocIds.length} supporting file(s)` : filename;
   }
 
   // turnId is set only when resuming a turn already in the thread (a
@@ -137,7 +135,7 @@ export default function AskDashboard() {
     questionText: string,
     opts: { followUp: boolean; skipClarification: boolean; turnId?: number },
   ) {
-    if (!source || requestRunning.current) return;
+    if (!source || requestRunning.current || uploading) return;
     requestRunning.current = true;
     const abortController = new AbortController();
     controller.current = abortController;
@@ -169,7 +167,7 @@ export default function AskDashboard() {
           // planner.py's document_ids check), so dropping them on a
           // follow-up would make the thread fail to match its own
           // conversation instead of continuing it.
-          document_ids: documentIsSource ? [source.id] : selectedDocIds,
+          document_ids: documentIsSource ? [source.id, ...selectedDocIds.filter(id => id !== source.id)] : selectedDocIds,
           skip_clarification: opts.skipClarification,
         },
         (evt) => {
@@ -244,14 +242,39 @@ export default function AskDashboard() {
     setAttachOpen(false);
   }
 
+  async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length || inputLocked) return;
+    setUploading(true); setLoadError("");
+    const uploaded: DocumentSummary[] = [];
+    const errors: string[] = [];
+    try {
+      for (const file of files.slice(0, 5)) {
+        try { uploaded.push(await uploadDocument(file)); }
+        catch (error) { errors.push(`${file.name}: ${(error as Error).message}`); }
+      }
+      if (files.length > 5) errors.push("Choose up to five files per upload.");
+      if (uploaded.length) {
+        startNewConversation();
+        setDocuments(previous => [...uploaded, ...previous]);
+        setSourceValue(`doc:${uploaded[0].id}`);
+        setSelectedDocIds(uploaded.slice(1).map(file => file.id));
+      }
+      setLoadError(errors.join(" · "));
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
+  }
+
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-medium text-ink tracking-tight">What do you want to understand?</h1>
           <p className="text-[13.5px] text-ink-soft mt-1.5">
-            Ask a question about your data. Meridian will find the relevant authorized records, analyse them,
-            check for anomalies, and explain the answer with evidence.
+            Explore operations, customers, sales, inventory, research or any other subject in your data.
+            Upload files or choose a connected database, then ask in your own words.
           </p>
         </div>
         {conversationId && (
@@ -266,7 +289,7 @@ export default function AskDashboard() {
       </div>
 
       {turns.length === 0 && sourceValue && <div className="grid sm:grid-cols-3 gap-2 mb-6">
-        {(documentIsSource ? ["Summarise the main findings and data limitations", "Which categories stand out?", "What should I verify before using these figures?"] : accountType === "business" ? ["Compare revenue by month", "Which products contribute most to revenue?", "Which branches need attention?"] : ["Summarise the available data", "Show the main trends over time", "Which categories have the highest totals?"]).map(text => <button key={text} disabled={inputLocked} onClick={() => setQuestion(text)} className="text-left text-xs border border-line rounded-lg p-3 text-ink-soft hover:border-teal disabled:opacity-40">{text}</button>)}
+        {(documentIsSource ? ["Summarise the main findings and data limitations", "Which patterns or exceptions stand out?", "What should I verify before using these findings?"] : ["What data is available and what can we learn from it?", "Show the main trends and unusual changes", "Compare performance across the relevant categories"]).map(text => <button key={text} disabled={inputLocked} onClick={() => setQuestion(text)} className="text-left text-xs border border-line rounded-lg p-3 text-ink-soft hover:border-teal disabled:opacity-40">{text}</button>)}
       </div>}
       {loadingSources && <p role="status" className="text-sm text-ink-soft mb-4">Loading your authorized sources…</p>}
       {loadError && <div className="mb-6 text-[13px] text-red">{loadError}</div>}
@@ -280,7 +303,7 @@ export default function AskDashboard() {
           <Link href="/documents" className="text-teal hover:text-teal-deep transition-colors">
             Documents
           </Link>{" "}
-          to upload a PDF, Word, PowerPoint, or Excel file to analyse directly.
+          to upload spreadsheets, documents, text or JSON exports to analyse directly.
         </div>
       )}
 
@@ -295,7 +318,7 @@ export default function AskDashboard() {
           revision={turns.filter((t) => t.result).length}
           onResume={(c) => {
             setConversationId(c.id);
-            setSelectedDocIds(c.document_ids);
+            setSelectedDocIds(c.document_ids.filter(id => !documentIsSource || id !== source?.id));
             setQuestion("");
             setTurns(
               c.turns.map((t, i) => ({
@@ -369,6 +392,12 @@ export default function AskDashboard() {
 
       {conversationId && <label className="flex items-center gap-2 text-xs text-ink-soft mb-3"><input type="checkbox" checked={continueThread} disabled={inputLocked} onChange={e => setContinueThread(e.target.checked)} />Continue this conversation&apos;s context. Uncheck for an independent question.</label>}
       {running && <button onClick={() => controller.current?.abort()} className="text-sm text-teal mb-3">Stop response</button>}
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <input ref={uploadInput} type="file" multiple accept=".pdf,.docx,.pptx,.xlsx,.csv,.tsv,.json,.txt,.md" className="sr-only" aria-label="Upload files to analyse" onChange={handleUpload} disabled={inputLocked} />
+        <button type="button" disabled={inputLocked} onClick={() => uploadInput.current?.click()} className="text-xs border border-line rounded-md px-3 py-2 text-teal disabled:opacity-40">{uploading ? "Uploading files…" : "Upload files"}</button>
+        <Link href="/connections" className="text-xs text-teal">Connect a database</Link>
+        <span className="text-xs text-ink-soft">Excel, CSV, TSV, JSON, PDF, Word, PowerPoint, text and Markdown</span>
+      </div>
       {/* ---------- Composer ---------- */}
       <div className="sticky bottom-4 bg-panel border border-line rounded-[8px] shadow-sm p-4">
         <div ref={sourceRowRef} className="relative flex items-center gap-2 mb-3 flex-wrap">
@@ -426,12 +455,12 @@ export default function AskDashboard() {
 
         {documentIsSource && (
           <div className="text-[11.5px] text-ink-soft mb-2">
-            Analysing this document&apos;s content directly — no database query involved.
+            Analysing the selected file{selectedDocIds.length ? ` and ${selectedDocIds.length} supporting file(s)` : ""}. Database access is not required.
           </div>
         )}
 
         <div className="flex items-end gap-2">
-          {!conversationId && !documentIsSource && documents.length > 0 && (
+          {!conversationId && documents.some(d => !documentIsSource || d.id !== source?.id) && (
             <div className="relative shrink-0">
               <button
                 type="button"
@@ -455,7 +484,7 @@ export default function AskDashboard() {
                     </Link>
                   </div>
                   <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
-                    {documents.map((d) => (
+                    {documents.filter(d => !documentIsSource || d.id !== source?.id).map((d) => (
                       <button
                         key={d.id}
                         type="button"
