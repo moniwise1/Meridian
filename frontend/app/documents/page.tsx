@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import FileOverviewCard from "@/components/FileOverviewCard";
+import { saveAskDraft } from "@/lib/askDraft";
 import {
   listDocuments,
   uploadDocument,
@@ -15,6 +18,8 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export default function DocumentsPage() {
+  const router = useRouter();
+  const [recentUpload, setRecentUpload] = useState<DocumentSummary | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -37,7 +42,7 @@ export default function DocumentsPage() {
     setUploading(true);
     setError("");
     try {
-      await uploadDocument(file);
+      setRecentUpload(await uploadDocument(file));
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -67,6 +72,7 @@ export default function DocumentsPage() {
     try {
       await deleteDocument(id);
       if (previewId === id) setPreviewId(null);
+      if (recentUpload?.id === id) setRecentUpload(null);
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -97,6 +103,10 @@ export default function DocumentsPage() {
         {uploading && <span className="ml-3 text-[12.5px] text-ink-soft">Uploading and extracting…</span>}
       </div>
 
+      {recentUpload && <FileOverviewCard documentId={recentUpload.id} filename={recentUpload.filename} onQuestion={question => {
+        try { saveAskDraft(question); } catch { /* The selected file is still carried in the URL. */ }
+        router.push(`/?document=${encodeURIComponent(recentUpload.id)}`);
+      }} />}
       <div className="flex flex-col gap-3">
         {documents.map((d) => (
           <div key={d.id} className="bg-panel border border-line rounded-[4px] px-4 py-3">
@@ -115,7 +125,7 @@ export default function DocumentsPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <Link href="/" className="text-[11.5px] text-teal">Ask Meridian</Link>
+                <Link href={`/?document=${encodeURIComponent(d.id)}`} className="text-[11.5px] text-teal">Ask this file</Link>
                 <button
                   onClick={() => handlePreview(d.id)}
                   className="text-[11.5px] text-teal hover:text-teal-deep transition-colors"

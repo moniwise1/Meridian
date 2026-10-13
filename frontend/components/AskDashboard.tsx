@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import FileOverviewCard from "@/components/FileOverviewCard";
 import { readAskDraft, clearAskDraft } from "@/lib/askDraft";
 import {
   listConnections,
@@ -93,10 +94,12 @@ export default function AskDashboard() {
       const dbs = dbResult.status === "fulfilled" ? dbResult.value : [];
       const files = fileResult.status === "fulfilled" ? fileResult.value : [];
       setConnections(dbs); setDocuments(files);
-      setSourceValue(prev => prev || (dbs[0] ? `conn:${dbs[0].id}` : files[0] ? `doc:${files[0].id}` : ""));
+      const requestedFile = new URLSearchParams(window.location.search).get("document");
+      const availableRequestedFile = files.find(file => file.id === requestedFile);
+      setSourceValue(prev => prev || (availableRequestedFile ? `doc:${availableRequestedFile.id}` : dbs[0] ? `conn:${dbs[0].id}` : files[0] ? `doc:${files[0].id}` : ""));
       const errors = [dbResult.status === "rejected" ? "Databases: " + dbResult.reason.message : "",
         fileResult.status === "rejected" ? "Files: " + fileResult.reason.message : ""].filter(Boolean);
-      setLoadError(errors.join(" · ")); setLoadingSources(false);
+      setLoadError(errors.join(" · ") || (requestedFile && !availableRequestedFile ? "The requested file is unavailable in this workspace." : "")); setLoadingSources(false);
     });
     return () => { live = false; };
   }, []);
@@ -452,6 +455,10 @@ export default function AskDashboard() {
             <span className="text-[12px] text-ink-soft">No data sources or documents available</span>
           )}
         </div>
+
+        {documentIsSource && source && !conversationId && <FileOverviewCard
+          documentId={source.id} filename={documents.find(file => file.id === source.id)?.filename ?? "Selected file"}
+          onQuestion={setQuestion} disabled={inputLocked} />}
 
         {documentIsSource && (
           <div className="text-[11.5px] text-ink-soft mb-2">
