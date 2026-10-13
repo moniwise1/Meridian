@@ -96,7 +96,7 @@ export default function AskDashboard() {
       setConnections(dbs); setDocuments(files);
       const requestedFile = new URLSearchParams(window.location.search).get("document");
       const availableRequestedFile = files.find(file => file.id === requestedFile);
-      setSourceValue(prev => prev || (availableRequestedFile ? `doc:${availableRequestedFile.id}` : dbs[0] ? `conn:${dbs[0].id}` : files[0] ? `doc:${files[0].id}` : ""));
+      setSourceValue(prev => prev || (requestedFile ? (availableRequestedFile ? `doc:${availableRequestedFile.id}` : "") : dbs[0] ? `conn:${dbs[0].id}` : files[0] ? `doc:${files[0].id}` : ""));
       const errors = [dbResult.status === "rejected" ? "Databases: " + dbResult.reason.message : "",
         fileResult.status === "rejected" ? "Files: " + fileResult.reason.message : ""].filter(Boolean);
       setLoadError(errors.join(" · ") || (requestedFile && !availableRequestedFile ? "The requested file is unavailable in this workspace." : "")); setLoadingSources(false);
