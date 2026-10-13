@@ -4,6 +4,7 @@ Legacy snapshots remain available for existing exports and old clients. The new
 analysis object is persisted alongside them, so reopening preserves its evidence.
 """
 import math
+import json
 import re
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -162,12 +163,32 @@ def build_analysis(query_id: str, question: str, snapshot: dict, *, sources: lis
                          computation_id=query_id, method="computed" if computed else "extracted_text")
                 for i, src in enumerate(sources)]
     refs = [e.id for e in evidence]
+    calculations = []
+    for calc in (snapshot.get("table_calculations") or [])[:12]:
+        # Table IDs correspond to the selected document order, including
+        # unparsed files. Never match by filename alone (names can repeat).
+        match = re.fullmatch(r"table-(\d+)", str(calc.get("table_id", "")))
+        index = int(match.group(1)) - 1 if match else -1
+        if not 0 <= index < len(sources) or sources[index].get("filename") != calc.get("filename"):
+            continue
+        src = sources[index]
+        eid = f"calculation_{len(calculations)}"
+        location = (f"{calc.get('operation')} of {calc.get('value_column') or 'rows'}; "
+                    f"denominator: {calc.get('denominator_column') or 'none'}; "
+                    f"filters: {json.dumps(calc.get('filters') or [], ensure_ascii=False)}; "
+                    f"{calc.get('matched_row_count')} matched / {calc.get('parsed_row_count')} parsed rows; "
+                    f"{calc.get('excluded_numeric_values')} missing/non-finite values excluded; "
+                    f"result: {calc.get('result')}; groups truncated: {bool(calc.get('groups_truncated'))}")
+        evidence.append(Evidence(id=eid, source_id=src["id"], source_version=src.get("version"),
+            filename=src.get("filename"), location=location,
+            computation_id=str(calc.get("evidence_id") or query_id), method="computed"))
+        calculations.append((calc, eid))
     limitations = list(quality.get("notes") or [])
     if snapshot.get("truncated"):
         limitations.append("The returned data is truncated; totals may not represent the full population.")
     if any(src.get("truncated") or src.get("ocr") for src in sources):
         limitations.append("Source text was truncated or OCR-extracted; verify important figures against the original file.")
-    if not computed:
+    if not computed and not calculations:
         limitations.append("No structured table was verified. Figures in the explanation are extracted claims, not independently computed results.")
     if profile:
         limitations.append("Tables below profile the selected worksheet. They are not automatically filtered to every condition in your question.")
@@ -178,7 +199,7 @@ def build_analysis(query_id: str, question: str, snapshot: dict, *, sources: lis
     limitations = list(dict.fromkeys(str(v) for v in limitations if v))
     metrics = []
     value_label = (profile or {}).get("primary_value_column") or "returned values"
-    if computed:
+    if computed and not calculations:
         for key, label in [("total", f"Sum of {value_label}"), ("mean", f"Average of {value_label}"),
                            ("min", f"Minimum of {value_label}"), ("max", f"Maximum of {value_label}")]:
             if key == "total" and re.search(r"%|\b(rate|ratio|margin|percentage|percent|utilization|conversion)\b", value_label.replace("_", " "), re.I):
@@ -196,13 +217,35 @@ def build_analysis(query_id: str, question: str, snapshot: dict, *, sources: lis
                             Column(key=value, label=value_title, type="number")], rows=clean, evidence_ids=refs))
         charts.append(Chart(type=chart_type, title=title, table_id=tid, category_key=category, value_keys=[value]))
 
-    if computed and profile:
+    if computed and profile and not calculations:
         for dimension, rows in (profile.get("breakdowns") or {}).items():
             add_table(f"Average {value_label} by {dimension}", rows, value_title=f"Average {value_label}")
         if profile.get("trend"):
             add_table(f"Monthly average {value_label}", profile["trend"], "period", "average", f"Average {value_label}", "line")
-    elif computed and snapshot.get("by_group"):
+    elif computed and not calculations and snapshot.get("by_group"):
         add_table("Returned values by group", snapshot["by_group"], value="total", value_title="Sum")
+    for i, (calc, eid) in enumerate(calculations):
+        label = f"{str(calc['operation']).title()} of {calc.get('value_column') or 'rows'}"
+        if calc["operation"] == "rate":
+            label = f"{calc.get('value_column')} / {calc.get('denominator_column')}"
+        filters = calc.get("filters") or []
+        scope_label = ", ".join(f"{f.get('column')} { {'eq':'=','neq':'!=','gt':'>','gte':'>=','lt':'<','lte':'<=','contains':'contains'}.get(f.get('operator'), f.get('operator'))} {f.get('value')}" for f in filters)
+        label += f" · {scope_label[:100]}" if scope_label else " · All parsed rows"
+        metrics.append(Metric(id=f"calculation_{i}", label=label, value=_number(calc.get("result")),
+                              unit=calc.get("unit"), evidence_ids=[eid]))
+        if calc.get("groups"):
+            tid = f"calculation_table_{i}"
+            rows = [{"group":str(r["group"]) if r.get("group") is not None else "Missing group",
+                     "value":_number(r.get("value")), "records":_number(r.get("row_count"))} for r in calc["groups"][:50]]
+            tables.append(Table(id=tid, title=f"{label} by {calc['group_column']}",
+                columns=[Column(key="group",label=str(calc["group_column"]),type="string"),
+                         Column(key="value",label=label,type="number",unit=calc.get("unit")),
+                         Column(key="records",label="Matched records",type="number")],rows=rows,evidence_ids=[eid]))
+            charts.append(Chart(type="bar",title=tables[-1].title,table_id=tid,category_key="group",value_keys=["value"]))
+        if calc.get("groups_truncated"):
+            limitations.append(f"{label}: showing the first 50 of {calc.get('total_groups')} groups.")
+    if calculations:
+        limitations.append("Each calculation uses its own filters and source. Inspect its evidence before combining values; files were not joined.")
     # Always expose a structured result even when the query has no group axis.
     if computed and not tables and metrics:
         tables.append(Table(id="metric_table", title="Computed measures", columns=[
@@ -219,11 +262,11 @@ def build_analysis(query_id: str, question: str, snapshot: dict, *, sources: lis
     completeness = _number(quality.get("completeness_pct")) if computed else None
     duplicate = _number(quality.get("duplicate_pct")) if computed else None
     severe = (completeness is not None and completeness < 80) or (duplicate is not None and duplicate > 20)
-    has_rows = computed and snapshot.get("row_count", 0) > 0
+    has_rows = (computed and snapshot.get("row_count", 0) > 0) or any(c.get("matched_row_count", 0) > 0 for c, _ in calculations)
     measure_level = "not_assessable" if not has_rows else "low" if severe else "medium"
     reason = "No independently verified numeric result is available." if not has_rows else (
         "Material missingness or duplication limits reliability." if severe else
-        "Values were computed from the available records; metric definitions and full-period coverage still require review.")
+        "Values were computed from the available records; inspect calculation filters, metric definitions and period coverage before deciding.")
     explanation_level = "low" if insight.get("confidence") == "low" or severe or not computed else "medium"
     if not insight or "error" in insight:
         explanation_level = "not_assessable"
@@ -236,7 +279,7 @@ def build_analysis(query_id: str, question: str, snapshot: dict, *, sources: lis
         headline=insight.get("what") or ("Computed results are ready; the explanation is unavailable." if has_rows else "There is not enough verified data to answer."),
         summary=insight.get("body") or insight.get("contributors") or insight.get("data_quality_caveat") or "",
         scope=Scope(question=question, source_ids=[s["id"] for s in sources],
-                    metric_definition=(f"Profile of {value_label}; group tables use arithmetic means." if profile else snapshot.get("sql_rationale")),
+                    metric_definition=("Question-specific calculations; operation, filters and matched rows are recorded with each figure." if calculations else f"Profile of {value_label}; group tables use arithmetic means." if profile else snapshot.get("sql_rationale")),
                     period=metrics_data.get("latest_period"), comparison=metrics_data.get("previous_period"),
                     assumptions=["Currency and full-period completeness were not independently established."]),
         metrics=metrics, tables=tables, charts=charts, findings=findings,

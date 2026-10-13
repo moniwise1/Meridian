@@ -374,8 +374,8 @@ export default function AskDashboard() {
                     {turn.clarificationAnswer && (
                       <div className="text-[12px] text-ink-soft italic">You answered: “{turn.clarificationAnswer}”</div>
                     )}
-                    {turn.result && <ResultView result={turn.result} />}
-                    {nextQuestion && (
+                    {turn.result && <ResultView result={turn.result} onFollowUp={turn.id === activeTurn?.id ? question => askText(question, !!conversationId) : undefined} followUpDisabled={inputLocked} />}
+                    {nextQuestion && !turn.result?.analysis && turn.id === activeTurn?.id && (
                       <button
                         onClick={() => askText(nextQuestion, !!conversationId)}
                         disabled={inputLocked}

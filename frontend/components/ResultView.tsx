@@ -307,7 +307,7 @@ function AnomalyList({ result }: { result: ResultEvent }) {
   );
 }
 
-export default function ResultView({ result }: { result: ResultEvent }) {
+export default function ResultView({ result, onFollowUp, followUpDisabled = false }: { result: ResultEvent; onFollowUp?: (question: string) => void; followUpDisabled?: boolean }) {
   const [showSql, setShowSql] = useState(false);
   const insight = "error" in result.insight ? null : result.insight;
   // A pie slice can't represent a negative value (a "loss" figure some
@@ -323,8 +323,11 @@ export default function ResultView({ result }: { result: ResultEvent }) {
           numbers hold within, and the source each figure came from. Every
           panel below it is unchanged; this is added in front of them, not
           instead of them. */}
-      {result.analysis && <AnalystAnswer analysis={result.analysis} />}
+      {result.analysis && <AnalystAnswer analysis={result.analysis} onFollowUp={onFollowUp} disabled={followUpDisabled} />}
 
+      <details open={!result.analysis} className="rounded-xl border border-line bg-panel p-4">
+        <summary className="cursor-pointer text-xs text-teal">Detailed narrative, charts and quality checks</summary>
+        <div className="flex flex-col gap-5 mt-4">
       {insight ? (
         <div className="bg-panel border border-line rounded-[4px] p-5">
           <div className="flex items-center justify-between gap-4 mb-3">
@@ -426,6 +429,8 @@ export default function ResultView({ result }: { result: ResultEvent }) {
       <ForecastPanel forecasts={result.forecast} />
 
       <AnomalyList result={result} />
+
+      </div></details>
 
       <ArtifactActions queryId={result.query_id} />
 
