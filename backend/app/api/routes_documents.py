@@ -187,6 +187,23 @@ def list_documents(db: Session = Depends(get_db), ctx: AuthContext = Depends(get
     ]
 
 
+@router.get("/{document_id}/overview")
+def document_overview(document_id: str, db: Session = Depends(get_db),
+                      ctx: AuthContext = Depends(get_current_user)):
+    doc = db.query(UploadedDocument).filter_by(id=document_id, tenant_id=ctx.tenant_id).first()
+    if not doc:
+        raise HTTPException(404, "Document not found.")
+    user = db.query(User).filter_by(id=ctx.user_id, tenant_id=ctx.tenant_id).first()
+    _require_capability(user)
+    if user.row_scope:
+        raise HTTPException(403, "File overviews are unavailable for row-restricted accounts.")
+    from app.file_storage import ensure_file
+    if not ensure_file(db, ctx.tenant_id, "document", doc.id, doc.file_path):
+        raise HTTPException(409, "The original file is unavailable. Upload it again to inspect its structure.")
+    from app.agents.document_overview import overview
+    return overview(doc)
+
+
 @router.get("/{document_id}")
 def get_document(document_id: str, db: Session = Depends(get_db),
                   ctx: AuthContext = Depends(get_current_user)):

@@ -1374,3 +1374,21 @@ export async function businessViewRequest<T>(path = "", method = "GET", body?: u
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The reporting view could not be saved.");
   return data;
 }
+
+export type FileOverview = {
+  mode: "text" | "table";
+  row_count: number | null;
+  column_count: number;
+  fields: { name: string; type: string; missing: number }[];
+  missing_cells: number;
+  duplicate_rows: number;
+  notes: string[];
+  suggested_questions: string[];
+};
+export async function getFileOverview(id: string): Promise<FileOverview> {
+  const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(id)}/overview`, { headers: authHeaders() });
+  await handleAuthFailure(res);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail ?? "Could not inspect this file.");
+  return body;
+}
