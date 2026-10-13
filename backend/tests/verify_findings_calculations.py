@@ -27,6 +27,10 @@ assert evidence['source_id'] == 'b' and evidence['source_version'] == 'version-b
 assert 'West' in evidence['location'] and '2 matched / 4 parsed' in evidence['location']
 assert analysis['quality']['row_count'] is None and analysis['confidence']['measurement']['level'] == 'medium'
 assert not any('No structured table was verified' in n for n in analysis['quality']['limitations'])
+single = build_analysis('AQ-single','West conversion?',snapshot,sources=sources,computed=True,
+    profile={'primary_value_column':'Sales','breakdowns':{'Region':[{'group':'East','value':99999}]}})
+assert single['metrics'][0]['value'] == 12.5 and not single['charts']
+assert not any('not automatically filtered' in n for n in single['quality']['limitations'])
 # Groups retain exact numerical values and record counts, including null rates.
 workspace.execute({'table_id':'table-2','operation':'rate','value_column':'Sales','denominator_column':'Footfall','group_column':'Region'})
 snapshot['table_calculations'] = workspace.evidence

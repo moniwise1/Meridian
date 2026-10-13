@@ -190,7 +190,7 @@ def build_analysis(query_id: str, question: str, snapshot: dict, *, sources: lis
         limitations.append("Source text was truncated or OCR-extracted; verify important figures against the original file.")
     if not computed and not calculations:
         limitations.append("No structured table was verified. Figures in the explanation are extracted claims, not independently computed results.")
-    if profile:
+    if profile and not calculations:
         limitations.append("Tables below profile the selected worksheet. They are not automatically filtered to every condition in your question.")
     if quality.get("missing_by_column"):
         limitations.append("Some fields are missing. Missing cells are not evidence of zero activity.")
