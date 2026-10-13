@@ -171,6 +171,26 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
     path = os.path.join(settings.artifacts_dir, f"report-{uuid.uuid4().hex}.pdf")
 
     charts = charts or []
+    verified_tables = {t.get("id"): t for t in (analysis.get("tables") or [])}
+    verified_charts = []
+    for spec in analysis.get("charts") or []:
+        source_table = verified_tables.get(spec.get("table_id"))
+        keys = spec.get("value_keys") or []
+        if not source_table or not keys or not str(source_table.get("id", "")).startswith("calculation_table_"):
+            continue
+        valid_rows = [row for row in source_table["rows"] if as_number(row.get(keys[0])) is not None]
+        if not valid_rows:
+            continue
+        column = next(c for c in source_table["columns"] if c["key"] == keys[0])
+        refs = [e for e in (analysis.get("evidence") or []) if e.get("id") in source_table.get("evidence_ids", [])]
+        verified_charts.append({"chart_type":spec["type"],"title":spec["title"],
+            "labels":[str(row.get(spec["category_key"], "")) for row in valid_rows],
+            "values":[row[keys[0]] for row in valid_rows],"unit":column.get("unit"),
+            "location":"; ".join(str(e.get("filename") or e.get("source_id")) + " / " + str(e.get("computation_id")) for e in refs),
+            "insight":f"{len(source_table['rows']) - len(valid_rows)} groups with unavailable values omitted; exact values are listed below." if len(valid_rows) < len(source_table["rows"]) else None})
+    if verified_charts:
+        charts = verified_charts
+
     # Validation runs BEFORE any page is laid out, because its outcome
     # decides what the cover says about the report's status.
     warnings: list[str] = []
@@ -615,21 +635,21 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
             tone="warn",
         )
     else:
-        section("Executive answer", "What the numbers say")
+        section("Executive answer", "Answer to your question")
 
         # KPI cards, built only from figures that actually exist. A card
         # with no value is dropped rather than shown as zero or "N/A".
         cards: list[tuple[str, str, str]] = []
         for metric in (analysis.get("metrics") or [])[:3]:
-            formatted = format_metric(metric.get("label"), metric.get("value"), currency)
+            formatted = (fmt_percent(metric.get("value")) if metric.get("unit") == "%" and as_number(metric.get("value")) is not None else format_metric(metric.get("label"), metric.get("value"), currency))
             if formatted:
                 cards.append((str(metric.get("label") or "Metric"), formatted, ""))
         if len(cards) < 4:
-            rows_analysed = as_number(data_quality.get("row_count"))
+            rows_analysed = as_number((analysis.get("quality") or {}).get("row_count") if analysis else data_quality.get("row_count"))
             if rows_analysed is not None:
                 cards.append(("Rows analysed", fmt_number(rows_analysed), "In the verified result"))
         if len(cards) < 4:
-            completeness = as_number(data_quality.get("completeness_pct"))
+            completeness = as_number((analysis.get("quality") or {}).get("completeness_pct") if analysis else data_quality.get("completeness_pct"))
             if completeness is not None:
                 cards.append(("Completeness", fmt_percent(completeness), "Of required fields"))
         if len(cards) < 4 and insight.get("confidence"):
@@ -727,6 +747,16 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
 
     # ----------------------------------------------------------- data quality
 
+    for exact_table in (analysis.get("tables") or []):
+        if not str(exact_table.get("id", "")).startswith("calculation_table_"):
+            continue
+        section("Verified values", exact_table["title"], need=30)
+        columns = exact_table["columns"]
+        headers = [str(c["label"]) + (f" ({c['unit']})" if c.get("unit") else "") for c in columns]
+        rows = [[f"{row[c["key"]]:,.3f}".rstrip("0").rstrip(".") if as_number(row[c["key"]]) is not None else "Unavailable" if row[c["key"]] is None else str(row[c["key"]]) for c in columns] for row in exact_table["rows"]]
+        table(headers, rows, [content_w / len(columns)] * len(columns))
+        pdf.ln(2)
+
     section("Data quality", "What can be trusted - and what cannot", need=44)
     body(
         "Good analysis separates sound business signals from fields that need repair. "
@@ -736,11 +766,11 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
 
     quality_rows: list[list[str]] = []
     statuses: list[str] = []
-    rows_analysed = as_number(data_quality.get("row_count"))
+    rows_analysed = as_number((analysis.get("quality") or {}).get("row_count") if analysis else data_quality.get("row_count"))
     if rows_analysed is not None:
         quality_rows.append(["Rows analysed", "Reported", fmt_number(rows_analysed)])
         statuses.append("high")
-    completeness = as_number(data_quality.get("completeness_pct"))
+    completeness = as_number((analysis.get("quality") or {}).get("completeness_pct") if analysis else data_quality.get("completeness_pct"))
     if completeness is not None:
         level = "high" if completeness >= 98 else "moderate" if completeness >= 90 else "low"
         quality_rows.append(["Field completeness", level.title(), fmt_percent(completeness)])
@@ -797,7 +827,7 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
     if not actions and insight.get("next_question"):
         actions = [f"Next question to ask: {insight['next_question']}"]
     if actions:
-        section("Decision support", "What to do next, in priority order", need=30)
+        section("Decision support", "What to verify next", need=30)
         for i, action in enumerate(actions[:5], start=1):
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*_GOLD)
@@ -823,10 +853,10 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
 
     section("Methodology and assumptions", "How this report was produced", need=34)
     body(
-        "Generated by an AI analytics agent restricted to read-only, authorized queries. "
-        "All figures were computed deterministically, not by the language model; the model "
-        "was used only to translate the question into a query and to interpret results that "
-        "had already been computed.",
+        "Prepared from the requesting user's authorized data. Verified calculations use "
+        "deterministic operations on parsed records. Other figures may be extracted from "
+        "source text or included in model interpretations; inspect their source references "
+        "and quality notes. A pattern in the available data does not establish its cause.",
         h=4.6, size=9, color=_SLATE,
     )
     if sql:
@@ -850,6 +880,14 @@ def generate_report_pdf(title: str, question: str, insight: dict, metrics: dict 
         ] for src in evidence]
         table(["Source", "Method", "Version"],
               source_rows, [content_w * 0.52, content_w * 0.26, content_w * 0.22])
+
+    calculation_sources = [src for src in evidence if str(src.get("id", "")).startswith("calculation_")]
+    if calculation_sources:
+        section("Calculation audit", "Reproduce the question-specific figures", need=30)
+        for src in calculation_sources:
+            body(f"{src.get('filename') or src.get('source_id')} | {src.get('computation_id')}", size=10)
+            body(src.get("location") or "Calculation scope unavailable.", h=4.6, size=9, color=_SLATE)
+            pdf.ln(2)
 
     pdf.output(path)
     return path
